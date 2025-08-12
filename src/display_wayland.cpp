@@ -30,7 +30,10 @@
 // stb_easy_font — крошечный встроенный битмап-шрифт для отладочных
 // оверлеев. Header-only, реализация подтягивается одним include’ом и
 // должна жить ровно в одной TU — поэтому держим её здесь.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
 #include "stb_easy_font.h"
+#pragma GCC diagnostic pop
 
 namespace {
 

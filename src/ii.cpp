@@ -391,6 +391,9 @@ int main(int argc, char** argv) {
                   args.no_delegate ? std::string{} : args.delegate,
                   args.threads)) return 2;
 
+    // Тег для логов: где именно крутится инференс.
+    const char* label_main = args.no_delegate ? "CPU" : "NPU";
+
     // ---- Сводка по тензорам ----
     std::vector<TensorInfo> in_info, out_info;
     for (int idx : eng.interpreter->inputs())
