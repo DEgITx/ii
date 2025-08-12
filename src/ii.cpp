@@ -465,7 +465,11 @@ struct YoloHead {
 
 bool detect_yolo_head(const std::vector<TensorInfo>& outs, int forced,
                       YoloHead& h) {
-    auto try_pick = [&](int i) -> bool {
+    // try_pick пишет результат в out, никаких побочных эффектов на h —
+    // это важно при автодетекте, где мы пробуем все выходы по очереди и
+    // не должны затирать ранее найденного кандидата мусором от неудачной
+    // попытки.
+    auto try_pick = [&](int i, YoloHead& out) -> bool {
         const auto& s = outs[i].shape;
         if (s.size() != 3 || s[0] != 1) return false;
         int a = s[1];
@@ -477,10 +481,10 @@ bool detect_yolo_head(const std::vector<TensorInfo>& outs, int forced,
         int channels = std::min(a, b);
         int anchors  = std::max(a, b);
         if (channels < 5 || anchors < channels * 4) return false;
-        h.output_index   = i;
-        h.channels       = channels;
-        h.num_anchors    = anchors;
-        h.channels_first = (channels == a);
+        out.output_index   = i;
+        out.channels       = channels;
+        out.num_anchors    = anchors;
+        out.channels_first = (channels == a);
         return true;
     };
 
@@ -491,7 +495,7 @@ bool detect_yolo_head(const std::vector<TensorInfo>& outs, int forced,
                 forced, outs.size() - 1);
             return false;
         }
-        if (!try_pick(forced)) {
+        if (!try_pick(forced, h)) {
             std::fprintf(stderr,
                 "Выход %d не похож на YOLO-голову (ожидаю [1, C, A] или "
                 "[1, A, C]).\n", forced);
@@ -500,17 +504,18 @@ bool detect_yolo_head(const std::vector<TensorInfo>& outs, int forced,
         return true;
     }
     int found = -1;
+    YoloHead picked;
     for (int i = 0; i < (int)outs.size(); ++i) {
         YoloHead tmp;
-        if (try_pick(i)) {
+        if (try_pick(i, tmp)) {
             if (found >= 0) {
                 std::fprintf(stderr,
                     "Найдено несколько подходящих YOLO-выходов; уточните "
                     "--yolo-output.\n");
                 return false;
             }
-            found = i;
-            h = tmp;
+            found  = i;
+            picked = tmp;
         }
     }
     if (found < 0) {
@@ -518,6 +523,7 @@ bool detect_yolo_head(const std::vector<TensorInfo>& outs, int forced,
             "Не нашёл YOLO-голову среди выходов модели.\n");
         return false;
     }
+    h = picked;
     return true;
 }
 
