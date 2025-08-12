@@ -36,6 +36,35 @@ public:
     bool poll() override;
     bool wait() override;
 
+    // ---- Wayland-callback’и (трамплины из C-API) ----
+    // Публичные, потому что используются listener-структурами в namespace
+    // scope и должны быть видны как обычные функции для C-кода Wayland.
+    static void on_registry_global(void* data, wl_registry* r, uint32_t name,
+                                   const char* iface, uint32_t version);
+    static void on_registry_remove(void*, wl_registry*, uint32_t) {}
+    static void on_wm_base_ping(void*, xdg_wm_base* b, uint32_t serial) {
+        xdg_wm_base_pong(b, serial);
+    }
+    static void on_xdg_surface_configure(void* data, xdg_surface* s,
+                                         uint32_t serial) {
+        xdg_surface_ack_configure(s, serial);
+        static_cast<WaylandDisplay*>(data)->configured_ = true;
+    }
+    static void on_toplevel_configure(void* data, xdg_toplevel*,
+                                      int32_t w, int32_t h, wl_array*) {
+        if (w <= 0 || h <= 0) return;
+        auto* self = static_cast<WaylandDisplay*>(data);
+        if (self->egl_window_ &&
+            (w != self->win_w_ || h != self->win_h_)) {
+            wl_egl_window_resize(self->egl_window_, w, h, 0, 0);
+            self->win_w_ = w;
+            self->win_h_ = h;
+        }
+    }
+    static void on_toplevel_close(void* data, xdg_toplevel*) {
+        static_cast<WaylandDisplay*>(data)->closed_ = true;
+    }
+
 private:
     bool init_wayland();
     bool init_egl();
@@ -73,33 +102,6 @@ private:
     int  tex_h_      = 0;
     bool configured_ = false;
     bool closed_     = false;
-
-    // ---- Wayland-callback’и (трамплины) ----
-    static void on_registry_global(void* data, wl_registry* r, uint32_t name,
-                                   const char* iface, uint32_t version);
-    static void on_registry_remove(void*, wl_registry*, uint32_t) {}
-    static void on_wm_base_ping(void*, xdg_wm_base* b, uint32_t serial) {
-        xdg_wm_base_pong(b, serial);
-    }
-    static void on_xdg_surface_configure(void* data, xdg_surface* s,
-                                         uint32_t serial) {
-        xdg_surface_ack_configure(s, serial);
-        static_cast<WaylandDisplay*>(data)->configured_ = true;
-    }
-    static void on_toplevel_configure(void* data, xdg_toplevel*,
-                                      int32_t w, int32_t h, wl_array*) {
-        if (w <= 0 || h <= 0) return;
-        auto* self = static_cast<WaylandDisplay*>(data);
-        if (self->egl_window_ &&
-            (w != self->win_w_ || h != self->win_h_)) {
-            wl_egl_window_resize(self->egl_window_, w, h, 0, 0);
-            self->win_w_ = w;
-            self->win_h_ = h;
-        }
-    }
-    static void on_toplevel_close(void* data, xdg_toplevel*) {
-        static_cast<WaylandDisplay*>(data)->closed_ = true;
-    }
 };
 
 // Listener-структуры. Используем designated initializers (C++20),
@@ -115,10 +117,16 @@ constexpr xdg_wm_base_listener kWmBaseListener = {
 constexpr xdg_surface_listener kXdgSurfaceListener = {
     .configure = WaylandDisplay::on_xdg_surface_configure,
 };
+// Опциональные поля configure_bounds / wm_capabilities заполняем nullptr,
+// чтобы убить -Wmissing-field-initializers и не зависеть от того, какой
+// версии xdg-shell.h попался в системе (в старых их просто нет).
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 constexpr xdg_toplevel_listener kToplevelListener = {
     .configure = WaylandDisplay::on_toplevel_configure,
     .close     = WaylandDisplay::on_toplevel_close,
 };
+#pragma GCC diagnostic pop
 
 void WaylandDisplay::on_registry_global(void* data, wl_registry* r,
                                         uint32_t name, const char* iface,
