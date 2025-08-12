@@ -14,6 +14,18 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
+
+// Бокс для отрисовки поверх кадра (например, результат YOLO-детекции).
+// Координаты в пикселях ИСХОДНОЙ текстуры (того кадра, который ушёл в
+// show_rgb): Display сам отмаппит их в окно с учётом letterbox-viewport.
+struct DisplayBox {
+    float x1 = 0.0f, y1 = 0.0f, x2 = 0.0f, y2 = 0.0f;
+    std::string label;          // подпись (можно пустую)
+    float score = -1.0f;        // 0..1, отрицательное => в подпись не идёт
+    uint8_t r = 0, g = 255, b = 0;  // цвет рамки (по умолчанию ярко-зелёный)
+};
 
 struct Display {
     virtual ~Display() = default;
@@ -43,6 +55,12 @@ struct Display {
     // Передайте nullptr или пустую строку, чтобы скрыть. Текст копируется
     // внутрь Display, можно сразу освобождать буфер.
     virtual void set_overlay_text(const char* text) = 0;
+
+    // Установить набор боксов для отрисовки поверх кадра. Передайте пустой
+    // вектор, чтобы убрать все. Координаты в пикселях текущей текстуры
+    // (см. DisplayBox); при изменении размера окна Display сам пересчитает
+    // их положение. Боксы копируются внутрь — буфер можно сразу освобождать.
+    virtual void set_boxes(const std::vector<DisplayBox>& boxes) = 0;
 };
 
 // Возвращает реализацию Display для текущей платформы или nullptr,

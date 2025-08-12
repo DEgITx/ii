@@ -2,14 +2,16 @@
 //
 // Цель: пропустить изображение через INT8-квантованную модель
 // (например yolov8m_int8.tflite) и получить «сырые» выходы.
-// YOLO-постобработка (NMS, декодирование боксов) сюда сознательно не
-// включена — это базовый движок инференса, поверх которого можно
-// строить любую сеть.
 //
 // Поддерживаются модели:
 //   * один вход вида NHWC [1,H,W,3] (uint8 / int8 / float32);
 //   * любое число выходов произвольных типов;
 //   * квантование scale/zero_point читается из самой модели.
+//
+// YOLO-постобработка (декодирование боксов, NMS) подключается сверху
+// через флаг --yolo (см. yolo.h). Сам движок остаётся универсальным —
+// без флага модель прогоняется как «чёрный ящик», на экран идёт сырое
+// изображение.
 //
 // Запуск (на устройстве):
 //   ./ii yolov8m_int8.tflite image.jpg
@@ -17,6 +19,8 @@
 //   ./ii model.tflite image.jpg --benchmark --runs 100
 //   ./ii model.tflite image.jpg --display              # окно Wayland
 //   ./ii model.tflite image.jpg --display --show-input # показать препроц.
+//   ./ii yolov8m_int8.tflite img.jpg --display --yolo  # боксы поверх
+//   ./ii yolov8m_int8.tflite img.jpg --display --yolo --conf 0.4 --iou 0.5
 
 #include <algorithm>
 #include <chrono>
@@ -42,6 +46,7 @@
 
 #include "display.h"
 #include "stats.h"
+#include "yolo.h"
 
 #include <atomic>
 #include <csignal>
@@ -304,6 +309,156 @@ double now_ms() {
 }
 
 // ---------------------------------------------------------------------------
+// Деквантование произвольного выходного тензора в float-буфер.
+// Обрабатывает float32 как «as-is», int8/uint8 — по scale/zp.
+// ---------------------------------------------------------------------------
+bool dequantize_output(const TensorInfo& info, const TfLiteTensor* tensor,
+                       std::vector<float>& out) {
+    const std::size_t total = info.bytes / dtype_size(info.dtype);
+    out.resize(total);
+    switch (info.dtype) {
+        case kTfLiteFloat32: {
+            std::memcpy(out.data(), tensor->data.data,
+                        total * sizeof(float));
+            return true;
+        }
+        case kTfLiteInt8: {
+            const int8_t* p = reinterpret_cast<const int8_t*>(tensor->data.data);
+            const float s = info.scale;
+            const int   zp = info.zero_point;
+            for (std::size_t i = 0; i < total; ++i)
+                out[i] = (p[i] - zp) * s;
+            return true;
+        }
+        case kTfLiteUInt8: {
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(tensor->data.data);
+            const float s = info.scale;
+            const int   zp = info.zero_point;
+            for (std::size_t i = 0; i < total; ++i)
+                out[i] = (p[i] - zp) * s;
+            return true;
+        }
+        default:
+            std::fprintf(stderr,
+                "Деквантование не поддерживает dtype=%s\n",
+                dtype_name(info.dtype));
+            return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Авто-определение YOLO-выхода и его layout’а.
+// Ищем 3D-тензор вида [1, A, B] или [1, B, A], где меньший из {A, B}
+// = 4 + nc (типично 84 для COCO), а больший — число anchor’ов.
+// Если кандидат не найден или их несколько — лучше явно указать
+// --yolo-output <i>.
+// ---------------------------------------------------------------------------
+struct YoloHead {
+    int  output_index   = -1;     // индекс в out_info
+    int  channels       = 0;      // 4 + nc
+    int  num_anchors    = 0;
+    bool channels_first = true;   // true: [1, C, A]; false: [1, A, C]
+};
+
+bool detect_yolo_head(const std::vector<TensorInfo>& outs, int forced,
+                      YoloHead& h) {
+    auto try_pick = [&](int i) -> bool {
+        const auto& s = outs[i].shape;
+        if (s.size() != 3 || s[0] != 1) return false;
+        int a = s[1];
+        int b = s[2];
+        // Эвристика: «каналы» = меньшая ось, «anchor’ы» = большая.
+        // На YOLOv8 это всегда верно (84 ≪ 8400). Если у пользователя
+        // экзотическая модель — пусть передаёт --yolo-output явно и
+        // понимает, что делает.
+        int channels = std::min(a, b);
+        int anchors  = std::max(a, b);
+        if (channels < 5 || anchors < channels * 4) return false;
+        h.output_index   = i;
+        h.channels       = channels;
+        h.num_anchors    = anchors;
+        h.channels_first = (channels == a);
+        return true;
+    };
+
+    if (forced >= 0) {
+        if (forced >= (int)outs.size()) {
+            std::fprintf(stderr,
+                "--yolo-output %d вне диапазона (0..%zu).\n",
+                forced, outs.size() - 1);
+            return false;
+        }
+        if (!try_pick(forced)) {
+            std::fprintf(stderr,
+                "Выход %d не похож на YOLO-голову (ожидаю [1, C, A] или "
+                "[1, A, C]).\n", forced);
+            return false;
+        }
+        return true;
+    }
+    int found = -1;
+    for (int i = 0; i < (int)outs.size(); ++i) {
+        YoloHead tmp;
+        if (try_pick(i)) {
+            if (found >= 0) {
+                std::fprintf(stderr,
+                    "Найдено несколько подходящих YOLO-выходов; уточните "
+                    "--yolo-output.\n");
+                return false;
+            }
+            found = i;
+            h = tmp;
+        }
+    }
+    if (found < 0) {
+        std::fprintf(stderr,
+            "Не нашёл YOLO-голову среди выходов модели.\n");
+        return false;
+    }
+    return true;
+}
+
+// Стабильный цвет под класс — вращение по hue с фиксированным шагом.
+// Один и тот же class_id даст одинаковый цвет от кадра к кадру.
+void class_color(int class_id, uint8_t& r, uint8_t& g, uint8_t& b) {
+    // Золотое сечение ≈ 0.618; даёт хорошо различимые цвета даже для
+    // соседних индексов.
+    float h = std::fmod(class_id * 0.61803398875f, 1.0f) * 6.0f;
+    float c = 1.0f;          // saturation = 1, value = 1
+    float x = c * (1.0f - std::fabs(std::fmod(h, 2.0f) - 1.0f));
+    float r1 = 0, g1 = 0, b1 = 0;
+    if      (h < 1) { r1 = c; g1 = x; }
+    else if (h < 2) { r1 = x; g1 = c; }
+    else if (h < 3) { g1 = c; b1 = x; }
+    else if (h < 4) { g1 = x; b1 = c; }
+    else if (h < 5) { r1 = x; b1 = c; }
+    else            { r1 = c; b1 = x; }
+    r = (uint8_t)std::lround(r1 * 255.0f);
+    g = (uint8_t)std::lround(g1 * 255.0f);
+    b = (uint8_t)std::lround(b1 * 255.0f);
+}
+
+std::vector<DisplayBox> detections_to_boxes(
+        const std::vector<Detection>& dets) {
+    std::vector<DisplayBox> out;
+    out.reserve(dets.size());
+    for (const auto& d : dets) {
+        DisplayBox b;
+        b.x1 = d.x1; b.y1 = d.y1; b.x2 = d.x2; b.y2 = d.y2;
+        b.label = yolo_class_name(d.class_id);
+        if (b.label.empty()) {
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "cls%d", d.class_id);
+            b.label = buf;
+        }
+        b.score = d.score;
+        class_color(d.class_id, b.r, b.g, b.b);
+        out.push_back(b);
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
 struct Args {
@@ -323,6 +478,14 @@ struct Args {
     bool stats = false;         // FPS/jitter оверлей + лог в stdout
     int  log_interval_ms = 1000;
     bool vsync = true;          // ограничение FPS частотой обновления экрана
+    // ---- YOLO-постобработка ----
+    bool        yolo = false;        // включить декодирование боксов
+    float       conf = 0.25f;
+    float       iou  = 0.45f;
+    int         max_dets = 300;
+    bool        yolo_pixel_coords = false;  // выход уже в пикселях (не 0..1)
+    int         yolo_output = -1;    // -1 = автовыбор (самый «толстый» выход)
+    std::string classes_path;        // файл с именами классов (по строке)
 };
 
 void print_usage(const char* prog) {
@@ -341,7 +504,14 @@ void print_usage(const char* prog) {
         "  --loop              непрерывный цикл инференс+отрисовка (Ctrl+C)\n"
         "  --stats             счётчик FPS/jitter (оверлей + лог в stdout)\n"
         "  --log-interval <ms> период лога FPS, мс (по умолчанию 1000)\n"
-        "  --no-vsync          отключить vsync (макс. FPS, возможен tearing)\n",
+        "  --no-vsync          отключить vsync (макс. FPS, возможен tearing)\n"
+        "  --yolo              декодировать выход как YOLOv8 и рисовать боксы\n"
+        "  --conf <p>          порог уверенности (по умолчанию 0.25)\n"
+        "  --iou <p>           порог IoU для NMS (по умолчанию 0.45)\n"
+        "  --max-dets <N>      макс. число детекций (по умолчанию 300)\n"
+        "  --yolo-pixel-coords координаты модели в пикселях, а не 0..1\n"
+        "  --yolo-output <i>   индекс выхода с боксами (по умолчанию авто)\n"
+        "  --classes <path>    файл имён классов (по строке; default = COCO80)\n",
         prog, kDefaultDelegate);
 }
 
@@ -363,6 +533,13 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--stats")                       a.stats       = true;
         else if (s == "--log-interval"&& i + 1 < argc) a.log_interval_ms = std::atoi(argv[++i]);
         else if (s == "--no-vsync")                    a.vsync       = false;
+        else if (s == "--yolo")                        a.yolo        = true;
+        else if (s == "--conf"        && i + 1 < argc) a.conf        = (float)std::atof(argv[++i]);
+        else if (s == "--iou"         && i + 1 < argc) a.iou         = (float)std::atof(argv[++i]);
+        else if (s == "--max-dets"    && i + 1 < argc) a.max_dets    = std::atoi(argv[++i]);
+        else if (s == "--yolo-pixel-coords")           a.yolo_pixel_coords = true;
+        else if (s == "--yolo-output" && i + 1 < argc) a.yolo_output = std::atoi(argv[++i]);
+        else if (s == "--classes"     && i + 1 < argc) a.classes_path = argv[++i];
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
@@ -438,6 +615,27 @@ int main(int argc, char** argv) {
     TfLiteTensor* in_t = eng.interpreter->tensor(in_info[0].index);
     if (!fill_input(input_rgb, in_info[0], in_t)) return 5;
 
+    // ---- YOLO: предварительная подготовка ----
+    // Детектируем голову один раз (формат [1, C, A] vs [1, A, C]) до
+    // первого invoke, чтобы в видео-цикле не делать это каждый кадр.
+    YoloHead yolo_head;
+    YoloPostOptions yolo_opts;
+    if (args.yolo) {
+        if (!detect_yolo_head(out_info, args.yolo_output, yolo_head)) return 6;
+        yolo_opts.conf_thresh = args.conf;
+        yolo_opts.iou_thresh  = args.iou;
+        yolo_opts.max_dets    = args.max_dets;
+        yolo_opts.normalized  = !args.yolo_pixel_coords;
+        if (!args.classes_path.empty()) load_class_names(args.classes_path);
+        std::printf("YOLO: выход[%d] layout=%s C=%d A=%d, conf=%.2f iou=%.2f%s\n",
+                    yolo_head.output_index,
+                    yolo_head.channels_first ? "[1,C,A]" : "[1,A,C]",
+                    yolo_head.channels, yolo_head.num_anchors,
+                    yolo_opts.conf_thresh, yolo_opts.iou_thresh,
+                    yolo_opts.normalized ? " (норм. координаты)"
+                                         : " (координаты в пикселях)");
+    }
+
     // ---- Один прогон ----
     double t0 = now_ms();
     if (!eng.invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
@@ -449,6 +647,29 @@ int main(int argc, char** argv) {
         const TfLiteTensor* t = eng.interpreter->tensor(out_info[i].index);
         print_output_head(out_info[i], t);
     }
+
+    // ---- YOLO: декодирование боксов после первого инференса ----
+    // Локальные буферы переиспользуются в видео-цикле ниже, поэтому
+    // объявляем их здесь (за условием на yolo, чтобы не платить за
+    // ненужные аллокации, когда YOLO выключен).
+    std::vector<float> yolo_dequant;
+    std::vector<Detection> dets;
+    std::vector<DisplayBox> boxes;
+    auto run_yolo_postproc = [&]() {
+        const TfLiteTensor* t =
+            eng.interpreter->tensor(out_info[yolo_head.output_index].index);
+        if (!dequantize_output(out_info[yolo_head.output_index], t,
+                               yolo_dequant)) return;
+        dets = decode_yolov8(yolo_dequant.data(),
+                             yolo_head.channels, yolo_head.num_anchors,
+                             yolo_head.channels_first,
+                             in_w, in_h, yolo_opts);
+        // Координаты возвращаются в letterbox-пространстве. Если на экран
+        // идёт оригинал — отмаппим назад в его пиксели, иначе оставим как есть.
+        if (!args.show_input)
+            scale_to_original(dets, in_w, in_h, img.w, img.h);
+        boxes = detections_to_boxes(dets);
+    };
 
     // ---- Бенчмарк ----
     if (args.benchmark) {
@@ -518,6 +739,14 @@ int main(int argc, char** argv) {
                         std::fflush(stdout);
                     }
                 }
+                // YOLO постобработка на каждом кадре. Сам кадр (frame)
+                // в --loop у нас статический, но детекции пересчитываем —
+                // когда сюда добавите захват видео, координаты будут
+                // обновляться вместе с входом без правок дисплея.
+                if (args.yolo) {
+                    run_yolo_postproc();
+                    disp->set_boxes(boxes);
+                }
                 if (!disp->show_rgb(frame, fw, fh)) break;
             }
             std::printf("\nОстановлено.\n");
@@ -530,6 +759,7 @@ int main(int argc, char** argv) {
             std::snprintf(buf, sizeof(buf), "inference %.2f ms", t1 - t0);
             disp->set_overlay_text(buf);
         }
+        if (args.yolo) disp->set_boxes(boxes);
         if (!disp->show_rgb(frame, fw, fh)) return 0;
         std::printf("Окно открыто. Закройте его, чтобы выйти.\n");
         // Один статический кадр: блокируемся на событиях Wayland до закрытия.

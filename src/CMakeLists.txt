@@ -55,7 +55,7 @@ FetchContent_Declare(stb
 FetchContent_MakeAvailable(stb)
 
 # ---- Бинарь ---------------------------------------------------------------
-add_executable(ii ii.cpp)
+add_executable(ii ii.cpp yolo.cpp)
 target_include_directories(ii PRIVATE
     ${TFLITE_INCLUDE_DIR}
     ${stb_SOURCE_DIR})

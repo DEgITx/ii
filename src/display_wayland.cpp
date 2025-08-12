@@ -48,6 +48,9 @@ public:
     void set_overlay_text(const char* text) override {
         overlay_text_ = (text && *text) ? text : std::string{};
     }
+    void set_boxes(const std::vector<DisplayBox>& boxes) override {
+        boxes_ = boxes;
+    }
 
     // ---- Wayland-callback’и (трамплины из C-API) ----
     // Публичные, потому что используются listener-структурами в namespace
@@ -85,7 +88,12 @@ private:
     bool init_text();
     void render();
     void render_overlay();
+    void render_boxes();
     void cleanup();
+    // Вычисляет letterbox-viewport (vx, vy, vw, vh) под текущий размер
+    // окна и текстуры. Результат используется и при отрисовке кадра
+    // (glViewport), и при маппинге координат боксов из image space в окно.
+    void compute_viewport(int& vx, int& vy, int& vw, int& vh) const;
 
     // ---- Wayland ----
     wl_display*    display_    = nullptr;
@@ -126,6 +134,13 @@ private:
     GLint  text_a_pos_   = -1;
     GLint  text_u_screen_= -1;
     GLint  text_u_color_ = -1;
+
+    // ---- Боксы (например, YOLO-детекции) ----
+    // Используют тот же шейдер, что и текст: вершины в пиксельных
+    // координатах окна, цвет передаётся uniform’ом. Геометрия (контур
+    // рамки + подложка под подпись + сам текст) пересоздаётся каждый
+    // кадр — детекций мало (десятки), это копейки.
+    std::vector<DisplayBox> boxes_;
 };
 
 // Listener-структуры. Используем designated initializers (C++20),
@@ -487,17 +502,22 @@ bool WaylandDisplay::show_rgb(const uint8_t* rgb, int w, int h) {
     return !closed_;
 }
 
-void WaylandDisplay::render() {
-    // Letterbox-viewport: сохраняем пропорции изображения внутри окна.
-    int vw = win_w_;
-    int vh = win_h_;
+void WaylandDisplay::compute_viewport(int& vx, int& vy,
+                                      int& vw, int& vh) const {
+    vw = win_w_;
+    vh = win_h_;
     if (tex_w_ > 0 && tex_h_ > 0) {
         float s = std::min((float)win_w_ / tex_w_, (float)win_h_ / tex_h_);
         vw = (int)(tex_w_ * s);
         vh = (int)(tex_h_ * s);
     }
-    int vx = (win_w_ - vw) / 2;
-    int vy = (win_h_ - vh) / 2;
+    vx = (win_w_ - vw) / 2;
+    vy = (win_h_ - vh) / 2;
+}
+
+void WaylandDisplay::render() {
+    int vx, vy, vw, vh;
+    compute_viewport(vx, vy, vw, vh);
 
     // Сначала чистим всё окно (чёрные «полосы» letterbox’а),
     // затем рисуем картинку в центральный viewport.
@@ -520,10 +540,142 @@ void WaylandDisplay::render() {
                           (void*)(2 * sizeof(float)));
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-    // Оверлей рисуется поверх кадра в полном viewport окна.
+    // Сначала боксы (рисуются в image-координатах, маппятся в letterbox-
+    // viewport), затем — текстовый оверлей в полном экранном пространстве.
+    render_boxes();
     render_overlay();
 
     eglSwapBuffers(egl_display_, egl_surface_);
+}
+
+void WaylandDisplay::render_boxes() {
+    if (boxes_.empty() || tex_w_ <= 0 || tex_h_ <= 0) return;
+
+    int vx, vy, vw, vh;
+    compute_viewport(vx, vy, vw, vh);
+
+    // Маппинг (image px) -> (window px). Y у нас сверху вниз, и шейдер
+    // оверлея уже инвертирует Y — оставляем линейное соответствие.
+    const float sx = (float)vw / tex_w_;
+    const float sy = (float)vh / tex_h_;
+    auto map_x = [&](float x) { return vx + x * sx; };
+    auto map_y = [&](float y) { return vy + y * sy; };
+
+    // Толщина рамки в пикселях окна — масштабируем от размера окна,
+    // чтобы на 4K не превратилась в «волосок», а на маленьком — в кляксу.
+    const float t = std::clamp(std::min(win_w_, win_h_) / 400.0f, 1.5f, 4.0f);
+
+    glViewport(0, 0, win_w_, win_h_);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glUseProgram(text_program_);
+    glUniform2f(text_u_screen_, (float)win_w_, (float)win_h_);
+    glBindBuffer(GL_ARRAY_BUFFER, text_vbo_);
+    glEnableVertexAttribArray(text_a_pos_);
+    glVertexAttribPointer(text_a_pos_, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    // Геометрия одной рамки: 4 «полоски» (top/bottom/left/right),
+    // каждая — 2 треугольника. Рисуем по одному боксу за раз, чтобы
+    // менять цвет через uniform — для 10..50 детекций накладные расходы
+    // мизерные, а код проще.
+    auto rect = [](float x1, float y1, float x2, float y2,
+                   std::vector<float>& out) {
+        out.push_back(x1); out.push_back(y1);
+        out.push_back(x2); out.push_back(y1);
+        out.push_back(x1); out.push_back(y2);
+        out.push_back(x2); out.push_back(y1);
+        out.push_back(x2); out.push_back(y2);
+        out.push_back(x1); out.push_back(y2);
+    };
+
+    std::vector<float> verts;
+    verts.reserve(4 * 6 * 2);
+
+    for (const DisplayBox& b : boxes_) {
+        float x1 = map_x(b.x1), y1 = map_y(b.y1);
+        float x2 = map_x(b.x2), y2 = map_y(b.y2);
+        if (x2 < x1) std::swap(x1, x2);
+        if (y2 < y1) std::swap(y1, y2);
+
+        verts.clear();
+        rect(x1,     y1,     x2,     y1 + t, verts);  // top
+        rect(x1,     y2 - t, x2,     y2,     verts);  // bottom
+        rect(x1,     y1,     x1 + t, y2,     verts);  // left
+        rect(x2 - t, y1,     x2,     y2,     verts);  // right
+
+        glUniform4f(text_u_color_,
+                    b.r / 255.0f, b.g / 255.0f, b.b / 255.0f, 1.0f);
+        glBufferData(GL_ARRAY_BUFFER,
+                     (GLsizeiptr)(verts.size() * sizeof(float)),
+                     verts.data(), GL_DYNAMIC_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(verts.size() / 2));
+
+        // ---- Подпись ----
+        if (b.label.empty() && b.score < 0.0f) continue;
+
+        char label_buf[160];
+        if (b.score >= 0.0f) {
+            std::snprintf(label_buf, sizeof(label_buf), "%s %.0f%%",
+                          b.label.c_str(), b.score * 100.0f);
+        } else {
+            std::snprintf(label_buf, sizeof(label_buf), "%s",
+                          b.label.c_str());
+        }
+
+        static char raw[16 * 1024];
+        int num_quads = stb_easy_font_print(0.0f, 0.0f, label_buf, nullptr,
+                                            raw, sizeof(raw));
+        int tw = stb_easy_font_width(label_buf);
+        int th = stb_easy_font_height(label_buf);
+
+        constexpr float kPad   = 3.0f;
+        constexpr float kScale = 1.5f;
+        float bw = tw * kScale + kPad * 2.0f;
+        float bh = th * kScale + kPad * 2.0f;
+
+        // Подпись прижимаем к верху рамки; если вылезает за верх окна —
+        // переносим внутрь рамки (чтобы не обрезалась).
+        float bx = x1;
+        float by = y1 - bh;
+        if (by < 0.0f) by = y1;
+
+        // Подложка цвета рамки.
+        float bg[] = {
+            bx,      by,
+            bx + bw, by,
+            bx,      by + bh,
+            bx + bw, by,
+            bx + bw, by + bh,
+            bx,      by + bh,
+        };
+        glUniform4f(text_u_color_,
+                    b.r / 255.0f, b.g / 255.0f, b.b / 255.0f, 0.85f);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(bg), bg, GL_DYNAMIC_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        // Сам текст — белым, чтобы читалось на цветной подложке.
+        struct EasyVert { float x, y, z; unsigned char c[4]; };
+        auto* qv = reinterpret_cast<const EasyVert*>(raw);
+        std::vector<float> tri;
+        tri.reserve((std::size_t)num_quads * 6 * 2);
+        auto push = [&](float x, float y) {
+            tri.push_back(bx + kPad + x * kScale);
+            tri.push_back(by + kPad + y * kScale);
+        };
+        for (int q = 0; q < num_quads; ++q) {
+            const EasyVert* v = &qv[q * 4];
+            push(v[0].x, v[0].y); push(v[1].x, v[1].y); push(v[2].x, v[2].y);
+            push(v[0].x, v[0].y); push(v[2].x, v[2].y); push(v[3].x, v[3].y);
+        }
+        glUniform4f(text_u_color_, 1.0f, 1.0f, 1.0f, 1.0f);
+        glBufferData(GL_ARRAY_BUFFER,
+                     (GLsizeiptr)(tri.size() * sizeof(float)),
+                     tri.data(), GL_DYNAMIC_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(tri.size() / 2));
+    }
+
+    glDisable(GL_BLEND);
 }
 
 bool WaylandDisplay::poll() {
