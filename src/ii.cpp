@@ -15,6 +15,8 @@
 //   ./ii yolov8m_int8.tflite image.jpg
 //   ./ii model.tflite image.jpg --no-delegate
 //   ./ii model.tflite image.jpg --benchmark --runs 100
+//   ./ii model.tflite image.jpg --display              # окно Wayland
+//   ./ii model.tflite image.jpg --display --show-input # показать препроц.
 
 #include <algorithm>
 #include <chrono>
@@ -37,6 +39,8 @@
 #include "stb_image.h"
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "stb_image_resize2.h"
+
+#include "display.h"
 
 namespace {
 
@@ -302,6 +306,10 @@ struct Args {
     int runs = 100;
     int warmup = 3;
     int threads = 0;
+    bool display = false;       // открыть окно Wayland/EGL
+    bool show_input = false;    // выводить letterbox-вход вместо оригинала
+    int  win_w = 960;
+    int  win_h = 720;
 };
 
 void print_usage(const char* prog) {
@@ -313,7 +321,10 @@ void print_usage(const char* prog) {
         "  --benchmark         прогрев + замер скорости\n"
         "  --runs <N>          число итераций бенчмарка (по умолчанию 100)\n"
         "  --warmup <N>        число итераций прогрева (по умолчанию 3)\n"
-        "  --threads <N>       число CPU-потоков интерпретатора\n",
+        "  --threads <N>       число CPU-потоков интерпретатора\n"
+        "  --display           открыть окно (Wayland/EGL/GLES2)\n"
+        "  --show-input        выводить препроцесированный (letterbox) вход\n"
+        "  --win <WxH>         стартовый размер окна (по умолчанию 960x720)\n",
         prog, kDefaultDelegate);
 }
 
@@ -329,6 +340,19 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--runs"        && i + 1 < argc) a.runs        = std::atoi(argv[++i]);
         else if (s == "--warmup"      && i + 1 < argc) a.warmup      = std::atoi(argv[++i]);
         else if (s == "--threads"     && i + 1 < argc) a.threads     = std::atoi(argv[++i]);
+        else if (s == "--display")                     a.display     = true;
+        else if (s == "--show-input")                  a.show_input  = true;
+        else if (s == "--win"         && i + 1 < argc) {
+            // Принимаем формат "WxH" (например 1280x720).
+            std::string v = argv[++i];
+            auto x = v.find('x');
+            if (x == std::string::npos) {
+                std::fprintf(stderr, "--win ожидает WxH, получено: %s\n", v.c_str());
+                return false;
+            }
+            a.win_w = std::atoi(v.substr(0, x).c_str());
+            a.win_h = std::atoi(v.substr(x + 1).c_str());
+        }
         else if (s == "-h" || s == "--help") { print_usage(argv[0]); return false; }
         else {
             std::fprintf(stderr, "Неизвестный аргумент: %s\n", s.c_str());
@@ -411,6 +435,32 @@ int main(int argc, char** argv) {
         double avg = (s1 - s0) / args.runs;
         std::printf("Бенчмарк: %d итераций, среднее %.3f мс, %.1f инф/с\n",
                     args.runs, avg, 1000.0 / avg);
+    }
+
+    // ---- Графический вывод (Wayland/EGL) ----
+    // Показываем либо оригинальное изображение, либо то, что реально
+    // ушло в сеть после letterbox’а (полезно для отладки препроцессинга).
+    if (args.display) {
+        auto disp = make_display();
+        if (!disp) {
+            std::fprintf(stderr,
+                "Поддержка дисплея не собрана (USE_DISPLAY=OFF).\n");
+            return 7;
+        }
+        if (!disp->init(args.win_w, args.win_h, "npu")) return 7;
+
+        const uint8_t* frame = args.show_input ? input_rgb.data()
+                                               : img.rgb.data();
+        const int fw = args.show_input ? in_w : img.w;
+        const int fh = args.show_input ? in_h : img.h;
+
+        if (!disp->show_rgb(frame, fw, fh)) return 0;
+        std::printf("Окно открыто. Закройте его, чтобы выйти.\n");
+
+        // Один статический кадр: блокируемся на событиях Wayland до закрытия.
+        // Для видео-пайплайна вместо wait() используйте poll() и в этом же
+        // цикле захватывайте/инференсите/show_rgb() новый кадр.
+        while (disp->wait()) {}
     }
 
     return 0;
