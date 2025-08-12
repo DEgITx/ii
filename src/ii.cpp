@@ -41,6 +41,15 @@
 #include "stb_image_resize2.h"
 
 #include "display.h"
+#include "stats.h"
+
+#include <atomic>
+#include <csignal>
+
+namespace {
+std::atomic<bool> g_interrupted{false};
+void on_sigint(int) { g_interrupted = true; }
+}  // namespace
 
 namespace {
 
@@ -310,6 +319,9 @@ struct Args {
     bool show_input = false;    // выводить letterbox-вход вместо оригинала
     int  win_w = 960;
     int  win_h = 720;
+    bool loop = false;          // непрерывный цикл инференса (демо для видео)
+    bool stats = false;         // FPS/jitter оверлей + лог в stdout
+    int  log_interval_ms = 1000;
 };
 
 void print_usage(const char* prog) {
@@ -324,7 +336,10 @@ void print_usage(const char* prog) {
         "  --threads <N>       число CPU-потоков интерпретатора\n"
         "  --display           открыть окно (Wayland/EGL/GLES2)\n"
         "  --show-input        выводить препроцесированный (letterbox) вход\n"
-        "  --win <WxH>         стартовый размер окна (по умолчанию 960x720)\n",
+        "  --win <WxH>         стартовый размер окна (по умолчанию 960x720)\n"
+        "  --loop              непрерывный цикл инференс+отрисовка (Ctrl+C)\n"
+        "  --stats             счётчик FPS/jitter (оверлей + лог в stdout)\n"
+        "  --log-interval <ms> период лога FPS, мс (по умолчанию 1000)\n",
         prog, kDefaultDelegate);
 }
 
@@ -342,6 +357,9 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--threads"     && i + 1 < argc) a.threads     = std::atoi(argv[++i]);
         else if (s == "--display")                     a.display     = true;
         else if (s == "--show-input")                  a.show_input  = true;
+        else if (s == "--loop")                        a.loop        = true;
+        else if (s == "--stats")                       a.stats       = true;
+        else if (s == "--log-interval"&& i + 1 < argc) a.log_interval_ms = std::atoi(argv[++i]);
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
@@ -437,6 +455,24 @@ int main(int argc, char** argv) {
                     args.runs, avg, 1000.0 / avg);
     }
 
+    // ---- Видео-цикл без окна (только инференс + статистика) ----
+    // Полезно, чтобы померить FPS NPU без накладных расходов на отрисовку.
+    if (args.loop && !args.display) {
+        std::signal(SIGINT, on_sigint);
+        FpsCounter fps;
+        std::printf("Цикл инференса запущен. Ctrl+C для выхода.\n");
+        while (!g_interrupted) {
+            eng.invoke();
+            fps.tick();
+            if (args.stats && fps.log_due(args.log_interval_ms)) {
+                std::printf("[%s] %s\n", label_main, fps.format().c_str());
+                std::fflush(stdout);
+            }
+        }
+        std::printf("\nОстановлено.\n");
+        return 0;
+    }
+
     // ---- Графический вывод (Wayland/EGL) ----
     // Показываем либо оригинальное изображение, либо то, что реально
     // ушло в сеть после letterbox’а (полезно для отладки препроцессинга).
@@ -454,12 +490,43 @@ int main(int argc, char** argv) {
         const int fw = args.show_input ? in_w : img.w;
         const int fh = args.show_input ? in_h : img.h;
 
+        // ---- Видео-цикл с окном ----
+        // Каждая итерация: инференс -> show_rgb -> tick FPS -> опц. лог.
+        // Для реального видео замените блок eng.invoke() на захват кадра
+        // + препроцессинг + invoke; show_rgb() оставьте — текстура будет
+        // обновляться через glTexSubImage2D (без перевыделения).
+        if (args.loop) {
+            std::signal(SIGINT, on_sigint);
+            FpsCounter fps;
+            std::printf("Видео-цикл запущен. Ctrl+C или закрытие окна = выход.\n");
+            while (!g_interrupted && disp->poll()) {
+                eng.invoke();
+                fps.tick();
+
+                std::string overlay;
+                if (args.stats) {
+                    overlay = fps.format();
+                    disp->set_overlay_text(overlay.c_str());
+                    if (fps.log_due(args.log_interval_ms)) {
+                        std::printf("[%s] %s\n", label_main, overlay.c_str());
+                        std::fflush(stdout);
+                    }
+                }
+                if (!disp->show_rgb(frame, fw, fh)) break;
+            }
+            std::printf("\nОстановлено.\n");
+            return 0;
+        }
+
+        // ---- Одиночный кадр ----
+        if (args.stats) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "inference %.2f ms", t1 - t0);
+            disp->set_overlay_text(buf);
+        }
         if (!disp->show_rgb(frame, fw, fh)) return 0;
         std::printf("Окно открыто. Закройте его, чтобы выйти.\n");
-
         // Один статический кадр: блокируемся на событиях Wayland до закрытия.
-        // Для видео-пайплайна вместо wait() используйте poll() и в этом же
-        // цикле захватывайте/инференсите/show_rgb() новый кадр.
         while (disp->wait()) {}
     }
 

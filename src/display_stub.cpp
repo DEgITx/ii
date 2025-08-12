@@ -7,3 +7,6 @@
 std::unique_ptr<Display> make_display() {
     return nullptr;
 }
+
+// Заглушки методов не нужны — без USE_DISPLAY ни один Display
+// не создаётся, а значит set_overlay_text/etc. никогда не вызываются.

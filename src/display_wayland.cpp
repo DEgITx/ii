@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <vector>
 #include <poll.h>
 
 #include <wayland-client.h>
@@ -24,6 +26,11 @@
 #include <GLES2/gl2.h>
 
 #include "xdg-shell-client-protocol.h"
+
+// stb_easy_font — крошечный встроенный битмап-шрифт для отладочных
+// оверлеев. Header-only, реализация подтягивается одним include’ом и
+// должна жить ровно в одной TU — поэтому держим её здесь.
+#include "stb_easy_font.h"
 
 namespace {
 
@@ -35,6 +42,9 @@ public:
     bool show_rgb(const uint8_t* rgb, int w, int h) override;
     bool poll() override;
     bool wait() override;
+    void set_overlay_text(const char* text) override {
+        overlay_text_ = (text && *text) ? text : std::string{};
+    }
 
     // ---- Wayland-callback’и (трамплины из C-API) ----
     // Публичные, потому что используются listener-структурами в namespace
@@ -69,7 +79,9 @@ private:
     bool init_wayland();
     bool init_egl();
     bool init_gl();
+    bool init_text();
     void render();
+    void render_overlay();
     void cleanup();
 
     // ---- Wayland ----
@@ -102,6 +114,14 @@ private:
     int  tex_h_      = 0;
     bool configured_ = false;
     bool closed_     = false;
+
+    // ---- Оверлей текста (FPS / debug) ----
+    std::string overlay_text_;
+    GLuint text_program_ = 0;
+    GLuint text_vbo_     = 0;
+    GLint  text_a_pos_   = -1;
+    GLint  text_u_screen_= -1;
+    GLint  text_u_color_ = -1;
 };
 
 // Listener-структуры. Используем designated initializers (C++20),
@@ -292,6 +312,121 @@ bool WaylandDisplay::init_gl() {
     return true;
 }
 
+bool WaylandDisplay::init_text() {
+    // Шейдер для оверлея: вершины в пиксельных координатах
+    // (0,0 в левом верхнем углу окна), цвет передаётся uniform’ом.
+    // Используется и для текста, и для полупрозрачного фона под ним.
+    static const char* kVS =
+        "attribute vec2 a_pos;\n"
+        "uniform vec2 u_screen;\n"
+        "void main(){\n"
+        "  vec2 ndc = (a_pos / u_screen) * 2.0 - 1.0;\n"
+        "  ndc.y = -ndc.y;\n"
+        "  gl_Position = vec4(ndc, 0.0, 1.0);\n"
+        "}\n";
+    static const char* kFS =
+        "precision mediump float;\n"
+        "uniform vec4 u_color;\n"
+        "void main(){ gl_FragColor = u_color; }\n";
+
+    GLuint vs = compile_shader(GL_VERTEX_SHADER,   kVS);
+    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, kFS);
+    if (!vs || !fs) return false;
+    text_program_ = glCreateProgram();
+    glAttachShader(text_program_, vs);
+    glAttachShader(text_program_, fs);
+    glLinkProgram(text_program_);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint ok = 0;
+    glGetProgramiv(text_program_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512] = {};
+        glGetProgramInfoLog(text_program_, sizeof(log), nullptr, log);
+        std::fprintf(stderr, "GLSL: text link error: %s\n", log);
+        return false;
+    }
+    text_a_pos_    = glGetAttribLocation(text_program_,  "a_pos");
+    text_u_screen_ = glGetUniformLocation(text_program_, "u_screen");
+    text_u_color_  = glGetUniformLocation(text_program_, "u_color");
+    glGenBuffers(1, &text_vbo_);
+    return true;
+}
+
+void WaylandDisplay::render_overlay() {
+    if (overlay_text_.empty()) return;
+
+    // 1) Получаем геометрию текста и его пиксельные размеры.
+    // Каждый символ stb_easy_font раскладывает на ~1-3 квада, каждый
+    // квад — это 4 вершины по 16 байт (x,y,z + 4 байта цвета).
+    static char raw[80 * 1024];
+    char* text = const_cast<char*>(overlay_text_.c_str());
+    int num_quads = stb_easy_font_print(0.0f, 0.0f, text, nullptr,
+                                        raw, sizeof(raw));
+    int tw = stb_easy_font_width(text);
+    int th = stb_easy_font_height(text);
+
+    constexpr float kPad = 4.0f;     // отступ внутри подложки
+    constexpr float kMargin = 8.0f;  // отступ от края окна
+    constexpr float kScale = 2.0f;   // увеличиваем шрифт (он крошечный)
+
+    // 2) Конвертируем quads -> triangles в один float-буфер (x,y).
+    // stb_easy_font выдаёт CCW-quad: v0,v1,v2,v3. Разбиваем на (0,1,2)+(0,2,3).
+    struct EasyVert { float x, y, z; unsigned char c[4]; };
+    auto* qv = reinterpret_cast<const EasyVert*>(raw);
+    std::vector<float> tri;
+    tri.reserve((std::size_t)num_quads * 6 * 2);
+    auto push = [&](float x, float y) {
+        tri.push_back(kMargin + kPad + x * kScale);
+        tri.push_back(kMargin + kPad + y * kScale);
+    };
+    for (int q = 0; q < num_quads; ++q) {
+        const EasyVert* v = &qv[q * 4];
+        push(v[0].x, v[0].y); push(v[1].x, v[1].y); push(v[2].x, v[2].y);
+        push(v[0].x, v[0].y); push(v[2].x, v[2].y); push(v[3].x, v[3].y);
+    }
+
+    // 3) Подложка — полупрозрачный чёрный прямоугольник под текстом.
+    float bx = kMargin;
+    float by = kMargin;
+    float bw = tw * kScale + kPad * 2.0f;
+    float bh = th * kScale + kPad * 2.0f;
+    float bg[] = {
+        bx,      by,
+        bx + bw, by,
+        bx,      by + bh,
+        bx + bw, by,
+        bx + bw, by + bh,
+        bx,      by + bh,
+    };
+
+    // 4) Включаем blending, viewport на всё окно (оверлей рисуется в
+    // экранных координатах, не в letterbox-viewport главного кадра).
+    glViewport(0, 0, win_w_, win_h_);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glUseProgram(text_program_);
+    glUniform2f(text_u_screen_, (float)win_w_, (float)win_h_);
+    glBindBuffer(GL_ARRAY_BUFFER, text_vbo_);
+    glEnableVertexAttribArray(text_a_pos_);
+    glVertexAttribPointer(text_a_pos_, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+
+    // Подложка.
+    glUniform4f(text_u_color_, 0.0f, 0.0f, 0.0f, 0.55f);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(bg), bg, GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Текст ярко-жёлтым.
+    glUniform4f(text_u_color_, 1.0f, 1.0f, 0.2f, 1.0f);
+    glBufferData(GL_ARRAY_BUFFER,
+                 (GLsizeiptr)(tri.size() * sizeof(float)),
+                 tri.data(), GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(tri.size() / 2));
+
+    glDisable(GL_BLEND);
+}
+
 bool WaylandDisplay::init(int w, int h, const char* title) {
     win_w_ = w;
     win_h_ = h;
@@ -310,8 +445,9 @@ bool WaylandDisplay::init(int w, int h, const char* title) {
     // Дожидаемся первого configure — без него EGL surface некуда вешать.
     while (!configured_ && wl_display_dispatch(display_) != -1) {}
 
-    if (!init_egl()) return false;
-    if (!init_gl())  return false;
+    if (!init_egl())  return false;
+    if (!init_gl())   return false;
+    if (!init_text()) return false;
 
     // Пустой первый кадр, чтобы окно появилось до первого show_rgb().
     glViewport(0, 0, win_w_, win_h_);
@@ -373,6 +509,9 @@ void WaylandDisplay::render() {
                           (void*)(2 * sizeof(float)));
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
+    // Оверлей рисуется поверх кадра в полном viewport окна.
+    render_overlay();
+
     eglSwapBuffers(egl_display_, egl_surface_);
 }
 
@@ -400,9 +539,11 @@ void WaylandDisplay::cleanup() {
     if (egl_display_ != EGL_NO_DISPLAY) {
         eglMakeCurrent(egl_display_, EGL_NO_SURFACE, EGL_NO_SURFACE,
                        EGL_NO_CONTEXT);
-        if (program_) glDeleteProgram(program_);
-        if (vbo_)     glDeleteBuffers(1, &vbo_);
-        if (texture_) glDeleteTextures(1, &texture_);
+        if (program_)      glDeleteProgram(program_);
+        if (text_program_) glDeleteProgram(text_program_);
+        if (vbo_)          glDeleteBuffers(1, &vbo_);
+        if (text_vbo_)     glDeleteBuffers(1, &text_vbo_);
+        if (texture_)      glDeleteTextures(1, &texture_);
         if (egl_surface_ != EGL_NO_SURFACE)
             eglDestroySurface(egl_display_, egl_surface_);
         if (egl_context_ != EGL_NO_CONTEXT)
