@@ -322,6 +322,7 @@ struct Args {
     bool loop = false;          // непрерывный цикл инференса (демо для видео)
     bool stats = false;         // FPS/jitter оверлей + лог в stdout
     int  log_interval_ms = 1000;
+    bool vsync = true;          // ограничение FPS частотой обновления экрана
 };
 
 void print_usage(const char* prog) {
@@ -339,7 +340,8 @@ void print_usage(const char* prog) {
         "  --win <WxH>         стартовый размер окна (по умолчанию 960x720)\n"
         "  --loop              непрерывный цикл инференс+отрисовка (Ctrl+C)\n"
         "  --stats             счётчик FPS/jitter (оверлей + лог в stdout)\n"
-        "  --log-interval <ms> период лога FPS, мс (по умолчанию 1000)\n",
+        "  --log-interval <ms> период лога FPS, мс (по умолчанию 1000)\n"
+        "  --no-vsync          отключить vsync (макс. FPS, возможен tearing)\n",
         prog, kDefaultDelegate);
 }
 
@@ -360,6 +362,7 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--loop")                        a.loop        = true;
         else if (s == "--stats")                       a.stats       = true;
         else if (s == "--log-interval"&& i + 1 < argc) a.log_interval_ms = std::atoi(argv[++i]);
+        else if (s == "--no-vsync")                    a.vsync       = false;
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
@@ -486,7 +489,7 @@ int main(int argc, char** argv) {
                 "Поддержка дисплея не собрана (USE_DISPLAY=OFF).\n");
             return 7;
         }
-        if (!disp->init(args.win_w, args.win_h, "npu")) return 7;
+        if (!disp->init(args.win_w, args.win_h, "npu", args.vsync)) return 7;
 
         const uint8_t* frame = args.show_input ? input_rgb.data()
                                                : img.rgb.data();

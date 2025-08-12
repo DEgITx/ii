@@ -41,7 +41,7 @@ class WaylandDisplay : public Display {
 public:
     ~WaylandDisplay() override { cleanup(); }
 
-    bool init(int w, int h, const char* title) override;
+    bool init(int w, int h, const char* title, bool vsync) override;
     bool show_rgb(const uint8_t* rgb, int w, int h) override;
     bool poll() override;
     bool wait() override;
@@ -117,6 +117,7 @@ private:
     int  tex_h_      = 0;
     bool configured_ = false;
     bool closed_     = false;
+    bool vsync_      = true;
 
     // ---- Оверлей текста (FPS / debug) ----
     std::string overlay_text_;
@@ -234,7 +235,13 @@ bool WaylandDisplay::init_egl() {
         std::fprintf(stderr, "EGL: eglMakeCurrent упал.\n");
         return false;
     }
-    eglSwapInterval(egl_display_, 1);  // vsync
+    // 1 — ждём vblank (плавно, без tearing); 0 — отдаём максимум
+    // (полезно для замеров и диагностики, не зависим от частоты дисплея).
+    if (!eglSwapInterval(egl_display_, vsync_ ? 1 : 0)) {
+        std::fprintf(stderr,
+            "EGL: eglSwapInterval(%d) не поддержан драйвером — игнорирую.\n",
+            vsync_ ? 1 : 0);
+    }
     return true;
 }
 
@@ -430,9 +437,10 @@ void WaylandDisplay::render_overlay() {
     glDisable(GL_BLEND);
 }
 
-bool WaylandDisplay::init(int w, int h, const char* title) {
+bool WaylandDisplay::init(int w, int h, const char* title, bool vsync) {
     win_w_ = w;
     win_h_ = h;
+    vsync_ = vsync;
 
     if (!init_wayland()) return false;
 
