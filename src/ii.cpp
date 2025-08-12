@@ -32,6 +32,7 @@
 #include <memory>
 #include <numeric>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "tensorflow/lite/interpreter.h"
@@ -148,23 +149,61 @@ TensorInfo describe(const TfLiteTensor* t, int index) {
 const char* dtype_name(TfLiteType t) {
     switch (t) {
         case kTfLiteFloat32: return "float32";
+        case kTfLiteFloat16: return "float16";
         case kTfLiteInt8:    return "int8";
         case kTfLiteUInt8:   return "uint8";
+        case kTfLiteInt16:   return "int16";
+        case kTfLiteUInt16:  return "uint16";
         case kTfLiteInt32:   return "int32";
+        case kTfLiteUInt32:  return "uint32";
         case kTfLiteInt64:   return "int64";
+        case kTfLiteBool:    return "bool";
         default:             return "?";
     }
 }
 
 size_t dtype_size(TfLiteType t) {
     switch (t) {
-        case kTfLiteFloat32: return 4;
-        case kTfLiteInt32:   return 4;
+        case kTfLiteFloat32:
+        case kTfLiteInt32:
+        case kTfLiteUInt32:  return 4;
         case kTfLiteInt64:   return 8;
+        case kTfLiteFloat16:
+        case kTfLiteInt16:
+        case kTfLiteUInt16:  return 2;
         case kTfLiteInt8:
-        case kTfLiteUInt8:   return 1;
+        case kTfLiteUInt8:
+        case kTfLiteBool:    return 1;
         default:             return 1;
     }
+}
+
+// IEEE 754 binary16 -> binary32 (без зависимости от __fp16 / F16C).
+// Корректно обрабатывает denormals, ±0, ±inf и NaN.
+inline float half_to_float(uint16_t h) {
+    const uint32_t sign = (uint32_t)(h >> 15) & 0x1u;
+    const uint32_t exp  = (uint32_t)(h >> 10) & 0x1Fu;
+    uint32_t       mant = (uint32_t)h & 0x3FFu;
+    uint32_t bits;
+    if (exp == 0) {
+        if (mant == 0) {
+            bits = sign << 31;                       // ±0
+        } else {
+            // denormal: нормализуем, сдвигая мантиссу влево.
+            int e = -1;
+            do { ++e; mant <<= 1; } while ((mant & 0x400u) == 0);
+            mant &= 0x3FFu;
+            bits = (sign << 31) | ((127u - 15u - (uint32_t)e) << 23)
+                 | (mant << 13);
+        }
+    } else if (exp == 31) {
+        bits = (sign << 31) | (0xFFu << 23) | (mant << 13);  // inf / NaN
+    } else {
+        bits = (sign << 31) | ((exp + 127u - 15u) << 23) | (mant << 13);
+    }
+    float out;
+    std::memcpy(&out, &bits, sizeof(out));
+    return out;
 }
 
 void print_tensor(const char* prefix, const TensorInfo& t) {
@@ -227,45 +266,49 @@ void letterbox(const Image& src, int target_w, int target_h,
 
 // ---------------------------------------------------------------------------
 // Заполнение входного тензора. На вход — RGB HWC uint8 [0..255].
-// Нормализуется в [0,1] и квантуется по scale/zero_point модели для INT8/UINT8.
-// (Логика идентична quantize_to_input.)
+// Нормализуется в [0,1] и квантуется по scale/zero_point модели для
+// целочисленных типов. (Логика идентична quantize_to_input.)
 // ---------------------------------------------------------------------------
 bool fill_input(const std::vector<uint8_t>& rgb, const TensorInfo& info,
                 TfLiteTensor* tensor) {
     const size_t n = rgb.size();
+
+    // Универсальная квантователь под произвольный целочисленный тип.
+    auto quant_int = [&](auto* p, int lo, int hi) {
+        using T = std::decay_t<decltype(*p)>;
+        const float s  = info.scale ? info.scale : 1.0f;
+        const int   zp = info.zero_point;
+        for (size_t i = 0; i < n; ++i) {
+            int q = (int)std::lround((rgb[i] / 255.0f) / s + zp);
+            if (q < lo) q = lo;
+            if (q > hi) q = hi;
+            p[i] = (T)q;
+        }
+    };
+
     switch (info.dtype) {
         case kTfLiteFloat32: {
             float* p = reinterpret_cast<float*>(tensor->data.data);
             for (size_t i = 0; i < n; ++i) p[i] = rgb[i] / 255.0f;
             return true;
         }
-        case kTfLiteInt8: {
-            int8_t* p = reinterpret_cast<int8_t*>(tensor->data.data);
-            const float s = info.scale ? info.scale : 1.0f;
-            const int zp = info.zero_point;
-            for (size_t i = 0; i < n; ++i) {
-                int q = (int)std::lround((rgb[i] / 255.0f) / s + zp);
-                if (q < -128) q = -128;
-                if (q >  127) q =  127;
-                p[i] = (int8_t)q;
-            }
+        case kTfLiteInt8:
+            quant_int(reinterpret_cast<int8_t*>(tensor->data.data), -128, 127);
             return true;
-        }
-        case kTfLiteUInt8: {
-            uint8_t* p = reinterpret_cast<uint8_t*>(tensor->data.data);
-            const float s = info.scale ? info.scale : 1.0f;
-            const int zp = info.zero_point;
-            for (size_t i = 0; i < n; ++i) {
-                int q = (int)std::lround((rgb[i] / 255.0f) / s + zp);
-                if (q <   0) q =   0;
-                if (q > 255) q = 255;
-                p[i] = (uint8_t)q;
-            }
+        case kTfLiteUInt8:
+            quant_int(reinterpret_cast<uint8_t*>(tensor->data.data), 0, 255);
             return true;
-        }
+        case kTfLiteInt16:
+            quant_int(reinterpret_cast<int16_t*>(tensor->data.data),
+                      -32768, 32767);
+            return true;
+        case kTfLiteUInt16:
+            quant_int(reinterpret_cast<uint16_t*>(tensor->data.data),
+                      0, 65535);
+            return true;
         default:
-            std::fprintf(stderr, "Неподдерживаемый dtype входа: %s\n",
-                         dtype_name(info.dtype));
+            std::fprintf(stderr, "Неподдерживаемый dtype входа: %s (код %d)\n",
+                         dtype_name(info.dtype), (int)info.dtype);
             return false;
     }
 }
@@ -278,6 +321,8 @@ void print_output_head(const TensorInfo& info, const TfLiteTensor* tensor,
     size_t total = info.bytes / dtype_size(info.dtype);
     n_show = (int)std::min<size_t>((size_t)n_show, total);
 
+    const float s  = info.scale ? info.scale : 1.0f;
+    const int   zp = info.zero_point;
     std::printf("  output %-32s first %d:", info.name.c_str(), n_show);
     for (int i = 0; i < n_show; ++i) {
         float v = 0.0f;
@@ -285,16 +330,26 @@ void print_output_head(const TensorInfo& info, const TfLiteTensor* tensor,
             case kTfLiteFloat32:
                 v = reinterpret_cast<const float*>(tensor->data.data)[i];
                 break;
-            case kTfLiteInt8: {
-                int8_t q = reinterpret_cast<const int8_t*>(tensor->data.data)[i];
-                v = (q - info.zero_point) * info.scale;
+            case kTfLiteFloat16:
+                v = half_to_float(
+                    reinterpret_cast<const uint16_t*>(tensor->data.data)[i]);
                 break;
-            }
-            case kTfLiteUInt8: {
-                uint8_t q = reinterpret_cast<const uint8_t*>(tensor->data.data)[i];
-                v = (q - info.zero_point) * info.scale;
+            case kTfLiteInt8:
+                v = (reinterpret_cast<const int8_t*>(tensor->data.data)[i] - zp) * s;
                 break;
-            }
+            case kTfLiteUInt8:
+                v = (reinterpret_cast<const uint8_t*>(tensor->data.data)[i] - zp) * s;
+                break;
+            case kTfLiteInt16:
+                v = (reinterpret_cast<const int16_t*>(tensor->data.data)[i] - zp) * s;
+                break;
+            case kTfLiteUInt16:
+                v = ((int)reinterpret_cast<const uint16_t*>(tensor->data.data)[i] - zp) * s;
+                break;
+            case kTfLiteInt32:
+                v = ((float)reinterpret_cast<const int32_t*>(tensor->data.data)[i]
+                     - (float)zp) * s;
+                break;
             default: break;
         }
         std::printf(" %.4f", v);
@@ -310,39 +365,87 @@ double now_ms() {
 
 // ---------------------------------------------------------------------------
 // Деквантование произвольного выходного тензора в float-буфер.
-// Обрабатывает float32 как «as-is», int8/uint8 — по scale/zp.
+//
+// Поддерживаемые типы:
+//   * float32 / float16      — копируем (с конвертацией для half);
+//   * int8 / uint8 / int16 / uint16 — аффинная формула (x - zp) * scale;
+//   * int32 — то же (некоторые экспортёры так дают «головы» с большим
+//     динамическим диапазоном).
+//
+// Если scale == 0 для целочисленного тензора (т.е. модель не квантована
+// в полноценном смысле) — берём сырое значение как float, иначе деление
+// на ноль / нулевая шкала всё бы обнулило.
 // ---------------------------------------------------------------------------
 bool dequantize_output(const TensorInfo& info, const TfLiteTensor* tensor,
                        std::vector<float>& out) {
-    const std::size_t total = info.bytes / dtype_size(info.dtype);
+    const std::size_t ds = dtype_size(info.dtype);
+    const std::size_t total = info.bytes / ds;
     out.resize(total);
+
+    const float s  = info.scale ? info.scale : 1.0f;
+    const int   zp = info.zero_point;
+
     switch (info.dtype) {
         case kTfLiteFloat32: {
             std::memcpy(out.data(), tensor->data.data,
                         total * sizeof(float));
             return true;
         }
+        case kTfLiteFloat16: {
+            const uint16_t* p =
+                reinterpret_cast<const uint16_t*>(tensor->data.data);
+            for (std::size_t i = 0; i < total; ++i)
+                out[i] = half_to_float(p[i]);
+            return true;
+        }
         case kTfLiteInt8: {
-            const int8_t* p = reinterpret_cast<const int8_t*>(tensor->data.data);
-            const float s = info.scale;
-            const int   zp = info.zero_point;
+            const int8_t* p =
+                reinterpret_cast<const int8_t*>(tensor->data.data);
             for (std::size_t i = 0; i < total; ++i)
                 out[i] = (p[i] - zp) * s;
             return true;
         }
         case kTfLiteUInt8: {
-            const uint8_t* p = reinterpret_cast<const uint8_t*>(tensor->data.data);
-            const float s = info.scale;
-            const int   zp = info.zero_point;
+            const uint8_t* p =
+                reinterpret_cast<const uint8_t*>(tensor->data.data);
             for (std::size_t i = 0; i < total; ++i)
                 out[i] = (p[i] - zp) * s;
             return true;
         }
-        default:
-            std::fprintf(stderr,
-                "Деквантование не поддерживает dtype=%s\n",
-                dtype_name(info.dtype));
+        case kTfLiteInt16: {
+            const int16_t* p =
+                reinterpret_cast<const int16_t*>(tensor->data.data);
+            for (std::size_t i = 0; i < total; ++i)
+                out[i] = (p[i] - zp) * s;
+            return true;
+        }
+        case kTfLiteUInt16: {
+            const uint16_t* p =
+                reinterpret_cast<const uint16_t*>(tensor->data.data);
+            for (std::size_t i = 0; i < total; ++i)
+                out[i] = ((int)p[i] - zp) * s;
+            return true;
+        }
+        case kTfLiteInt32: {
+            const int32_t* p =
+                reinterpret_cast<const int32_t*>(tensor->data.data);
+            for (std::size_t i = 0; i < total; ++i)
+                out[i] = ((float)p[i] - (float)zp) * s;
+            return true;
+        }
+        default: {
+            // В видео-цикле эта ошибка иначе зальёт stderr на каждый кадр —
+            // печатаем один раз за всё время жизни процесса.
+            static bool warned = false;
+            if (!warned) {
+                std::fprintf(stderr,
+                    "Деквантование не поддерживает dtype=%s (код %d). "
+                    "Дальнейшие подобные сообщения подавлены.\n",
+                    dtype_name(info.dtype), (int)info.dtype);
+                warned = true;
+            }
             return false;
+        }
     }
 }
 
