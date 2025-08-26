@@ -13,6 +13,7 @@
 #include "display.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -680,14 +681,66 @@ void WaylandDisplay::render_boxes() {
 
 bool WaylandDisplay::poll() {
     if (closed_) return false;
-    // Корректный неблокирующий drain: сбрасываем исходящий буфер и
-    // читаем входящие события, только если они уже лежат в сокете.
-    wl_display_flush(display_);
-    pollfd pfd{ wl_display_get_fd(display_), POLLIN, 0 };
-    if (::poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN)) {
-        if (wl_display_dispatch(display_) < 0) closed_ = true;
+
+    // Неблокирующий drain по канону libwayland
+    while (wl_display_prepare_read(display_) != 0) {
+        if (wl_display_dispatch_pending(display_) < 0) {
+            closed_ = true;
+            return false;
+        }
+    }
+
+    // Сокет полон — даём композитору один короткий шанс вычитать буфер
+    // и идём дальше: poll() вызывается из render loop, блокироваться нельзя.
+    constexpr int kFlushRetries = 2;
+    for (int i = 0; i < kFlushRetries; ++i) {
+        int r = wl_display_flush(display_);
+        if (r >= 0) break;
+        if (errno == EINTR) { continue; }
+        if (errno != EAGAIN) {
+            wl_display_cancel_read(display_);
+            closed_ = true;
+            return false;
+        }
+        pollfd po{ wl_display_get_fd(display_), POLLOUT, 0 };
+        int pr = ::poll(&po, 1, 2);
+        if (pr < 0 && errno != EINTR) {
+            wl_display_cancel_read(display_);
+            closed_ = true;
+            return false;
+        }
+        if (pr > 0 && (po.revents & (POLLHUP | POLLERR))) {
+            wl_display_cancel_read(display_);
+            closed_ = true;
+            return false;
+        }
+    }
+    // Если не дофлашили за отведённые попытки — не блокируем кадр,
+    // дочитаем то, что уже пришло, и попробуем снова в следующий poll().
+
+    pollfd pi{ wl_display_get_fd(display_), POLLIN, 0 };
+    int pr = ::poll(&pi, 1, 0);
+    if (pr > 0 && (pi.revents & (POLLHUP | POLLERR))) {
+        wl_display_cancel_read(display_);
+        closed_ = true;
+        return false;
+    }
+    if (pr > 0 && (pi.revents & POLLIN)) {
+        if (wl_display_read_events(display_) < 0) {
+            closed_ = true;
+            return false;
+        }
     } else {
-        wl_display_dispatch_pending(display_);
+        wl_display_cancel_read(display_);
+        if (pr < 0 && errno != EINTR) {
+            closed_ = true;
+            return false;
+        }
+    }
+
+    if (wl_display_dispatch_pending(display_) < 0) {
+        closed_ = true;
+        return false;
     }
     return !closed_;
 }
