@@ -6,8 +6,8 @@
 // Поддерживаются модели:
 //   * один вход; для путей с картинкой (загрузка image, --display, --yolo,
 //     image-режим --compare) ожидается NHWC [1,H,W,3] (uint8/int8/float32);
-//     в чисто рандомном --compare-random shape произвольный (например
-//     [1,9,9,1] для табличных/регрессионных сетей);
+//     в режиме --random-input shape произвольный (например [1,9,9,1] для
+//     табличных/регрессионных сетей);
 //   * любое число выходов произвольных типов;
 //   * квантование scale/zero_point читается из самой модели.
 //
@@ -24,6 +24,8 @@
 //   ./ii model.tflite image.jpg --display --show-input # показать препроц.
 //   ./ii yolov8m_int8.tflite img.jpg --display --yolo  # боксы поверх
 //   ./ii yolov8m_int8.tflite img.jpg --display --yolo --conf 0.4 --iou 0.5
+//   ./ii model.tflite --random-input --benchmark --runs 100   # без картинки
+//   ./ii model.tflite --random-input --compare-cpu --random-runs 50
 
 #include <algorithm>
 #include <chrono>
@@ -627,21 +629,25 @@ struct Args {
     // ---- Проверка точности относительно эталона ----
     bool        compare_cpu = false; // ту же модель прогнать на CPU и сравнить
     std::string compare_model;       // путь к эталонной .tflite (CPU)
-    // ---- Сравнение на случайных данных ----
-    // Когда включено, оба входа заполняются одинаковым случайным RGB
-    // (без какого-либо изображения), результаты сравниваются по N прогонам
-    // с агрегированными метриками. Полезно как «фаззер» расхождений NPU vs
-    // эталон без зависимости от датасета. Картинка при этом не нужна —
-    // позиционный аргумент image можно опустить.
-    bool        compare_random = false;
-    int         compare_runs   = 1;
-    uint32_t    compare_seed   = 0;   // 0 = взять из std::random_device
+    // ---- Случайный вход вместо изображения ----
+    // Когда включено, входной тензор главной (и при сравнении — эталонной)
+    // модели заполняется случайным uint8-буфером. Картинка не нужна —
+    // позиционный аргумент image можно опустить. Применимо ко всем режимам:
+    //   * одиночный инференс / --benchmark / --loop — фаззер для замера
+    //     скорости и стабильности на произвольных данных;
+    //   * --compare / --compare-cpu — фаззер расхождений NPU vs эталон без
+    //     зависимости от датасета (оба входа заполняются одним буфером,
+    //     метрики усредняются по random_runs прогонам).
+    // Старое имя флага --compare-random остаётся как алиас.
+    bool        random_input = false;
+    int         random_runs  = 1;     // используется в режиме сравнения
+    uint32_t    random_seed  = 0;     // 0 = взять из std::random_device
 };
 
 void print_usage(const char* prog) {
     std::printf(
         "Usage: %s <model.tflite> [image] [options]\n"
-        "  image не обязателен в режиме --compare-random.\n"
+        "  image не обязателен в режиме --random-input.\n"
         "Options:\n"
         "  --delegate <path>   путь к внешний делегату (по умолчанию %s)\n"
         "  --no-delegate       запустить на CPU (без делегата)\n"
@@ -666,10 +672,14 @@ void print_usage(const char* prog) {
         "  --compare-cpu       прогнать ту же модель на CPU и сравнить выходы\n"
         "  --compare <path>    прогнать эталонную .tflite на CPU и сравнить\n"
         "                      (например, исходный float32 vs INT8 на NPU)\n"
-        "  --compare-random    сравнивать выходы на случайных входах вместо\n"
-        "                      изображения (картинку можно не указывать)\n"
-        "  --compare-runs <N>  число случайных прогонов для агрегации (def 1)\n"
-        "  --compare-seed <N>  seed RNG для воспроизводимости (def — случайный)\n",
+        "  --random-input      использовать случайный входной буфер вместо\n"
+        "                      изображения; работает с одиночным инференсом,\n"
+        "                      --benchmark, --loop, --compare* (картинку можно\n"
+        "                      не указывать). Алиас: --compare-random\n"
+        "  --random-runs <N>   в --compare* число случайных прогонов для\n"
+        "                      агрегации метрик (def 1). Алиас: --compare-runs\n"
+        "  --random-seed <N>   seed RNG для воспроизводимости (def — случайный).\n"
+        "                      Алиас: --compare-seed\n",
         prog, kDefaultDelegate);
 }
 
@@ -708,9 +718,12 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--classes"     && i + 1 < argc) a.classes_path = argv[++i];
         else if (s == "--compare-cpu")                 a.compare_cpu = true;
         else if (s == "--compare"     && i + 1 < argc) a.compare_model = argv[++i];
-        else if (s == "--compare-random")              a.compare_random = true;
-        else if (s == "--compare-runs"&& i + 1 < argc) a.compare_runs   = std::atoi(argv[++i]);
-        else if (s == "--compare-seed"&& i + 1 < argc) a.compare_seed   = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        else if (s == "--random-input"
+              || s == "--compare-random")              a.random_input = true;
+        else if ((s == "--random-runs" || s == "--compare-runs")
+                 && i + 1 < argc)                      a.random_runs  = std::atoi(argv[++i]);
+        else if ((s == "--random-seed" || s == "--compare-seed")
+                 && i + 1 < argc)                      a.random_seed  = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
@@ -737,24 +750,26 @@ int main(int argc, char** argv) {
     Args args;
     if (!parse_args(argc, argv, args)) return 1;
 
-    // Изображение можно опустить только если идёт «чистое» сравнение на
-    // случайных данных. Все остальные режимы (одиночный инференс, --display,
-    // --benchmark, --loop, --yolo, --compare без --compare-random) без
-    // картинки бессмысленны.
+    // Изображение можно опустить, если включён --random-input — тогда
+    // вход (и в одиночном инференсе, и в бенчмарке, и в --loop, и в
+    // --compare*) заполняется случайным буфером. --display и --yolo по-
+    // прежнему требуют реальной картинки.
     const bool has_image = !args.image.empty();
-    if (!has_image) {
-        const bool pure_random_compare = args.compare_random
-            && (args.compare_cpu || !args.compare_model.empty());
-        if (!pure_random_compare) {
-            std::fprintf(stderr,
-                "Не указан image. Передайте картинку либо используйте "
-                "--compare-random вместе с --compare/--compare-cpu.\n");
-            print_usage(argv[0]);
-            return 1;
-        }
+    if (!has_image && !args.random_input) {
+        std::fprintf(stderr,
+            "Не указан image. Передайте картинку либо используйте "
+            "--random-input.\n");
+        print_usage(argv[0]);
+        return 1;
     }
-    if (args.compare_runs < 1) {
-        std::fprintf(stderr, "--compare-runs должен быть >= 1.\n");
+    if (args.random_runs < 1) {
+        std::fprintf(stderr, "--random-runs должен быть >= 1.\n");
+        return 1;
+    }
+    if (args.random_input && args.display && !has_image) {
+        std::fprintf(stderr,
+            "--display требует входное изображение (нечего показывать "
+            "при --random-input без image).\n");
         return 1;
     }
 
@@ -797,9 +812,12 @@ int main(int argc, char** argv) {
         return 3;
     }
 
-    // ---- Загрузка и preprocess изображения ----
-    // В режиме чистого --compare-random изображения нет — пропускаем
-    // загрузку, letterbox, заливку входа и первый инференс.
+    // ---- Загрузка и preprocess изображения / генерация случайного входа ----
+    // Возможные сценарии:
+    //   * есть картинка             — letterbox + fill_input;
+    //   * --random-input без картинки — генерируем случайный uint8-буфер
+    //     по shape входа и заливаем его (один раз; benchmark/loop не
+    //     перегенерируют — для замера скорости содержимое не важно).
     Image img;
     std::vector<uint8_t> input_rgb;
     TfLiteTensor* in_t = eng.interpreter->tensor(in_info[0].index);
@@ -811,6 +829,26 @@ int main(int argc, char** argv) {
 
         letterbox(img, in_w, in_h, input_rgb);
         if (!fill_input(input_rgb, in_info[0], in_t)) return 5;
+    } else {
+        // --random-input без картинки: формируем случайный буфер длиной
+        // numel(shape). fill_input трактует его плоско, так что для любого
+        // ранга/раскладки результат корректен.
+        const size_t n_in = numel(in_info[0].shape);
+        if (n_in == 0) {
+            std::fprintf(stderr,
+                "Динамический shape входа не поддерживается в --random-input.\n");
+            return 4;
+        }
+        const uint32_t seed = args.random_seed
+            ? args.random_seed
+            : (uint32_t)std::random_device{}();
+        std::mt19937 rng(seed);
+        std::uniform_int_distribution<int> dist(0, 255);
+        input_rgb.resize(n_in);
+        for (auto& v : input_rgb) v = (uint8_t)dist(rng);
+        if (!fill_input(input_rgb, in_info[0], in_t)) return 5;
+        std::printf("Случайный вход: shape=%s, seed=%u\n",
+                    shape_to_str(in_info[0].shape).c_str(), seed);
     }
 
     // ---- YOLO: предварительная подготовка ----
@@ -840,13 +878,17 @@ int main(int argc, char** argv) {
     }
 
     // ---- Один прогон ----
-    if (has_image) {
+    // Делаем как только в input_t уже что-то залито (картинка или random).
+    // В чистом --compare-random режиме вход для сравнения зальётся внутри
+    // run_compare, поэтому одиночный прогон тут пропускаем.
+    const bool do_single_invoke = has_image
+        || (args.random_input && !args.compare_cpu && args.compare_model.empty());
+    if (do_single_invoke) {
         t0 = now_ms();
         if (!eng.invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
         t1 = now_ms();
         std::printf("Инференс: %.3f мс\n", t1 - t0);
 
-        // ---- Сводка по выходам ----
         for (size_t i = 0; i < out_info.size(); ++i) {
             const TfLiteTensor* t = eng.interpreter->tensor(out_info[i].index);
             print_output_head(out_info[i], t);
@@ -913,7 +955,7 @@ int main(int argc, char** argv) {
 
         // Аккумуляторы метрик по каждому выходу, агрегированные по всем
         // прогонам. В режиме одиночного запуска цифры совпадают со старым
-        // поведением; в режиме --compare-random N просто усредняются по
+        // поведением; в режиме --random-input N просто усредняются по
         // большему числу элементов (все runs × elems_per_run).
         struct Acc { double sum = 0, sse = 0, maxd = 0; size_t n = 0;
                      bool   trimmed = false; };
@@ -954,15 +996,15 @@ int main(int argc, char** argv) {
         };
 
         int runs_done = 0;
-        if (args.compare_random) {
+        if (args.random_input) {
             // ---- Режим случайных входов ----
             // Каждая итерация: один и тот же случайный буфер uint8 [0..255]
             // заливается в обе сети через fill_input (нормализация в [0,1]
             // и квантование берутся из самой модели — каждая сеть видит
             // свою «честную» подачу). Работает для произвольных шейпов:
             // картинок [1,H,W,3], таблиц [1,9,9,1], векторов [1,N] и т.д.
-            const uint32_t seed = args.compare_seed
-                ? args.compare_seed
+            const uint32_t seed = args.random_seed
+                ? args.random_seed
                 : (uint32_t)std::random_device{}();
             std::mt19937 rng(seed);
             std::uniform_int_distribution<int> dist(0, 255);
@@ -980,7 +1022,7 @@ int main(int argc, char** argv) {
             else                 mode_note = " (независимые случайные входы — diff не сопоставим)";
 
             std::printf("Случайные входы: runs=%d, seed=%u, main=%s, ref=%s%s\n",
-                        args.compare_runs, seed,
+                        args.random_runs, seed,
                         shape_to_str(in_info[0].shape).c_str(),
                         shape_to_str(rs).c_str(), mode_note);
 
@@ -993,7 +1035,7 @@ int main(int argc, char** argv) {
 
             std::vector<uint8_t> rnd_main(main_n);
             std::vector<uint8_t> rnd_ref;
-            for (int r = 0; r < args.compare_runs && !g_interrupted; ++r) {
+            for (int r = 0; r < args.random_runs && !g_interrupted; ++r) {
                 for (auto& v : rnd_main) v = (uint8_t)dist(rng);
                 if (!fill_input(rnd_main, in_info[0], main_in_t)) return;
                 if (same_shape || same_numel) {
@@ -1019,7 +1061,7 @@ int main(int argc, char** argv) {
             // ---- Режим одного изображения (старое поведение) ----
             if (!has_image) {
                 std::fprintf(stderr,
-                    "[%s] изображения нет; используйте --compare-random.\n",
+                    "[%s] изображения нет; используйте --random-input.\n",
                     ref_label);
                 return;
             }
@@ -1086,9 +1128,21 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Если изображения нет — дальше идти нечего: и benchmark, и --loop,
-    // и --display, и YOLO постпроцессинг бессмысленны без реального входа.
-    if (!has_image) return 0;
+    // Если входа нет вообще — дальше идти нечего. В режиме --random-input
+    // вход уже залит случайным буфером выше, так что --benchmark / --loop
+    // (без --display) могут отработать. --display и YOLO-постпроцессинг
+    // требуют реальной картинки и тут пропускаются.
+    if (!has_image) {
+        if (args.yolo) {
+            std::fprintf(stderr,
+                "--yolo требует входное изображение, пропуск постобработки.\n");
+        }
+        if (args.display) {
+            // Сюда не должны попасть из-за проверки в начале main, но на
+            // всякий случай.
+            return 0;
+        }
+    }
 
     // ---- YOLO: декодирование боксов после первого инференса ----
     // Локальные буферы переиспользуются в видео-цикле ниже, поэтому
