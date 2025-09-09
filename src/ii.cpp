@@ -595,6 +595,9 @@ struct Args {
     bool        yolo_pixel_coords = false;  // выход уже в пикселях (не 0..1)
     int         yolo_output = -1;    // -1 = автовыбор (самый «толстый» выход)
     std::string classes_path;        // файл с именами классов (по строке)
+    // ---- Проверка точности относительно эталона ----
+    bool        compare_cpu = false; // ту же модель прогнать на CPU и сравнить
+    std::string compare_model;       // путь к эталонной .tflite (CPU)
 };
 
 void print_usage(const char* prog) {
@@ -620,7 +623,10 @@ void print_usage(const char* prog) {
         "  --max-dets <N>      макс. число детекций (по умолчанию 300)\n"
         "  --yolo-pixel-coords координаты модели в пикселях, а не 0..1\n"
         "  --yolo-output <i>   индекс выхода с боксами (по умолчанию авто)\n"
-        "  --classes <path>    файл имён классов (по строке; default = COCO80)\n",
+        "  --classes <path>    файл имён классов (по строке; default = COCO80)\n"
+        "  --compare-cpu       прогнать ту же модель на CPU и сравнить выходы\n"
+        "  --compare <path>    прогнать эталонную .tflite на CPU и сравнить\n"
+        "                      (например, исходный float32 vs INT8 на NPU)\n",
         prog, kDefaultDelegate);
 }
 
@@ -649,6 +655,8 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--yolo-pixel-coords")           a.yolo_pixel_coords = true;
         else if (s == "--yolo-output" && i + 1 < argc) a.yolo_output = std::atoi(argv[++i]);
         else if (s == "--classes"     && i + 1 < argc) a.classes_path = argv[++i];
+        else if (s == "--compare-cpu")                 a.compare_cpu = true;
+        else if (s == "--compare"     && i + 1 < argc) a.compare_model = argv[++i];
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
@@ -755,6 +763,104 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < out_info.size(); ++i) {
         const TfLiteTensor* t = eng.interpreter->tensor(out_info[i].index);
         print_output_head(out_info[i], t);
+    }
+
+    // ---- Сравнение точности с эталоном ----
+    // Сравниваем выходы текущей модели с выходами эталонной (на CPU):
+    //   * --compare-cpu       — та же .tflite, но без делегата;
+    //   * --compare <path>    — указанная .tflite (например, исходная
+    //                          float32 версия той же сети).
+    // Метрики (MAE / RMSE / max|diff|) считаются после деквантования в
+    // float, поэлементно. Если у выходов разные размеры — сравнивается
+    // общий префикс длиной min(size_a, size_b) и печатается пометка.
+    auto run_compare = [&](const std::string& ref_model_path,
+                           const char* ref_label) {
+        std::printf("\n=== Сравнение %s vs %s (%s) ===\n",
+                    label_main, ref_label, ref_model_path.c_str());
+        Engine ref;
+        if (!ref.load(ref_model_path, std::string{}, args.threads)) return;
+
+        std::vector<TensorInfo> ref_in, ref_out;
+        for (int idx : ref.interpreter->inputs())
+            ref_in.push_back(describe(ref.interpreter->tensor(idx), idx));
+        for (int idx : ref.interpreter->outputs())
+            ref_out.push_back(describe(ref.interpreter->tensor(idx), idx));
+
+        if (ref_in.size() != 1 || ref_in[0].shape.size() != 4
+            || ref_in[0].shape[0] != 1 || ref_in[0].shape[3] != 3) {
+            std::fprintf(stderr,
+                "[%s] ожидаю единственный вход NHWC [1,H,W,3]; пропуск.\n",
+                ref_label);
+            return;
+        }
+        // Используем то же исходное изображение, но letterbox под входной
+        // размер эталонной модели (он может отличаться от основной).
+        const int ref_h = ref_in[0].shape[1];
+        const int ref_w = ref_in[0].shape[2];
+        std::vector<uint8_t> ref_rgb;
+        letterbox(img, ref_w, ref_h, ref_rgb);
+        TfLiteTensor* ref_in_t = ref.interpreter->tensor(ref_in[0].index);
+        if (!fill_input(ref_rgb, ref_in[0], ref_in_t)) return;
+
+        if (!ref.invoke()) {
+            std::fprintf(stderr, "[%s] Invoke упал.\n", ref_label);
+            return;
+        }
+
+        const size_t n = std::min(out_info.size(), ref_out.size());
+        if (out_info.size() != ref_out.size()) {
+            std::fprintf(stderr,
+                "[%s] число выходов различается (%zu vs %zu); "
+                "сравниваю первые %zu по индексу.\n",
+                ref_label, out_info.size(), ref_out.size(), n);
+        }
+
+        std::vector<float> a, b;
+        double agg_mae = 0.0, agg_max = 0.0;
+        size_t agg_n = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const TfLiteTensor* ta =
+                eng.interpreter->tensor(out_info[i].index);
+            const TfLiteTensor* tb =
+                ref.interpreter->tensor(ref_out[i].index);
+            if (!dequantize_output(out_info[i], ta, a)) continue;
+            if (!dequantize_output(ref_out[i], tb, b)) continue;
+            const size_t m = std::min(a.size(), b.size());
+            if (m == 0) continue;
+            double sum = 0.0, sse = 0.0, mx = 0.0;
+            for (size_t j = 0; j < m; ++j) {
+                double d = std::fabs((double)a[j] - (double)b[j]);
+                sum += d;
+                sse += d * d;
+                if (d > mx) mx = d;
+            }
+            const double mae  = sum / (double)m;
+            const double rmse = std::sqrt(sse / (double)m);
+            const char* note  = (a.size() == b.size())
+                                ? "" : "  (срез по min длине)";
+            std::printf("  output[%zu] %-32s elems=%zu  "
+                        "MAE=%.6f  RMSE=%.6f  max|diff|=%.6f%s\n",
+                        i, out_info[i].name.c_str(), m, mae, rmse, mx, note);
+            agg_mae += sum;
+            if (mx > agg_max) agg_max = mx;
+            agg_n   += m;
+        }
+        if (agg_n > 0) {
+            std::printf("  -> суммарно: MAE=%.6f  max|diff|=%.6f  (%zu элементов)\n",
+                        agg_mae / (double)agg_n, agg_max, agg_n);
+        }
+    };
+
+    if (!args.compare_model.empty()) {
+        run_compare(args.compare_model, "REF");
+    }
+    if (args.compare_cpu) {
+        if (args.no_delegate) {
+            std::fprintf(stderr,
+                "--compare-cpu проигнорирован: основной запуск уже на CPU.\n");
+        } else {
+            run_compare(args.model, "CPU");
+        }
     }
 
     // ---- YOLO: декодирование боксов после первого инференса ----
