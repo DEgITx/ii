@@ -773,6 +773,12 @@ int main(int argc, char** argv) {
     // Метрики (MAE / RMSE / max|diff|) считаются после деквантования в
     // float, поэлементно. Если у выходов разные размеры — сравнивается
     // общий префикс длиной min(size_a, size_b) и печатается пометка.
+    //
+    // Дополнительно, если основной выход квантован (scale > 0), печатаем
+    // те же метрики «в квантах INT8» — Δ/scale. Это даёт интуитивную
+    // шкалу: 1 квант = минимально различимое значение этой модели,
+    // т.е. предел разрешения INT8. MAE < 1·q считается идеальным
+    // совпадением (лучше уже не передать восемью битами).
     auto run_compare = [&](const std::string& ref_model_path,
                            const char* ref_label) {
         std::printf("\n=== Сравнение %s vs %s (%s) ===\n",
@@ -841,6 +847,18 @@ int main(int argc, char** argv) {
             std::printf("  output[%zu] %-32s elems=%zu  "
                         "MAE=%.6f  RMSE=%.6f  max|diff|=%.6f%s\n",
                         i, out_info[i].name.c_str(), m, mae, rmse, mx, note);
+            // Те же метрики в квантах INT8 — только если основной выход
+            // квантован (у float-моделей scale = 0, делить нельзя).
+            const float s_main = out_info[i].scale;
+            if (s_main > 0.0f) {
+                std::printf("                                              "
+                            "scale=%.6g  ->  MAE=%.2f*q  RMSE=%.2f*q  "
+                            "max|diff|=%.2f*q\n",
+                            s_main,
+                            mae  / s_main,
+                            rmse / s_main,
+                            mx   / s_main);
+            }
             agg_mae += sum;
             if (mx > agg_max) agg_max = mx;
             agg_n   += m;
