@@ -4,7 +4,10 @@
 // (например yolov8m_int8.tflite) и получить «сырые» выходы.
 //
 // Поддерживаются модели:
-//   * один вход вида NHWC [1,H,W,3] (uint8 / int8 / float32);
+//   * один вход; для путей с картинкой (загрузка image, --display, --yolo,
+//     image-режим --compare) ожидается NHWC [1,H,W,3] (uint8/int8/float32);
+//     в чисто рандомном --compare-random shape произвольный (например
+//     [1,9,9,1] для табличных/регрессионных сетей);
 //   * любое число выходов произвольных типов;
 //   * квантование scale/zero_point читается из самой модели.
 //
@@ -205,6 +208,31 @@ inline float half_to_float(uint16_t h) {
     float out;
     std::memcpy(&out, &bits, sizeof(out));
     return out;
+}
+
+size_t numel(const std::vector<int>& shape) {
+    size_t n = 1;
+    for (int d : shape) {
+        if (d <= 0) return 0;  // динамический/нулевой размер не поддерживаем
+        n *= (size_t)d;
+    }
+    return n;
+}
+
+std::string shape_to_str(const std::vector<int>& shape) {
+    std::string s = "[";
+    for (size_t i = 0; i < shape.size(); ++i) {
+        if (i) s += ",";
+        s += std::to_string(shape[i]);
+    }
+    s += "]";
+    return s;
+}
+
+// Является ли shape «картинкой» NHWC [1,H,W,3] — единственный формат, под
+// который заточены letterbox/изображение/--display/--yolo.
+bool is_nhwc3(const std::vector<int>& s) {
+    return s.size() == 4 && s[0] == 1 && s[3] == 3;
 }
 
 void print_tensor(const char* prefix, const TensorInfo& t) {
@@ -752,20 +780,22 @@ int main(int argc, char** argv) {
 
     if (in_info.size() != 1) {
         std::fprintf(stderr,
-            "Эта реализация рассчитана на 1 вход-изображение, у модели %zu.\n",
+            "Эта реализация рассчитана на 1 вход, у модели %zu.\n",
             in_info.size());
         return 3;
     }
-    // Ожидаем NHWC [1,H,W,3] — типовой формат TFLite-конвертированных моделей.
+    // NHWC [1,H,W,3] — типовой формат для путей с изображением. Для чисто
+    // рандомного --compare-random разрешаем любой shape (например [1,9,9,1]).
     const auto& s = in_info[0].shape;
-    if (s.size() != 4 || s[0] != 1 || s[3] != 3) {
+    const bool nhwc3 = is_nhwc3(s);
+    int in_h = 0, in_w = 0;
+    if (nhwc3) { in_h = s[1]; in_w = s[2]; }
+    if (has_image && !nhwc3) {
         std::fprintf(stderr,
-            "Поддерживается только NHWC [1,H,W,3]. Получено shape ранг=%zu.\n",
-            s.size());
+            "Для путей с изображением поддерживается только NHWC [1,H,W,3]. "
+            "Получено shape=%s.\n", shape_to_str(s).c_str());
         return 3;
     }
-    const int in_h = s[1];
-    const int in_w = s[2];
 
     // ---- Загрузка и preprocess изображения ----
     // В режиме чистого --compare-random изображения нет — пропускаем
@@ -850,15 +880,26 @@ int main(int argc, char** argv) {
         for (int idx : ref.interpreter->outputs())
             ref_out.push_back(describe(ref.interpreter->tensor(idx), idx));
 
-        if (ref_in.size() != 1 || ref_in[0].shape.size() != 4
-            || ref_in[0].shape[0] != 1 || ref_in[0].shape[3] != 3) {
+        if (ref_in.size() != 1) {
             std::fprintf(stderr,
-                "[%s] ожидаю единственный вход NHWC [1,H,W,3]; пропуск.\n",
-                ref_label);
+                "[%s] ожидаю единственный вход, у модели %zu; пропуск.\n",
+                ref_label, ref_in.size());
             return;
         }
-        const int ref_h = ref_in[0].shape[1];
-        const int ref_w = ref_in[0].shape[2];
+        const auto& rs = ref_in[0].shape;
+        const bool ref_nhwc3 = is_nhwc3(rs);
+        int ref_h = 0, ref_w = 0;
+        if (ref_nhwc3) { ref_h = rs[1]; ref_w = rs[2]; }
+        // Жёстко требуем [1,H,W,3] только в image-режиме compare: там мы
+        // letterbox’им реальную картинку в ref. В --compare-random никаких
+        // картинок нет — сравниваем тензор-в-тензор любого ранга.
+        if (has_image && !ref_nhwc3) {
+            std::fprintf(stderr,
+                "[%s] для сравнения по изображению ожидаю вход NHWC [1,H,W,3]; "
+                "получено shape=%s; пропуск.\n",
+                ref_label, shape_to_str(rs).c_str());
+            return;
+        }
         TfLiteTensor* main_in_t = eng.interpreter->tensor(in_info[0].index);
         TfLiteTensor* ref_in_t  = ref.interpreter->tensor(ref_in[0].index);
 
@@ -915,33 +956,61 @@ int main(int argc, char** argv) {
         int runs_done = 0;
         if (args.compare_random) {
             // ---- Режим случайных входов ----
-            // Каждая итерация: одинаковый случайный RGB-кадр uint8 заливается
-            // в обе сети через тот же fill_input, что и для реальных
-            // изображений (нормализация и квантование берутся из самой
-            // модели — каждая сеть видит свою «честную» подачу).
+            // Каждая итерация: один и тот же случайный буфер uint8 [0..255]
+            // заливается в обе сети через fill_input (нормализация в [0,1]
+            // и квантование берутся из самой модели — каждая сеть видит
+            // свою «честную» подачу). Работает для произвольных шейпов:
+            // картинок [1,H,W,3], таблиц [1,9,9,1], векторов [1,N] и т.д.
             const uint32_t seed = args.compare_seed
                 ? args.compare_seed
                 : (uint32_t)std::random_device{}();
             std::mt19937 rng(seed);
             std::uniform_int_distribution<int> dist(0, 255);
-            const bool same_shape = (in_info[0].shape == ref_in[0].shape);
-            std::printf("Случайные входы: runs=%d, seed=%u, "
-                        "main=%dx%d, ref=%dx%d%s\n",
+
+            const size_t main_n   = numel(in_info[0].shape);
+            const size_t ref_n    = numel(rs);
+            const bool same_shape = (in_info[0].shape == rs);
+            const bool same_numel = (main_n == ref_n);
+            const bool both_img   = nhwc3 && ref_nhwc3;
+
+            const char* mode_note;
+            if      (same_shape) mode_note = " (общий буфер)";
+            else if (same_numel) mode_note = " (разный shape, тот же numel — общий буфер)";
+            else if (both_img)   mode_note = " (letterbox под ref)";
+            else                 mode_note = " (независимые случайные входы — diff не сопоставим)";
+
+            std::printf("Случайные входы: runs=%d, seed=%u, main=%s, ref=%s%s\n",
                         args.compare_runs, seed,
-                        in_w, in_h, ref_w, ref_h,
-                        same_shape ? " (общий буфер)"
-                                   : " (letterbox под ref)");
-            std::vector<uint8_t> rnd((size_t)in_w * in_h * 3);
-            std::vector<uint8_t> ref_rgb;
+                        shape_to_str(in_info[0].shape).c_str(),
+                        shape_to_str(rs).c_str(), mode_note);
+
+            if (main_n == 0 || ref_n == 0) {
+                std::fprintf(stderr,
+                    "[%s] неподдерживаемый динамический shape входа; пропуск.\n",
+                    ref_label);
+                return;
+            }
+
+            std::vector<uint8_t> rnd_main(main_n);
+            std::vector<uint8_t> rnd_ref;
             for (int r = 0; r < args.compare_runs && !g_interrupted; ++r) {
-                for (auto& v : rnd) v = (uint8_t)dist(rng);
-                if (!fill_input(rnd, in_info[0], main_in_t)) return;
-                if (same_shape) {
-                    if (!fill_input(rnd, ref_in[0], ref_in_t)) return;
+                for (auto& v : rnd_main) v = (uint8_t)dist(rng);
+                if (!fill_input(rnd_main, in_info[0], main_in_t)) return;
+                if (same_shape || same_numel) {
+                    // fill_input трактует входной буфер плоско — при равном
+                    // числе элементов раскладка по осям не важна.
+                    if (!fill_input(rnd_main, ref_in[0], ref_in_t)) return;
+                } else if (both_img) {
+                    Image tmp; tmp.rgb = rnd_main; tmp.w = in_w; tmp.h = in_h;
+                    letterbox(tmp, ref_w, ref_h, rnd_ref);
+                    if (!fill_input(rnd_ref, ref_in[0], ref_in_t)) return;
                 } else {
-                    Image tmp; tmp.rgb = rnd; tmp.w = in_w; tmp.h = in_h;
-                    letterbox(tmp, ref_w, ref_h, ref_rgb);
-                    if (!fill_input(ref_rgb, ref_in[0], ref_in_t)) return;
+                    // Шейпы и numel разные, картинками не являются — других
+                    // разумных вариантов нет. Льём независимый рандом, метрики
+                    // diff’а интерпретировать осторожно (пометили в логе).
+                    rnd_ref.resize(ref_n);
+                    for (auto& v : rnd_ref) v = (uint8_t)dist(rng);
+                    if (!fill_input(rnd_ref, ref_in[0], ref_in_t)) return;
                 }
                 if (!compare_once()) return;
                 ++runs_done;
