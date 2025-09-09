@@ -31,6 +31,7 @@
 #include <cstring>
 #include <memory>
 #include <numeric>
+#include <random>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -598,11 +599,21 @@ struct Args {
     // ---- Проверка точности относительно эталона ----
     bool        compare_cpu = false; // ту же модель прогнать на CPU и сравнить
     std::string compare_model;       // путь к эталонной .tflite (CPU)
+    // ---- Сравнение на случайных данных ----
+    // Когда включено, оба входа заполняются одинаковым случайным RGB
+    // (без какого-либо изображения), результаты сравниваются по N прогонам
+    // с агрегированными метриками. Полезно как «фаззер» расхождений NPU vs
+    // эталон без зависимости от датасета. Картинка при этом не нужна —
+    // позиционный аргумент image можно опустить.
+    bool        compare_random = false;
+    int         compare_runs   = 1;
+    uint32_t    compare_seed   = 0;   // 0 = взять из std::random_device
 };
 
 void print_usage(const char* prog) {
     std::printf(
-        "Usage: %s <model.tflite> <image> [options]\n"
+        "Usage: %s <model.tflite> [image] [options]\n"
+        "  image не обязателен в режиме --compare-random.\n"
         "Options:\n"
         "  --delegate <path>   путь к внешний делегату (по умолчанию %s)\n"
         "  --no-delegate       запустить на CPU (без делегата)\n"
@@ -626,15 +637,27 @@ void print_usage(const char* prog) {
         "  --classes <path>    файл имён классов (по строке; default = COCO80)\n"
         "  --compare-cpu       прогнать ту же модель на CPU и сравнить выходы\n"
         "  --compare <path>    прогнать эталонную .tflite на CPU и сравнить\n"
-        "                      (например, исходный float32 vs INT8 на NPU)\n",
+        "                      (например, исходный float32 vs INT8 на NPU)\n"
+        "  --compare-random    сравнивать выходы на случайных входах вместо\n"
+        "                      изображения (картинку можно не указывать)\n"
+        "  --compare-runs <N>  число случайных прогонов для агрегации (def 1)\n"
+        "  --compare-seed <N>  seed RNG для воспроизводимости (def — случайный)\n",
         prog, kDefaultDelegate);
 }
 
 bool parse_args(int argc, char** argv, Args& a) {
-    if (argc < 3) { print_usage(argv[0]); return false; }
+    if (argc < 2) { print_usage(argv[0]); return false; }
     a.model = argv[1];
-    a.image = argv[2];
-    for (int i = 3; i < argc; ++i) {
+    // image — опциональный позиционный аргумент. Если argv[2] начинается
+    // с '-' (или его нет) — считаем, что картинку не передавали и весь
+    // остаток разбираем как флаги. Это нужно, чтобы --compare-random мог
+    // работать без изображения вообще.
+    int start = 2;
+    if (argc >= 3 && argv[2][0] != '-') {
+        a.image = argv[2];
+        start   = 3;
+    }
+    for (int i = start; i < argc; ++i) {
         std::string s = argv[i];
         if      (s == "--delegate"    && i + 1 < argc) a.delegate    = argv[++i];
         else if (s == "--no-delegate")                 a.no_delegate = true;
@@ -657,6 +680,9 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--classes"     && i + 1 < argc) a.classes_path = argv[++i];
         else if (s == "--compare-cpu")                 a.compare_cpu = true;
         else if (s == "--compare"     && i + 1 < argc) a.compare_model = argv[++i];
+        else if (s == "--compare-random")              a.compare_random = true;
+        else if (s == "--compare-runs"&& i + 1 < argc) a.compare_runs   = std::atoi(argv[++i]);
+        else if (s == "--compare-seed"&& i + 1 < argc) a.compare_seed   = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
@@ -682,6 +708,27 @@ bool parse_args(int argc, char** argv, Args& a) {
 int main(int argc, char** argv) {
     Args args;
     if (!parse_args(argc, argv, args)) return 1;
+
+    // Изображение можно опустить только если идёт «чистое» сравнение на
+    // случайных данных. Все остальные режимы (одиночный инференс, --display,
+    // --benchmark, --loop, --yolo, --compare без --compare-random) без
+    // картинки бессмысленны.
+    const bool has_image = !args.image.empty();
+    if (!has_image) {
+        const bool pure_random_compare = args.compare_random
+            && (args.compare_cpu || !args.compare_model.empty());
+        if (!pure_random_compare) {
+            std::fprintf(stderr,
+                "Не указан image. Передайте картинку либо используйте "
+                "--compare-random вместе с --compare/--compare-cpu.\n");
+            print_usage(argv[0]);
+            return 1;
+        }
+    }
+    if (args.compare_runs < 1) {
+        std::fprintf(stderr, "--compare-runs должен быть >= 1.\n");
+        return 1;
+    }
 
     Engine eng;
     if (!eng.load(args.model,
@@ -721,16 +768,20 @@ int main(int argc, char** argv) {
     const int in_w = s[2];
 
     // ---- Загрузка и preprocess изображения ----
+    // В режиме чистого --compare-random изображения нет — пропускаем
+    // загрузку, letterbox, заливку входа и первый инференс.
     Image img;
-    if (!load_image(args.image, img)) return 4;
-    std::printf("Изображение: %s  %dx%d -> letterbox %dx%d\n",
-                args.image.c_str(), img.w, img.h, in_w, in_h);
-
     std::vector<uint8_t> input_rgb;
-    letterbox(img, in_w, in_h, input_rgb);
-
     TfLiteTensor* in_t = eng.interpreter->tensor(in_info[0].index);
-    if (!fill_input(input_rgb, in_info[0], in_t)) return 5;
+    double t0 = 0.0, t1 = 0.0;
+    if (has_image) {
+        if (!load_image(args.image, img)) return 4;
+        std::printf("Изображение: %s  %dx%d -> letterbox %dx%d\n",
+                    args.image.c_str(), img.w, img.h, in_w, in_h);
+
+        letterbox(img, in_w, in_h, input_rgb);
+        if (!fill_input(input_rgb, in_info[0], in_t)) return 5;
+    }
 
     // ---- YOLO: предварительная подготовка ----
     // Детектируем голову один раз (формат [1, C, A] vs [1, A, C]) до
@@ -738,6 +789,11 @@ int main(int argc, char** argv) {
     YoloHead yolo_head;
     YoloPostOptions yolo_opts;
     if (args.yolo) {
+        if (!has_image) {
+            std::fprintf(stderr,
+                "--yolo требует входное изображение.\n");
+            return 6;
+        }
         if (!detect_yolo_head(out_info, args.yolo_output, yolo_head)) return 6;
         yolo_opts.conf_thresh = args.conf;
         yolo_opts.iou_thresh  = args.iou;
@@ -754,15 +810,17 @@ int main(int argc, char** argv) {
     }
 
     // ---- Один прогон ----
-    double t0 = now_ms();
-    if (!eng.invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
-    double t1 = now_ms();
-    std::printf("Инференс: %.3f мс\n", t1 - t0);
+    if (has_image) {
+        t0 = now_ms();
+        if (!eng.invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
+        t1 = now_ms();
+        std::printf("Инференс: %.3f мс\n", t1 - t0);
 
-    // ---- Сводка по выходам ----
-    for (size_t i = 0; i < out_info.size(); ++i) {
-        const TfLiteTensor* t = eng.interpreter->tensor(out_info[i].index);
-        print_output_head(out_info[i], t);
+        // ---- Сводка по выходам ----
+        for (size_t i = 0; i < out_info.size(); ++i) {
+            const TfLiteTensor* t = eng.interpreter->tensor(out_info[i].index);
+            print_output_head(out_info[i], t);
+        }
     }
 
     // ---- Сравнение точности с эталоном ----
@@ -799,73 +857,151 @@ int main(int argc, char** argv) {
                 ref_label);
             return;
         }
-        // Используем то же исходное изображение, но letterbox под входной
-        // размер эталонной модели (он может отличаться от основной).
         const int ref_h = ref_in[0].shape[1];
         const int ref_w = ref_in[0].shape[2];
-        std::vector<uint8_t> ref_rgb;
-        letterbox(img, ref_w, ref_h, ref_rgb);
-        TfLiteTensor* ref_in_t = ref.interpreter->tensor(ref_in[0].index);
-        if (!fill_input(ref_rgb, ref_in[0], ref_in_t)) return;
+        TfLiteTensor* main_in_t = eng.interpreter->tensor(in_info[0].index);
+        TfLiteTensor* ref_in_t  = ref.interpreter->tensor(ref_in[0].index);
 
-        if (!ref.invoke()) {
-            std::fprintf(stderr, "[%s] Invoke упал.\n", ref_label);
-            return;
-        }
-
-        const size_t n = std::min(out_info.size(), ref_out.size());
+        const size_t n_out = std::min(out_info.size(), ref_out.size());
         if (out_info.size() != ref_out.size()) {
             std::fprintf(stderr,
                 "[%s] число выходов различается (%zu vs %zu); "
                 "сравниваю первые %zu по индексу.\n",
-                ref_label, out_info.size(), ref_out.size(), n);
+                ref_label, out_info.size(), ref_out.size(), n_out);
         }
 
-        std::vector<float> a, b;
-        double agg_mae = 0.0, agg_max = 0.0;
-        size_t agg_n = 0;
-        for (size_t i = 0; i < n; ++i) {
-            const TfLiteTensor* ta =
-                eng.interpreter->tensor(out_info[i].index);
-            const TfLiteTensor* tb =
-                ref.interpreter->tensor(ref_out[i].index);
-            if (!dequantize_output(out_info[i], ta, a)) continue;
-            if (!dequantize_output(ref_out[i], tb, b)) continue;
-            const size_t m = std::min(a.size(), b.size());
-            if (m == 0) continue;
-            double sum = 0.0, sse = 0.0, mx = 0.0;
-            for (size_t j = 0; j < m; ++j) {
-                double d = std::fabs((double)a[j] - (double)b[j]);
-                sum += d;
-                sse += d * d;
-                if (d > mx) mx = d;
+        // Аккумуляторы метрик по каждому выходу, агрегированные по всем
+        // прогонам. В режиме одиночного запуска цифры совпадают со старым
+        // поведением; в режиме --compare-random N просто усредняются по
+        // большему числу элементов (все runs × elems_per_run).
+        struct Acc { double sum = 0, sse = 0, maxd = 0; size_t n = 0;
+                     bool   trimmed = false; };
+        std::vector<Acc> acc(n_out);
+
+        // Одна итерация сравнения: оба интерпретатора уже должны быть
+        // заполнены входами. Делает invoke обоих и аккумулирует поэлементные
+        // расхождения. Возвращает false при ошибке инференса (фатально).
+        auto compare_once = [&]() -> bool {
+            if (!eng.invoke()) {
+                std::fprintf(stderr, "[main] Invoke упал.\n");
+                return false;
             }
-            const double mae  = sum / (double)m;
-            const double rmse = std::sqrt(sse / (double)m);
-            const char* note  = (a.size() == b.size())
-                                ? "" : "  (срез по min длине)";
+            if (!ref.invoke()) {
+                std::fprintf(stderr, "[%s] Invoke упал.\n", ref_label);
+                return false;
+            }
+            std::vector<float> a, b;
+            for (size_t i = 0; i < n_out; ++i) {
+                const TfLiteTensor* ta =
+                    eng.interpreter->tensor(out_info[i].index);
+                const TfLiteTensor* tb =
+                    ref.interpreter->tensor(ref_out[i].index);
+                if (!dequantize_output(out_info[i], ta, a)) continue;
+                if (!dequantize_output(ref_out[i], tb, b)) continue;
+                const size_t m = std::min(a.size(), b.size());
+                if (m == 0) continue;
+                if (a.size() != b.size()) acc[i].trimmed = true;
+                for (size_t j = 0; j < m; ++j) {
+                    double d = std::fabs((double)a[j] - (double)b[j]);
+                    acc[i].sum  += d;
+                    acc[i].sse  += d * d;
+                    if (d > acc[i].maxd) acc[i].maxd = d;
+                }
+                acc[i].n += m;
+            }
+            return true;
+        };
+
+        int runs_done = 0;
+        if (args.compare_random) {
+            // ---- Режим случайных входов ----
+            // Каждая итерация: одинаковый случайный RGB-кадр uint8 заливается
+            // в обе сети через тот же fill_input, что и для реальных
+            // изображений (нормализация и квантование берутся из самой
+            // модели — каждая сеть видит свою «честную» подачу).
+            const uint32_t seed = args.compare_seed
+                ? args.compare_seed
+                : (uint32_t)std::random_device{}();
+            std::mt19937 rng(seed);
+            std::uniform_int_distribution<int> dist(0, 255);
+            const bool same_shape = (in_info[0].shape == ref_in[0].shape);
+            std::printf("Случайные входы: runs=%d, seed=%u, "
+                        "main=%dx%d, ref=%dx%d%s\n",
+                        args.compare_runs, seed,
+                        in_w, in_h, ref_w, ref_h,
+                        same_shape ? " (общий буфер)"
+                                   : " (letterbox под ref)");
+            std::vector<uint8_t> rnd((size_t)in_w * in_h * 3);
+            std::vector<uint8_t> ref_rgb;
+            for (int r = 0; r < args.compare_runs && !g_interrupted; ++r) {
+                for (auto& v : rnd) v = (uint8_t)dist(rng);
+                if (!fill_input(rnd, in_info[0], main_in_t)) return;
+                if (same_shape) {
+                    if (!fill_input(rnd, ref_in[0], ref_in_t)) return;
+                } else {
+                    Image tmp; tmp.rgb = rnd; tmp.w = in_w; tmp.h = in_h;
+                    letterbox(tmp, ref_w, ref_h, ref_rgb);
+                    if (!fill_input(ref_rgb, ref_in[0], ref_in_t)) return;
+                }
+                if (!compare_once()) return;
+                ++runs_done;
+            }
+        } else {
+            // ---- Режим одного изображения (старое поведение) ----
+            if (!has_image) {
+                std::fprintf(stderr,
+                    "[%s] изображения нет; используйте --compare-random.\n",
+                    ref_label);
+                return;
+            }
+            // main_in_t уже заполнен исходным letterbox’ом во внешнем коде —
+            // не перезаливаем, чтобы избежать лишней работы. Заливаем только
+            // ref (его размер может отличаться).
+            std::vector<uint8_t> ref_rgb;
+            letterbox(img, ref_w, ref_h, ref_rgb);
+            if (!fill_input(ref_rgb, ref_in[0], ref_in_t)) return;
+            if (!compare_once()) return;
+            ++runs_done;
+        }
+
+        if (runs_done == 0) {
+            std::fprintf(stderr, "[%s] не выполнено ни одного прогона.\n",
+                         ref_label);
+            return;
+        }
+        if (runs_done > 1) {
+            std::printf("Прогонов выполнено: %d (метрики усреднены по всем)\n",
+                        runs_done);
+        }
+
+        double agg_mae_sum = 0.0, agg_max = 0.0;
+        size_t agg_n = 0;
+        for (size_t i = 0; i < n_out; ++i) {
+            if (acc[i].n == 0) continue;
+            const double mae  = acc[i].sum / (double)acc[i].n;
+            const double rmse = std::sqrt(acc[i].sse / (double)acc[i].n);
+            const char* note  = acc[i].trimmed ? "  (срез по min длине)" : "";
             std::printf("  output[%zu] %-32s elems=%zu  "
                         "MAE=%.6f  RMSE=%.6f  max|diff|=%.6f%s\n",
-                        i, out_info[i].name.c_str(), m, mae, rmse, mx, note);
-            // Те же метрики в квантах INT8 — только если основной выход
-            // квантован (у float-моделей scale = 0, делить нельзя).
+                        i, out_info[i].name.c_str(), acc[i].n,
+                        mae, rmse, acc[i].maxd, note);
             const float s_main = out_info[i].scale;
             if (s_main > 0.0f) {
                 std::printf("                                              "
                             "scale=%.6g  ->  MAE=%.2f*q  RMSE=%.2f*q  "
                             "max|diff|=%.2f*q\n",
                             s_main,
-                            mae  / s_main,
-                            rmse / s_main,
-                            mx   / s_main);
+                            mae        / s_main,
+                            rmse       / s_main,
+                            acc[i].maxd/ s_main);
             }
-            agg_mae += sum;
-            if (mx > agg_max) agg_max = mx;
-            agg_n   += m;
+            agg_mae_sum += acc[i].sum;
+            if (acc[i].maxd > agg_max) agg_max = acc[i].maxd;
+            agg_n       += acc[i].n;
         }
         if (agg_n > 0) {
             std::printf("  -> суммарно: MAE=%.6f  max|diff|=%.6f  (%zu элементов)\n",
-                        agg_mae / (double)agg_n, agg_max, agg_n);
+                        agg_mae_sum / (double)agg_n, agg_max, agg_n);
         }
     };
 
@@ -880,6 +1016,10 @@ int main(int argc, char** argv) {
             run_compare(args.model, "CPU");
         }
     }
+
+    // Если изображения нет — дальше идти нечего: и benchmark, и --loop,
+    // и --display, и YOLO постпроцессинг бессмысленны без реального входа.
+    if (!has_image) return 0;
 
     // ---- YOLO: декодирование боксов после первого инференса ----
     // Локальные буферы переиспользуются в видео-цикле ниже, поэтому
