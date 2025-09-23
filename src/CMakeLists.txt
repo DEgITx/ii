@@ -25,6 +25,14 @@ endif()
 
 option(USE_DISPLAY "Сборка с Wayland/EGL/GLES2 backend’ом для отображения" ON)
 
+# V4L2 — Linux-only. На остальных платформах форсим OFF, чтобы ii.cpp
+# слинковался со стабом и make_camera() корректно вернул nullptr.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    option(USE_CAMERA "Сборка с V4L2 backend’ом для захвата с камеры" ON)
+else()
+    option(USE_CAMERA "Сборка с V4L2 backend’ом для захвата с камеры" OFF)
+endif()
+
 # ---- TFLite ---------------------------------------------------------------
 set(TFLITE_ROOT "" CACHE PATH "Корень TFLite (содержит include/ и lib/)")
 
@@ -63,6 +71,14 @@ target_link_libraries(ii PRIVATE ${TFLITE_LIB} dl pthread)
 target_compile_options(ii PRIVATE -Wall -Wextra -O3)
 
 # ---- Backend для отображения ---------------------------------------------
+# ---- Backend для камеры --------------------------------------------------
+if(USE_CAMERA)
+    target_sources(ii PRIVATE camera_v4l2.cpp)
+    target_compile_definitions(ii PRIVATE NPU_HAS_CAMERA=1)
+else()
+    target_sources(ii PRIVATE camera_stub.cpp)
+endif()
+
 if(USE_DISPLAY)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(WAYLAND REQUIRED IMPORTED_TARGET

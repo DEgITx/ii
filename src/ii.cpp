@@ -26,6 +26,9 @@
 //   ./ii yolov8m_int8.tflite img.jpg --display --yolo --conf 0.4 --iou 0.5
 //   ./ii model.tflite --random-input --benchmark --runs 100   # без картинки
 //   ./ii model.tflite --random-input --compare-cpu --random-runs 50
+//   ./ii yolov8m_int8.tflite --camera --display --yolo  # видео-поток
+//   ./ii yolov8m_int8.tflite --camera /dev/video2 --camera-size 1280x720 \
+//       --camera-fps 30 --display --yolo --stats        # с замером FPS
 
 #include <algorithm>
 #include <chrono>
@@ -51,6 +54,7 @@
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "stb_image_resize2.h"
 
+#include "camera.h"
 #include "display.h"
 #include "stats.h"
 #include "yolo.h"
@@ -272,16 +276,25 @@ bool load_image(const std::string& path, Image& out) {
 
 // Ресайз с сохранением пропорций + паддинг до (target_h x target_w).
 // Для YOLO стандарт — заполнение серым (114).
-void letterbox(const Image& src, int target_w, int target_h,
+//
+// Перегрузка с сырым указателем удобна для видео-источников (камера),
+// чтобы не копировать кадр в промежуточный std::vector. Реальная
+// арифметика — здесь, обёртка над Image ниже.
+void letterbox(const uint8_t* src_rgb, int src_w, int src_h,
+               int target_w, int target_h,
                std::vector<uint8_t>& dst, uint8_t pad = 114) {
-    float r = std::min((float)target_w / src.w, (float)target_h / src.h);
-    int new_w = (int)std::round(src.w * r);
-    int new_h = (int)std::round(src.h * r);
+    float r = std::min((float)target_w / src_w, (float)target_h / src_h);
+    int new_w = (int)std::round(src_w * r);
+    int new_h = (int)std::round(src_h * r);
     if (new_w < 1) new_w = 1;
     if (new_h < 1) new_h = 1;
 
-    std::vector<uint8_t> resized((size_t)new_w * new_h * 3);
-    stbir_resize_uint8_linear(src.rgb.data(), src.w, src.h, 0,
+    // resized живёт между вызовами, но переалоцируется только при смене
+    // размера ресайза (например, при ресайзе камеры на лету). Для
+    // стационарного видео-цикла память аллоцируется один раз.
+    static thread_local std::vector<uint8_t> resized;
+    resized.resize((size_t)new_w * new_h * 3);
+    stbir_resize_uint8_linear(src_rgb, src_w, src_h, 0,
                               resized.data(), new_w, new_h, 0,
                               STBIR_RGB);
 
@@ -293,6 +306,11 @@ void letterbox(const Image& src, int target_w, int target_h,
                     &resized[(size_t)y * new_w * 3],
                     (size_t)new_w * 3);
     }
+}
+
+inline void letterbox(const Image& src, int target_w, int target_h,
+                      std::vector<uint8_t>& dst, uint8_t pad = 114) {
+    letterbox(src.rgb.data(), src.w, src.h, target_w, target_h, dst, pad);
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +647,15 @@ struct Args {
     // ---- Проверка точности относительно эталона ----
     bool        compare_cpu = false; // ту же модель прогнать на CPU и сравнить
     std::string compare_model;       // путь к эталонной .tflite (CPU)
+    // ---- Захват с камеры (V4L2) ----
+    // Когда задан --camera, источник кадров — V4L2-устройство, а не
+    // картинка/random. Включает свой собственный цикл инференса (с
+    // --display и без), несовместимый с --benchmark/--loop/--compare*.
+    // image и --random-input при заданной камере игнорируются.
+    std::string camera_device;        // путь к /dev/videoN; "" = камера выкл.
+    int         camera_w   = 640;     // желаемое разрешение, драйвер может
+    int         camera_h   = 480;     // выбрать ближайшее (см. лог Camera)
+    int         camera_fps = 30;      // желаемая частота кадров (best effort)
     // ---- Случайный вход вместо изображения ----
     // Когда включено, входной тензор главной (и при сравнении — эталонной)
     // модели заполняется случайным uint8-буфером. Картинка не нужна —
@@ -679,7 +706,13 @@ void print_usage(const char* prog) {
         "  --random-runs <N>   в --compare* число случайных прогонов для\n"
         "                      агрегации метрик (def 1). Алиас: --compare-runs\n"
         "  --random-seed <N>   seed RNG для воспроизводимости (def — случайный).\n"
-        "                      Алиас: --compare-seed\n",
+        "                      Алиас: --compare-seed\n"
+        "  --camera [dev]      захват с V4L2-камеры (по умолчанию /dev/video0).\n"
+        "                      Включает собственный цикл инференса; image и\n"
+        "                      --random-input игнорируются. Совместимо с\n"
+        "                      --display, --yolo, --stats, --show-input.\n"
+        "  --camera-size WxH   запрашиваемое разрешение камеры (def 640x480)\n"
+        "  --camera-fps <N>    запрашиваемая частота кадров камеры (def 30)\n",
         prog, kDefaultDelegate);
 }
 
@@ -724,6 +757,26 @@ bool parse_args(int argc, char** argv, Args& a) {
                  && i + 1 < argc)                      a.random_runs  = std::atoi(argv[++i]);
         else if ((s == "--random-seed" || s == "--compare-seed")
                  && i + 1 < argc)                      a.random_seed  = (uint32_t)std::strtoul(argv[++i], nullptr, 10);
+        else if (s == "--camera") {
+            // Опциональный позиционный параметр: путь к устройству.
+            // Любая следующая опция (начинается с '-') означает, что
+            // путь не задан и берётся дефолт /dev/video0.
+            a.camera_device = "/dev/video0";
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+                a.camera_device = argv[++i];
+        }
+        else if (s == "--camera-size" && i + 1 < argc) {
+            std::string v = argv[++i];
+            auto x = v.find('x');
+            if (x == std::string::npos) {
+                std::fprintf(stderr,
+                    "--camera-size ожидает WxH, получено: %s\n", v.c_str());
+                return false;
+            }
+            a.camera_w = std::atoi(v.substr(0, x).c_str());
+            a.camera_h = std::atoi(v.substr(x + 1).c_str());
+        }
+        else if (s == "--camera-fps"  && i + 1 < argc) a.camera_fps  = std::atoi(argv[++i]);
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
@@ -750,15 +803,15 @@ int main(int argc, char** argv) {
     Args args;
     if (!parse_args(argc, argv, args)) return 1;
 
-    // Изображение можно опустить, если включён --random-input — тогда
-    // вход (и в одиночном инференсе, и в бенчмарке, и в --loop, и в
-    // --compare*) заполняется случайным буфером. --display и --yolo по-
-    // прежнему требуют реальной картинки.
-    const bool has_image = !args.image.empty();
-    if (!has_image && !args.random_input) {
+    // Источников входа три: картинка, --random-input, --camera. Хотя бы
+    // один обязателен. --camera (если задана) перебивает остальные:
+    // получает контроль над основным циклом и игнорирует image/random.
+    const bool has_camera = !args.camera_device.empty();
+    const bool has_image  = !args.image.empty() && !has_camera;
+    if (!has_image && !args.random_input && !has_camera) {
         std::fprintf(stderr,
-            "Не указан image. Передайте картинку либо используйте "
-            "--random-input.\n");
+            "Не указан источник входа. Передайте image, либо "
+            "--random-input, либо --camera.\n");
         print_usage(argv[0]);
         return 1;
     }
@@ -766,11 +819,16 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "--random-runs должен быть >= 1.\n");
         return 1;
     }
-    if (args.random_input && args.display && !has_image) {
+    if (args.random_input && args.display && !has_image && !has_camera) {
         std::fprintf(stderr,
-            "--display требует входное изображение (нечего показывать "
-            "при --random-input без image).\n");
+            "--display требует источник кадров (image или --camera); "
+            "при чистом --random-input нечего показывать.\n");
         return 1;
+    }
+    if (has_camera && !args.image.empty()) {
+        std::fprintf(stderr,
+            "Внимание: image=%s проигнорирован, активен --camera %s.\n",
+            args.image.c_str(), args.camera_device.c_str());
     }
 
     Engine eng;
@@ -814,6 +872,8 @@ int main(int argc, char** argv) {
 
     // ---- Загрузка и preprocess изображения / генерация случайного входа ----
     // Возможные сценарии:
+    //   * --camera                  — вход формируется в цикле захвата,
+    //                                 здесь только проверяем параметры;
     //   * есть картинка             — letterbox + fill_input;
     //   * --random-input без картинки — генерируем случайный uint8-буфер
     //     по shape входа и заливаем его (один раз; benchmark/loop не
@@ -822,7 +882,19 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> input_rgb;
     TfLiteTensor* in_t = eng.interpreter->tensor(in_info[0].index);
     double t0 = 0.0, t1 = 0.0;
-    if (has_image) {
+    if (has_camera) {
+        // Для камеры ждём первый кадр уже в основном цикле — здесь лишь
+        // проверяем, что вход модели совместим (NHWC [1,H,W,3]).
+        if (!nhwc3) {
+            std::fprintf(stderr,
+                "Для --camera нужен вход NHWC [1,H,W,3], получено %s.\n",
+                shape_to_str(s).c_str());
+            return 4;
+        }
+        std::printf("Камера: устройство=%s, запрошено %dx%d @ %d fps\n",
+                    args.camera_device.c_str(),
+                    args.camera_w, args.camera_h, args.camera_fps);
+    } else if (has_image) {
         if (!load_image(args.image, img)) return 4;
         std::printf("Изображение: %s  %dx%d -> letterbox %dx%d\n",
                     args.image.c_str(), img.w, img.h, in_w, in_h);
@@ -857,9 +929,9 @@ int main(int argc, char** argv) {
     YoloHead yolo_head;
     YoloPostOptions yolo_opts;
     if (args.yolo) {
-        if (!has_image) {
+        if (!has_image && !has_camera) {
             std::fprintf(stderr,
-                "--yolo требует входное изображение.\n");
+                "--yolo требует источник кадров (image или --camera).\n");
             return 6;
         }
         if (!detect_yolo_head(out_info, args.yolo_output, yolo_head)) return 6;
@@ -877,12 +949,140 @@ int main(int argc, char** argv) {
                                          : " (координаты в пикселях)");
     }
 
+    // ---- Видео-цикл с захватом с камеры ----
+    // Самостоятельный путь: открывает V4L2-камеру, опционально окно
+    // Wayland, и крутит «захват -> letterbox -> fill_input -> invoke ->
+    // (YOLO postproc) -> show_rgb». Заменяет собой одиночный инференс,
+    // --benchmark, --loop и --display, поэтому после успешного запуска
+    // сразу возвращается из main.
+    //
+    // Производительность:
+    //   * камера и инференс работают в одном потоке (для типичного
+    //     30 FPS + ~30 мс NPU этого хватает с большим запасом). Если
+    //     понадобится дальнейший разгон — добавьте producer-consumer
+    //     очередь между cam->grab() и eng.invoke();
+    //   * letterbox читает прямо из mmap-буфера камеры (после нашей
+    //     YUYV->RGB конвертации) — лишних копий нет;
+    //   * для дисплея кадр уходит без перевыделения текстуры (см.
+    //     display_wayland.cpp), а боксы пересчитываются по координатам
+    //     текущего кадра камеры.
+    if (has_camera) {
+        if (args.benchmark || args.loop || args.compare_cpu
+            || !args.compare_model.empty() || args.random_input) {
+            std::fprintf(stderr,
+                "Внимание: --benchmark/--loop/--compare*/--random-input "
+                "игнорируются в режиме --camera (используется собственный "
+                "видео-цикл).\n");
+        }
+
+        auto cam = make_camera();
+        if (!cam) {
+            std::fprintf(stderr,
+                "Поддержка камеры не собрана (USE_CAMERA=OFF) или "
+                "недоступна на этой платформе.\n");
+            return 7;
+        }
+        if (!cam->open(args.camera_device,
+                       args.camera_w, args.camera_h, args.camera_fps)) {
+            return 7;
+        }
+        const int cam_w = cam->width();
+        const int cam_h = cam->height();
+
+        std::unique_ptr<Display> disp;
+        if (args.display) {
+            disp = make_display();
+            if (!disp) {
+                std::fprintf(stderr,
+                    "Поддержка дисплея не собрана (USE_DISPLAY=OFF).\n");
+                return 7;
+            }
+            if (!disp->init(args.win_w, args.win_h, "npu", args.vsync))
+                return 7;
+        }
+
+        // Буферы постобработки переиспользуются между кадрами — никаких
+        // аллокаций в стационарном режиме.
+        std::vector<float>      yolo_dequant;
+        std::vector<Detection>  dets;
+        std::vector<DisplayBox> boxes;
+
+        std::signal(SIGINT, on_sigint);
+        FpsCounter fps;
+        std::printf("Камера-цикл запущен. Ctrl+C%s для выхода.\n",
+                    disp ? " или закрытие окна" : "");
+
+        while (!g_interrupted && (!disp || disp->poll())) {
+            const uint8_t* rgb = cam->grab(1000);
+            if (!rgb) {
+                // Таймаут / битый кадр — не считаем фатальным, идём дальше.
+                if (g_interrupted) break;
+                continue;
+            }
+
+            // 1) Препроцессинг прямо из камеры (без копий в Image::rgb).
+            letterbox(rgb, cam_w, cam_h, in_w, in_h, input_rgb);
+            if (!fill_input(input_rgb, in_info[0], in_t)) break;
+
+            // 2) Инференс.
+            if (!eng.invoke()) {
+                std::fprintf(stderr, "Invoke упал.\n");
+                break;
+            }
+            fps.tick();
+
+            // 3) YOLO постобработка для текущего кадра.
+            if (args.yolo) {
+                const TfLiteTensor* t = eng.interpreter->tensor(
+                    out_info[yolo_head.output_index].index);
+                if (dequantize_output(out_info[yolo_head.output_index], t,
+                                      yolo_dequant)) {
+                    dets = decode_yolov8(
+                        yolo_dequant.data(),
+                        yolo_head.channels, yolo_head.num_anchors,
+                        yolo_head.channels_first,
+                        in_w, in_h, yolo_opts);
+                    // Если показываем оригинал — отмаппим боксы из
+                    // letterbox-пространства в пиксели кадра камеры.
+                    if (!args.show_input)
+                        scale_to_original(dets, in_w, in_h, cam_w, cam_h);
+                    boxes = detections_to_boxes(dets);
+                    if (disp) disp->set_boxes(boxes);
+                }
+            }
+
+            // 4) Статистика (оверлей + периодический лог).
+            std::string overlay;
+            if (args.stats) {
+                overlay = fps.format();
+                if (disp) disp->set_overlay_text(overlay.c_str());
+                if (fps.log_due(args.log_interval_ms)) {
+                    std::printf("[%s] %s\n", label_main, overlay.c_str());
+                    std::fflush(stdout);
+                }
+            }
+
+            // 5) Отрисовка. show_rgb ниже — это glTexSubImage2D, без
+            //    перевыделения текстуры, пока размер кадра не меняется.
+            if (disp) {
+                const uint8_t* frame = args.show_input ? input_rgb.data()
+                                                       : rgb;
+                const int fw = args.show_input ? in_w : cam_w;
+                const int fh = args.show_input ? in_h : cam_h;
+                if (!disp->show_rgb(frame, fw, fh)) break;
+            }
+        }
+        std::printf("\nОстановлено.\n");
+        return 0;
+    }
+
     // ---- Один прогон ----
     // Делаем как только в input_t уже что-то залито (картинка или random).
     // В чистом --compare-random режиме вход для сравнения зальётся внутри
-    // run_compare, поэтому одиночный прогон тут пропускаем.
-    const bool do_single_invoke = has_image
-        || (args.random_input && !args.compare_cpu && args.compare_model.empty());
+    // run_compare, поэтому одиночный прогон тут пропускаем. С камерой
+    // одиночного прогона нет вовсе — кадры идут в собственном цикле ниже.
+    const bool do_single_invoke = !has_camera && (has_image
+        || (args.random_input && !args.compare_cpu && args.compare_model.empty()));
     if (do_single_invoke) {
         t0 = now_ms();
         if (!eng.invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
