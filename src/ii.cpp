@@ -617,6 +617,57 @@ std::vector<DisplayBox> detections_to_boxes(
 }
 
 // ---------------------------------------------------------------------------
+// Источник кадров для видео-цикла.
+//
+// Один интерфейс — две реализации (камера / статический буфер) — один
+// общий цикл инференса. Источник отвечает на два вопроса:
+//   1) какой буфер RGB подавать на этой итерации (вместе с его исходными
+//      размерами, нужными YOLO для обратного letterbox-маппинга);
+//   2) надо ли его препроцессить + заливать в тензор. Для камеры — да
+//      на каждом кадре; для статической картинки — нет (вход модели уже
+//      заполнен один раз до входа в цикл).
+//
+// Возврат nullptr из next() означает «пропусти эту итерацию» (например,
+// таймаут камеры). Цикл при этом проверит флаг прерывания и пойдёт
+// ждать следующий кадр.
+// ---------------------------------------------------------------------------
+struct FrameSource {
+    virtual ~FrameSource() = default;
+    virtual const uint8_t* next(int& out_w, int& out_h,
+                                bool& out_needs_preprocess) = 0;
+};
+
+class CameraFrameSource : public FrameSource {
+public:
+    CameraFrameSource(Camera& cam, int timeout_ms = 1000)
+        : cam_(cam), timeout_ms_(timeout_ms) {}
+    const uint8_t* next(int& w, int& h, bool& needs_preprocess) override {
+        w = cam_.width();
+        h = cam_.height();
+        needs_preprocess = true;       // живой источник: новый кадр каждый раз
+        return cam_.grab(timeout_ms_);
+    }
+private:
+    Camera& cam_;
+    int     timeout_ms_;
+};
+
+class StaticFrameSource : public FrameSource {
+public:
+    StaticFrameSource(const uint8_t* rgb, int w, int h)
+        : rgb_(rgb), w_(w), h_(h) {}
+    const uint8_t* next(int& w, int& h, bool& needs_preprocess) override {
+        w = w_;
+        h = h_;
+        needs_preprocess = false;      // вход модели уже заполнен снаружи
+        return rgb_;
+    }
+private:
+    const uint8_t* rgb_;
+    int            w_, h_;
+};
+
+// ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
 struct Args {
@@ -949,29 +1000,127 @@ int main(int argc, char** argv) {
                                          : " (координаты в пикселях)");
     }
 
-    // ---- Видео-цикл с захватом с камеры ----
-    // Самостоятельный путь: открывает V4L2-камеру, опционально окно
-    // Wayland, и крутит «захват -> letterbox -> fill_input -> invoke ->
-    // (YOLO postproc) -> show_rgb». Заменяет собой одиночный инференс,
-    // --benchmark, --loop и --display, поэтому после успешного запуска
-    // сразу возвращается из main.
+    // ---- Общие буферы постобработки YOLO ----
+    // Один раз выделили — переиспользуется во всех путях (одиночный
+    // инференс, видео-цикл, камера). Никаких per-frame аллокаций.
+    std::vector<float>      yolo_dequant;
+    std::vector<Detection>  dets;
+    std::vector<DisplayBox> boxes;
+
+    // Декодирование выхода YOLO для последнего инференса. Вызывается
+    // из run_video_loop и из одиночного display-кадра. orig_w/orig_h —
+    // размеры исходного кадра (для обратного letterbox-маппинга).
+    auto run_yolo_postproc = [&](int orig_w, int orig_h) {
+        if (!args.yolo) return;
+        const TfLiteTensor* t = eng.interpreter->tensor(
+            out_info[yolo_head.output_index].index);
+        if (!dequantize_output(out_info[yolo_head.output_index], t,
+                               yolo_dequant)) return;
+        dets = decode_yolov8(yolo_dequant.data(),
+                             yolo_head.channels, yolo_head.num_anchors,
+                             yolo_head.channels_first,
+                             in_w, in_h, yolo_opts);
+        if (!args.show_input)
+            scale_to_original(dets, in_w, in_h, orig_w, orig_h);
+        boxes = detections_to_boxes(dets);
+    };
+
+    // ---- Унифицированный видео-цикл ----
+    // Один цикл на все три сценария:
+    //   * --camera [+ --display]       — src=CameraFrameSource;
+    //   * image + --display + --loop   — src=StaticFrameSource;
+    //   * --loop без --display и без камеры — src=nullptr (просто
+    //     гоняем invoke, чтобы померить throughput NPU).
+    // disp=nullptr, когда окно не нужно.
     //
-    // Производительность:
-    //   * камера и инференс работают в одном потоке (для типичного
-    //     30 FPS + ~30 мс NPU этого хватает с большим запасом). Если
-    //     понадобится дальнейший разгон — добавьте producer-consumer
-    //     очередь между cam->grab() и eng.invoke();
-    //   * letterbox читает прямо из mmap-буфера камеры (после нашей
-    //     YUYV->RGB конвертации) — лишних копий нет;
-    //   * для дисплея кадр уходит без перевыделения текстуры (см.
-    //     display_wayland.cpp), а боксы пересчитываются по координатам
-    //     текущего кадра камеры.
+    // Шаги одной итерации (всегда одинаковы, отсутствующие просто
+    // пропускаются):
+    //   1. poll() окна          — выйти, если пользователь закрыл;
+    //   2. next() источника     — получить кадр и его размеры;
+    //   3. (опц.) препроцесс    — letterbox + fill_input для живого
+    //                              источника; для статического вход
+    //                              уже заполнен снаружи;
+    //   4. invoke               — инференс;
+    //   5. fps.tick();
+    //   6. (опц.) YOLO postproc — декодирование боксов в координатах
+    //                              текущего кадра;
+    //   7. (опц.) stats         — оверлей FPS на окно + периодический
+    //                              лог в stdout;
+    //   8. (опц.) show_rgb      — отрисовка кадра в окне (через
+    //                              glTexSubImage2D, без realloc).
+    auto run_video_loop = [&](FrameSource* src, Display* disp) -> int {
+        std::signal(SIGINT, on_sigint);
+        FpsCounter fps;
+        std::printf("Видео-цикл запущен. Ctrl+C%s для выхода.\n",
+                    disp ? " или закрытие окна" : "");
+
+        // orig_w/orig_h — размеры «исходного» кадра. Если источника
+        // нет, для YOLO принимаем их равными размерам входа модели —
+        // scale_to_original в этом случае становится тождественным.
+        int orig_w = in_w, orig_h = in_h;
+
+        while (!g_interrupted && (!disp || disp->poll())) {
+            const uint8_t* frame = nullptr;
+            if (src) {
+                bool needs_preprocess = false;
+                int  fw = 0, fh = 0;
+                frame = src->next(fw, fh, needs_preprocess);
+                if (!frame) {
+                    // Источник не отдал кадр (таймаут камеры / skip) —
+                    // даём циклу шанс заметить SIGINT и идём дальше.
+                    if (g_interrupted) break;
+                    continue;
+                }
+                orig_w = fw;
+                orig_h = fh;
+                if (needs_preprocess) {
+                    letterbox(frame, fw, fh, in_w, in_h, input_rgb);
+                    if (!fill_input(input_rgb, in_info[0], in_t)) break;
+                }
+            }
+
+            if (!eng.invoke()) {
+                std::fprintf(stderr, "Invoke упал.\n");
+                break;
+            }
+            fps.tick();
+
+            if (args.yolo) {
+                run_yolo_postproc(orig_w, orig_h);
+                if (disp) disp->set_boxes(boxes);
+            }
+
+            if (args.stats) {
+                std::string overlay = fps.format();
+                if (disp) disp->set_overlay_text(overlay.c_str());
+                if (fps.log_due(args.log_interval_ms)) {
+                    std::printf("[%s] %s\n", label_main, overlay.c_str());
+                    std::fflush(stdout);
+                }
+            }
+
+            if (disp && frame) {
+                const uint8_t* show = args.show_input ? input_rgb.data()
+                                                      : frame;
+                const int sw = args.show_input ? in_w : orig_w;
+                const int sh = args.show_input ? in_h : orig_h;
+                if (!disp->show_rgb(show, sw, sh)) break;
+            }
+        }
+        std::printf("\nОстановлено.\n");
+        return 0;
+    };
+
+    // ---- Камера ----
+    // Открывает V4L2-камеру и (опционально) окно, после чего отдаёт
+    // управление общему run_video_loop. Заменяет собой одиночный
+    // инференс / --benchmark / --loop / --compare* при наличии --camera.
     if (has_camera) {
         if (args.benchmark || args.loop || args.compare_cpu
             || !args.compare_model.empty() || args.random_input) {
             std::fprintf(stderr,
                 "Внимание: --benchmark/--loop/--compare*/--random-input "
-                "игнорируются в режиме --camera (используется собственный "
+                "игнорируются в режиме --camera (используется общий "
                 "видео-цикл).\n");
         }
 
@@ -986,8 +1135,6 @@ int main(int argc, char** argv) {
                        args.camera_w, args.camera_h, args.camera_fps)) {
             return 7;
         }
-        const int cam_w = cam->width();
-        const int cam_h = cam->height();
 
         std::unique_ptr<Display> disp;
         if (args.display) {
@@ -1001,79 +1148,8 @@ int main(int argc, char** argv) {
                 return 7;
         }
 
-        // Буферы постобработки переиспользуются между кадрами — никаких
-        // аллокаций в стационарном режиме.
-        std::vector<float>      yolo_dequant;
-        std::vector<Detection>  dets;
-        std::vector<DisplayBox> boxes;
-
-        std::signal(SIGINT, on_sigint);
-        FpsCounter fps;
-        std::printf("Камера-цикл запущен. Ctrl+C%s для выхода.\n",
-                    disp ? " или закрытие окна" : "");
-
-        while (!g_interrupted && (!disp || disp->poll())) {
-            const uint8_t* rgb = cam->grab(1000);
-            if (!rgb) {
-                // Таймаут / битый кадр — не считаем фатальным, идём дальше.
-                if (g_interrupted) break;
-                continue;
-            }
-
-            // 1) Препроцессинг прямо из камеры (без копий в Image::rgb).
-            letterbox(rgb, cam_w, cam_h, in_w, in_h, input_rgb);
-            if (!fill_input(input_rgb, in_info[0], in_t)) break;
-
-            // 2) Инференс.
-            if (!eng.invoke()) {
-                std::fprintf(stderr, "Invoke упал.\n");
-                break;
-            }
-            fps.tick();
-
-            // 3) YOLO постобработка для текущего кадра.
-            if (args.yolo) {
-                const TfLiteTensor* t = eng.interpreter->tensor(
-                    out_info[yolo_head.output_index].index);
-                if (dequantize_output(out_info[yolo_head.output_index], t,
-                                      yolo_dequant)) {
-                    dets = decode_yolov8(
-                        yolo_dequant.data(),
-                        yolo_head.channels, yolo_head.num_anchors,
-                        yolo_head.channels_first,
-                        in_w, in_h, yolo_opts);
-                    // Если показываем оригинал — отмаппим боксы из
-                    // letterbox-пространства в пиксели кадра камеры.
-                    if (!args.show_input)
-                        scale_to_original(dets, in_w, in_h, cam_w, cam_h);
-                    boxes = detections_to_boxes(dets);
-                    if (disp) disp->set_boxes(boxes);
-                }
-            }
-
-            // 4) Статистика (оверлей + периодический лог).
-            std::string overlay;
-            if (args.stats) {
-                overlay = fps.format();
-                if (disp) disp->set_overlay_text(overlay.c_str());
-                if (fps.log_due(args.log_interval_ms)) {
-                    std::printf("[%s] %s\n", label_main, overlay.c_str());
-                    std::fflush(stdout);
-                }
-            }
-
-            // 5) Отрисовка. show_rgb ниже — это glTexSubImage2D, без
-            //    перевыделения текстуры, пока размер кадра не меняется.
-            if (disp) {
-                const uint8_t* frame = args.show_input ? input_rgb.data()
-                                                       : rgb;
-                const int fw = args.show_input ? in_w : cam_w;
-                const int fh = args.show_input ? in_h : cam_h;
-                if (!disp->show_rgb(frame, fw, fh)) break;
-            }
-        }
-        std::printf("\nОстановлено.\n");
-        return 0;
+        CameraFrameSource src(*cam, /*timeout_ms=*/1000);
+        return run_video_loop(&src, disp.get());
     }
 
     // ---- Один прогон ----
@@ -1344,29 +1420,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ---- YOLO: декодирование боксов после первого инференса ----
-    // Локальные буферы переиспользуются в видео-цикле ниже, поэтому
-    // объявляем их здесь (за условием на yolo, чтобы не платить за
-    // ненужные аллокации, когда YOLO выключен).
-    std::vector<float> yolo_dequant;
-    std::vector<Detection> dets;
-    std::vector<DisplayBox> boxes;
-    auto run_yolo_postproc = [&]() {
-        const TfLiteTensor* t =
-            eng.interpreter->tensor(out_info[yolo_head.output_index].index);
-        if (!dequantize_output(out_info[yolo_head.output_index], t,
-                               yolo_dequant)) return;
-        dets = decode_yolov8(yolo_dequant.data(),
-                             yolo_head.channels, yolo_head.num_anchors,
-                             yolo_head.channels_first,
-                             in_w, in_h, yolo_opts);
-        // Координаты возвращаются в letterbox-пространстве. Если на экран
-        // идёт оригинал — отмаппим назад в его пиксели, иначе оставим как есть.
-        if (!args.show_input)
-            scale_to_original(dets, in_w, in_h, img.w, img.h);
-        boxes = detections_to_boxes(dets);
-    };
-
     // ---- Бенчмарк ----
     if (args.benchmark) {
         for (int i = 0; i < args.warmup; ++i) eng.invoke();
@@ -1378,22 +1431,11 @@ int main(int argc, char** argv) {
                     args.runs, avg, 1000.0 / avg);
     }
 
-    // ---- Видео-цикл без окна (только инференс + статистика) ----
-    // Полезно, чтобы померить FPS NPU без накладных расходов на отрисовку.
+    // ---- Видео-цикл без окна ----
+    // Источника кадров нет — общий цикл просто крутит invoke + FPS.
+    // Полезно, чтобы померить чистую пропускную способность NPU.
     if (args.loop && !args.display) {
-        std::signal(SIGINT, on_sigint);
-        FpsCounter fps;
-        std::printf("Цикл инференса запущен. Ctrl+C для выхода.\n");
-        while (!g_interrupted) {
-            eng.invoke();
-            fps.tick();
-            if (args.stats && fps.log_due(args.log_interval_ms)) {
-                std::printf("[%s] %s\n", label_main, fps.format().c_str());
-                std::fflush(stdout);
-            }
-        }
-        std::printf("\nОстановлено.\n");
-        return 0;
+        return run_video_loop(/*src=*/nullptr, /*disp=*/nullptr);
     }
 
     // ---- Графический вывод (Wayland/EGL) ----
@@ -1408,45 +1450,19 @@ int main(int argc, char** argv) {
         }
         if (!disp->init(args.win_w, args.win_h, "npu", args.vsync)) return 7;
 
+        // Что показывать: оригинал картинки или препроцесс.
         const uint8_t* frame = args.show_input ? input_rgb.data()
                                                : img.rgb.data();
         const int fw = args.show_input ? in_w : img.w;
         const int fh = args.show_input ? in_h : img.h;
 
-        // ---- Видео-цикл с окном ----
-        // Каждая итерация: инференс -> show_rgb -> tick FPS -> опц. лог.
-        // Для реального видео замените блок eng.invoke() на захват кадра
-        // + препроцессинг + invoke; show_rgb() оставьте — текстура будет
-        // обновляться через glTexSubImage2D (без перевыделения).
+        // ---- Цикл с окном ----
+        // Источник статический: вход модели уже залит в image-блоке
+        // выше, поэтому StaticFrameSource просит цикл ничего не
+        // препроцессить — только invoke + show_rgb на каждой итерации.
         if (args.loop) {
-            std::signal(SIGINT, on_sigint);
-            FpsCounter fps;
-            std::printf("Видео-цикл запущен. Ctrl+C или закрытие окна = выход.\n");
-            while (!g_interrupted && disp->poll()) {
-                eng.invoke();
-                fps.tick();
-
-                std::string overlay;
-                if (args.stats) {
-                    overlay = fps.format();
-                    disp->set_overlay_text(overlay.c_str());
-                    if (fps.log_due(args.log_interval_ms)) {
-                        std::printf("[%s] %s\n", label_main, overlay.c_str());
-                        std::fflush(stdout);
-                    }
-                }
-                // YOLO постобработка на каждом кадре. Сам кадр (frame)
-                // в --loop у нас статический, но детекции пересчитываем —
-                // когда сюда добавите захват видео, координаты будут
-                // обновляться вместе с входом без правок дисплея.
-                if (args.yolo) {
-                    run_yolo_postproc();
-                    disp->set_boxes(boxes);
-                }
-                if (!disp->show_rgb(frame, fw, fh)) break;
-            }
-            std::printf("\nОстановлено.\n");
-            return 0;
+            StaticFrameSource src(frame, fw, fh);
+            return run_video_loop(&src, disp.get());
         }
 
         // ---- Одиночный кадр ----
@@ -1455,7 +1471,10 @@ int main(int argc, char** argv) {
             std::snprintf(buf, sizeof(buf), "inference %.2f ms", t1 - t0);
             disp->set_overlay_text(buf);
         }
-        if (args.yolo) disp->set_boxes(boxes);
+        if (args.yolo) {
+            run_yolo_postproc(img.w, img.h);
+            disp->set_boxes(boxes);
+        }
         if (!disp->show_rgb(frame, fw, fh)) return 0;
         std::printf("Окно открыто. Закройте его, чтобы выйти.\n");
         // Один статический кадр: блокируемся на событиях Wayland до закрытия.
