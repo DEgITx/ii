@@ -55,6 +55,7 @@
 #include "stb_image_resize2.h"
 
 #include "camera.h"
+#include "csv_export.h"
 #include "display.h"
 #include "stats.h"
 #include "yolo.h"
@@ -720,6 +721,15 @@ struct Args {
     bool        random_input = false;
     int         random_runs  = 1;     // используется в режиме сравнения
     uint32_t    random_seed  = 0;     // 0 = взять из std::random_device
+    // ---- Экспорт замеров в CSV ----
+    // Префикс пути для CSV-файлов с замерами. Если задан, в зависимости
+    // от активных режимов создаются:
+    //   <prefix>.bench.csv    — пер-итерационная латентность бенчмарка;
+    //   <prefix>.fps.csv      — FPS-семплы видео-цикла (раз в log-interval);
+    //   <prefix>.compare.csv  — пер-выходные метрики режима compare.
+    // Каждый файл само-документируем: в шапке `# key=value` лежат
+    // модель, делегат, threads, runs, timestamp и т.п.
+    std::string export_prefix;
 };
 
 void print_usage(const char* prog) {
@@ -763,7 +773,12 @@ void print_usage(const char* prog) {
         "                      --random-input игнорируются. Совместимо с\n"
         "                      --display, --yolo, --stats, --show-input.\n"
         "  --camera-size WxH   запрашиваемое разрешение камеры (def 640x480)\n"
-        "  --camera-fps <N>    запрашиваемая частота кадров камеры (def 30)\n",
+        "  --camera-fps <N>    запрашиваемая частота кадров камеры (def 30)\n"
+        "  --export <prefix>   писать замеры в CSV: <prefix>.bench.csv (для\n"
+        "                      --benchmark), <prefix>.fps.csv (для видео-\n"
+        "                      цикла со --stats), <prefix>.compare.csv (для\n"
+        "                      --compare/--compare-cpu). Пути с / создают\n"
+        "                      нужные директории заранее: --export results/run01\n",
         prog, kDefaultDelegate);
 }
 
@@ -828,6 +843,7 @@ bool parse_args(int argc, char** argv, Args& a) {
             a.camera_h = std::atoi(v.substr(x + 1).c_str());
         }
         else if (s == "--camera-fps"  && i + 1 < argc) a.camera_fps  = std::atoi(argv[++i]);
+        else if (s == "--export"      && i + 1 < argc) a.export_prefix = argv[++i];
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
@@ -908,6 +924,33 @@ int main(int argc, char** argv) {
             in_info.size());
         return 3;
     }
+
+    // ---- Экспорт замеров в CSV ----
+    // Префикс из --export. Конкретные файлы открываются лениво в
+    // соответствующих режимах (бенчмарк / видео-цикл / compare),
+    // чтобы не плодить пустые файлы для неактивных путей. Шапка
+    // самодокументируема: модель, делегат, threads, shape входа,
+    // timestamp — этого хватает, чтобы потом склеивать прогоны
+    // разных моделей в одну таблицу.
+    auto open_export = [&](CsvExport& e, const char* suffix,
+                           const char* kind) -> bool {
+        if (args.export_prefix.empty()) return false;
+        std::string path = args.export_prefix + "." + suffix + ".csv";
+        if (!e.open(path)) return false;
+        e.meta("kind",         "%s", kind);
+        e.meta("started",      "%s", iso_timestamp_now().c_str());
+        e.meta("model",        "%s", csv_escape(args.model).c_str());
+        e.meta("delegate",     "%s", args.no_delegate ? "cpu" : "npu");
+        if (!args.no_delegate)
+            e.meta("delegate_path", "%s",
+                   csv_escape(args.delegate).c_str());
+        e.meta("threads",      "%d", args.threads);
+        e.meta("input_shape",  "%s",
+               shape_to_str(in_info[0].shape).c_str());
+        e.meta("input_dtype",  "%s", dtype_name(in_info[0].dtype));
+        std::printf("CSV экспорт (%s): %s\n", kind, e.path().c_str());
+        return true;
+    };
     // NHWC [1,H,W,3] — типовой формат для путей с изображением. Для чисто
     // рандомного --compare-random разрешаем любой shape (например [1,9,9,1]).
     const auto& s = in_info[0].shape;
@@ -1054,6 +1097,26 @@ int main(int argc, char** argv) {
         std::printf("Видео-цикл запущен. Ctrl+C%s для выхода.\n",
                     disp ? " или закрытие окна" : "");
 
+        // CSV-экспорт FPS-семплов. Открывается только при --export.
+        // Пишем по одной строке за каждый интервал log-interval_ms,
+        // независимо от --stats (stats влияет только на оверлей и
+        // лог в stdout). Колонки — те же агрегаты, что и в format(),
+        // плюс счётчик кадров для удобной перепроверки.
+        CsvExport fps_csv;
+        const bool dump_fps = open_export(fps_csv, "fps", "video_loop");
+        if (dump_fps) {
+            fps_csv.meta("log_interval_ms", "%d", args.log_interval_ms);
+            fps_csv.meta("vsync",           "%s",
+                         args.vsync ? "on" : "off");
+            fps_csv.meta("source",          "%s",
+                         src ? (has_camera ? "camera" : "static")
+                             : "none");
+            fps_csv.header("t_ms,frame,fps,dt_avg_ms,dt_min_ms,"
+                           "dt_max_ms,jitter_ms");
+        }
+        const double loop_t0 = now_ms();
+        std::size_t  frame_n = 0;
+
         // orig_w/orig_h — размеры «исходного» кадра. Если источника
         // нет, для YOLO принимаем их равными размерам входа модели —
         // scale_to_original в этом случае становится тождественным.
@@ -1084,19 +1147,33 @@ int main(int argc, char** argv) {
                 break;
             }
             fps.tick();
+            ++frame_n;
 
             if (args.yolo) {
                 run_yolo_postproc(orig_w, orig_h);
                 if (disp) disp->set_boxes(boxes);
             }
 
+            // log_due() надо звать всегда, когда есть хоть один потребитель
+            // периодического тика (stdout-лог под --stats или CSV-экспорт),
+            // иначе таймер просто не сработает.
+            const bool want_periodic = args.stats || dump_fps;
+            const bool periodic = want_periodic
+                && fps.log_due(args.log_interval_ms);
             if (args.stats) {
                 std::string overlay = fps.format();
                 if (disp) disp->set_overlay_text(overlay.c_str());
-                if (fps.log_due(args.log_interval_ms)) {
+                if (periodic) {
                     std::printf("[%s] %s\n", label_main, overlay.c_str());
                     std::fflush(stdout);
                 }
+            }
+            if (dump_fps && periodic && !fps.empty()) {
+                fps_csv.writef("%.3f,%zu,%.3f,%.4f,%.4f,%.4f,%.4f",
+                               now_ms() - loop_t0, frame_n,
+                               fps.fps(), fps.avg_ms(),
+                               fps.min_ms(), fps.max_ms(),
+                               fps.jitter_ms());
             }
 
             if (disp && frame) {
@@ -1107,6 +1184,7 @@ int main(int argc, char** argv) {
                 if (!disp->show_rgb(show, sw, sh)) break;
             }
         }
+        if (dump_fps) fps_csv.flush();
         std::printf("\nОстановлено.\n");
         return 0;
     };
@@ -1185,6 +1263,22 @@ int main(int argc, char** argv) {
     // шкалу: 1 квант = минимально различимое значение этой модели,
     // т.е. предел разрешения INT8. MAE < 1·q считается идеальным
     // совпадением (лучше уже не передать восемью битами).
+    // CSV-экспорт результатов сравнения. Один файл на оба возможных
+    // вызова (--compare и --compare-cpu) — различаем их по колонке `ref`.
+    // Открываем заранее, чтобы run_compare мог свободно писать.
+    CsvExport compare_csv;
+    const bool will_compare = !args.compare_model.empty() || args.compare_cpu;
+    const bool dump_compare = will_compare
+        && open_export(compare_csv, "compare", "compare");
+    if (dump_compare) {
+        compare_csv.meta("random_input", "%s",
+                         args.random_input ? "1" : "0");
+        compare_csv.meta("random_runs",  "%d", args.random_runs);
+        compare_csv.header(
+            "ref,run,output_idx,output_name,elems,"
+            "mae,rmse,max_abs_diff,scale,mae_q,rmse_q,maxd_q,trimmed");
+    }
+
     auto run_compare = [&](const std::string& ref_model_path,
                            const char* ref_label) {
         std::printf("\n=== Сравнение %s vs %s (%s) ===\n",
@@ -1240,7 +1334,9 @@ int main(int argc, char** argv) {
         // Одна итерация сравнения: оба интерпретатора уже должны быть
         // заполнены входами. Делает invoke обоих и аккумулирует поэлементные
         // расхождения. Возвращает false при ошибке инференса (фатально).
-        auto compare_once = [&]() -> bool {
+        // run_idx используется только для CSV-экспорта (per-run строки),
+        // на агрегатную статистику не влияет.
+        auto compare_once = [&](int run_idx) -> bool {
             if (!eng.invoke()) {
                 std::fprintf(stderr, "[main] Invoke упал.\n");
                 return false;
@@ -1259,14 +1355,40 @@ int main(int argc, char** argv) {
                 if (!dequantize_output(ref_out[i], tb, b)) continue;
                 const size_t m = std::min(a.size(), b.size());
                 if (m == 0) continue;
-                if (a.size() != b.size()) acc[i].trimmed = true;
+                const bool trimmed_now = (a.size() != b.size());
+                if (trimmed_now) acc[i].trimmed = true;
+                // Локальные аккумуляторы для CSV-строки этой итерации.
+                // Глобальный acc[i] обновляем тут же — двойной проход
+                // по данным был бы лишним.
+                double r_sum = 0.0, r_sse = 0.0, r_max = 0.0;
                 for (size_t j = 0; j < m; ++j) {
                     double d = std::fabs((double)a[j] - (double)b[j]);
-                    acc[i].sum  += d;
-                    acc[i].sse  += d * d;
-                    if (d > acc[i].maxd) acc[i].maxd = d;
+                    r_sum += d;
+                    r_sse += d * d;
+                    if (d > r_max) r_max = d;
                 }
-                acc[i].n += m;
+                acc[i].sum  += r_sum;
+                acc[i].sse  += r_sse;
+                if (r_max > acc[i].maxd) acc[i].maxd = r_max;
+                acc[i].n    += m;
+
+                if (dump_compare) {
+                    const double mae  = r_sum / (double)m;
+                    const double rmse = std::sqrt(r_sse / (double)m);
+                    const float  s    = out_info[i].scale;
+                    const double inv_s = (s > 0.0f)
+                        ? 1.0 / (double)s : 0.0;
+                    compare_csv.writef(
+                        "%s,%d,%zu,%s,%zu,"
+                        "%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%d",
+                        ref_label, run_idx, i,
+                        csv_escape(out_info[i].name).c_str(), m,
+                        mae, rmse, r_max, (double)s,
+                        mae  * inv_s,
+                        rmse * inv_s,
+                        r_max * inv_s,
+                        trimmed_now ? 1 : 0);
+                }
             }
             return true;
         };
@@ -1330,7 +1452,7 @@ int main(int argc, char** argv) {
                     for (auto& v : rnd_ref) v = (uint8_t)dist(rng);
                     if (!fill_input(rnd_ref, ref_in[0], ref_in_t)) return;
                 }
-                if (!compare_once()) return;
+                if (!compare_once(r)) return;
                 ++runs_done;
             }
         } else {
@@ -1347,7 +1469,7 @@ int main(int argc, char** argv) {
             std::vector<uint8_t> ref_rgb;
             letterbox(img, ref_w, ref_h, ref_rgb);
             if (!fill_input(ref_rgb, ref_in[0], ref_in_t)) return;
-            if (!compare_once()) return;
+            if (!compare_once(0)) return;
             ++runs_done;
         }
 
@@ -1390,6 +1512,7 @@ int main(int argc, char** argv) {
             std::printf("  -> суммарно: MAE=%.6f  max|diff|=%.6f  (%zu элементов)\n",
                         agg_mae_sum / (double)agg_n, agg_max, agg_n);
         }
+        if (dump_compare) compare_csv.flush();
     };
 
     if (!args.compare_model.empty()) {
@@ -1421,14 +1544,46 @@ int main(int argc, char** argv) {
     }
 
     // ---- Бенчмарк ----
+    // Без --export меряем только агрегат (один вызов now_ms() на N
+    // итераций — минимум накладных). С --export таймим каждую
+    // итерацию отдельно, чтобы получить распределение латентности
+    // (для гистограмм / квантилей p50/p95/p99 / поиска выбросов).
+    // Накладные ~50–100 нс на now_ms() ничтожны на фоне инференса.
     if (args.benchmark) {
         for (int i = 0; i < args.warmup; ++i) eng.invoke();
-        double s0 = now_ms();
-        for (int i = 0; i < args.runs; ++i) eng.invoke();
-        double s1 = now_ms();
-        double avg = (s1 - s0) / args.runs;
-        std::printf("Бенчмарк: %d итераций, среднее %.3f мс, %.1f инф/с\n",
-                    args.runs, avg, 1000.0 / avg);
+
+        CsvExport bench_csv;
+        const bool dump_bench = open_export(bench_csv, "bench", "benchmark");
+        if (dump_bench) {
+            bench_csv.meta("warmup", "%d", args.warmup);
+            bench_csv.meta("runs",   "%d", args.runs);
+            bench_csv.header("run,ms");
+        }
+
+        double sum = 0.0, mn = 1e18, mx = 0.0;
+        if (dump_bench) {
+            for (int i = 0; i < args.runs; ++i) {
+                double t0b = now_ms();
+                eng.invoke();
+                double dt = now_ms() - t0b;
+                sum += dt;
+                if (dt < mn) mn = dt;
+                if (dt > mx) mx = dt;
+                bench_csv.writef("%d,%.6f", i, dt);
+            }
+            bench_csv.flush();
+            double avg = sum / args.runs;
+            std::printf("Бенчмарк: %d итераций, среднее %.3f мс "
+                        "(min %.3f, max %.3f), %.1f инф/с\n",
+                        args.runs, avg, mn, mx, 1000.0 / avg);
+        } else {
+            double s0 = now_ms();
+            for (int i = 0; i < args.runs; ++i) eng.invoke();
+            double s1 = now_ms();
+            double avg = (s1 - s0) / args.runs;
+            std::printf("Бенчмарк: %d итераций, среднее %.3f мс, %.1f инф/с\n",
+                        args.runs, avg, 1000.0 / avg);
+        }
     }
 
     // ---- Видео-цикл без окна ----
