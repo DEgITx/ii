@@ -1185,6 +1185,34 @@ int main(int argc, char** argv) {
             }
         }
         if (dump_fps) fps_csv.flush();
+
+        // ---- FPS summary ----
+        // Одна строка с агрегатами за весь видео-цикл:
+        //   * frames / wall_s / avg_fps — lifetime (точно по счётчику
+        //     кадров и стенным часам, не по окну);
+        //   * dt_*  / jitter           — текущее состояние FpsCounter
+        //     (скользящее окно 120 кадров) — характеризует стабильность
+        //     к моменту остановки. Для коротких прогонов окно = весь
+        //     прогон, разницы нет.
+        // Файл пишется только если был хоть один кадр — иначе таблица
+        // была бы из NaN’ов.
+        if (args.export_prefix.size() && frame_n > 0) {
+            CsvExport fs;
+            if (open_export(fs, "fps.summary", "video_loop_summary")) {
+                fs.meta("source", "%s",
+                        src ? (has_camera ? "camera" : "static") : "none");
+                fs.meta("vsync",  "%s", args.vsync ? "on" : "off");
+                fs.header("frames,wall_s,avg_fps,"
+                          "dt_avg_ms,dt_min_ms,dt_max_ms,jitter_ms");
+                const double wall_s = (now_ms() - loop_t0) / 1000.0;
+                const double avg_fps = wall_s > 0.0
+                    ? (double)frame_n / wall_s : 0.0;
+                fs.writef("%zu,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f",
+                          frame_n, wall_s, avg_fps,
+                          fps.avg_ms(), fps.min_ms(), fps.max_ms(),
+                          fps.jitter_ms());
+            }
+        }
         std::printf("\nОстановлено.\n");
         return 0;
     };
@@ -1266,7 +1294,14 @@ int main(int argc, char** argv) {
     // CSV-экспорт результатов сравнения. Один файл на оба возможных
     // вызова (--compare и --compare-cpu) — различаем их по колонке `ref`.
     // Открываем заранее, чтобы run_compare мог свободно писать.
+    //
+    // Пара файлов:
+    //   * compare.csv         — per-run × per-output diff (сырые данные);
+    //   * compare.summary.csv — агрегаты по всем прогонам (одна строка
+    //                            на пару (ref, output) с MAE/RMSE/max|diff|
+    //                            и теми же метриками в «квантах» INT8).
     CsvExport compare_csv;
+    CsvExport compare_summary_csv;
     const bool will_compare = !args.compare_model.empty() || args.compare_cpu;
     const bool dump_compare = will_compare
         && open_export(compare_csv, "compare", "compare");
@@ -1276,6 +1311,17 @@ int main(int argc, char** argv) {
         compare_csv.meta("random_runs",  "%d", args.random_runs);
         compare_csv.header(
             "ref,run,output_idx,output_name,elems,"
+            "mae,rmse,max_abs_diff,scale,mae_q,rmse_q,maxd_q,trimmed");
+    }
+    const bool dump_compare_sum = will_compare
+        && open_export(compare_summary_csv, "compare.summary",
+                       "compare_summary");
+    if (dump_compare_sum) {
+        compare_summary_csv.meta("random_input", "%s",
+                                 args.random_input ? "1" : "0");
+        compare_summary_csv.meta("random_runs",  "%d", args.random_runs);
+        compare_summary_csv.header(
+            "ref,output_idx,output_name,runs,elems,"
             "mae,rmse,max_abs_diff,scale,mae_q,rmse_q,maxd_q,trimmed");
     }
 
@@ -1504,6 +1550,21 @@ int main(int argc, char** argv) {
                             rmse       / s_main,
                             acc[i].maxd/ s_main);
             }
+            if (dump_compare_sum) {
+                const double inv_s = (s_main > 0.0f)
+                    ? 1.0 / (double)s_main : 0.0;
+                compare_summary_csv.writef(
+                    "%s,%zu,%s,%d,%zu,"
+                    "%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%.6e,%d",
+                    ref_label, i,
+                    csv_escape(out_info[i].name).c_str(),
+                    runs_done, acc[i].n,
+                    mae, rmse, acc[i].maxd, (double)s_main,
+                    mae         * inv_s,
+                    rmse        * inv_s,
+                    acc[i].maxd * inv_s,
+                    acc[i].trimmed ? 1 : 0);
+            }
             agg_mae_sum += acc[i].sum;
             if (acc[i].maxd > agg_max) agg_max = acc[i].maxd;
             agg_n       += acc[i].n;
@@ -1512,7 +1573,8 @@ int main(int argc, char** argv) {
             std::printf("  -> суммарно: MAE=%.6f  max|diff|=%.6f  (%zu элементов)\n",
                         agg_mae_sum / (double)agg_n, agg_max, agg_n);
         }
-        if (dump_compare) compare_csv.flush();
+        if (dump_compare)     compare_csv.flush();
+        if (dump_compare_sum) compare_summary_csv.flush();
     };
 
     if (!args.compare_model.empty()) {
@@ -1561,7 +1623,12 @@ int main(int argc, char** argv) {
         }
 
         double sum = 0.0, mn = 1e18, mx = 0.0;
+        // При активном экспорте дополнительно копим полный массив
+        // латентностей — нужен для перцентилей в summary. 1000 double’ов
+        // = 8 КБ, на пайплайн не влияет.
+        std::vector<double> lat;
         if (dump_bench) {
+            lat.reserve((size_t)args.runs);
             for (int i = 0; i < args.runs; ++i) {
                 double t0b = now_ms();
                 eng.invoke();
@@ -1569,6 +1636,7 @@ int main(int argc, char** argv) {
                 sum += dt;
                 if (dt < mn) mn = dt;
                 if (dt > mx) mx = dt;
+                lat.push_back(dt);
                 bench_csv.writef("%d,%.6f", i, dt);
             }
             bench_csv.flush();
@@ -1583,6 +1651,39 @@ int main(int argc, char** argv) {
             double avg = (s1 - s0) / args.runs;
             std::printf("Бенчмарк: %d итераций, среднее %.3f мс, %.1f инф/с\n",
                         args.runs, avg, 1000.0 / avg);
+        }
+
+        // ---- Bench summary ----
+        // Одна строка с агрегатами. Файл само-достаточен: все
+        // мета-поля (модель, делегат, threads, runs) уже есть в шапке
+        // через open_export, плюс перцентили p50/p95/p99 — для оценки
+        // хвоста распределения (важнее среднего, когда есть выбросы).
+        // Несколько прогонов разных моделей собираются в одну таблицу
+        // тривиально:  cat results/*.bench.summary.csv | grep -v '^#'
+        if (dump_bench && !lat.empty()) {
+            CsvExport bs;
+            if (open_export(bs, "bench.summary", "benchmark_summary")) {
+                bs.meta("warmup", "%d", args.warmup);
+                bs.meta("runs",   "%d", args.runs);
+                bs.header(
+                    "runs,avg_ms,min_ms,max_ms,"
+                    "p50_ms,p95_ms,p99_ms,std_ms,throughput_ips");
+                std::sort(lat.begin(), lat.end());
+                auto pct = [&](double q) {
+                    size_t k = (size_t)std::lround(
+                        q * (double)(lat.size() - 1));
+                    if (k >= lat.size()) k = lat.size() - 1;
+                    return lat[k];
+                };
+                const double avg = sum / (double)lat.size();
+                double sse = 0.0;
+                for (double v : lat) sse += (v - avg) * (v - avg);
+                const double stddev = std::sqrt(sse / (double)lat.size());
+                bs.writef("%zu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.3f",
+                          lat.size(), avg, mn, mx,
+                          pct(0.50), pct(0.95), pct(0.99),
+                          stddev, 1000.0 / avg);
+            }
         }
     }
 
