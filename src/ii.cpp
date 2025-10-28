@@ -58,6 +58,7 @@
 #include "csv_export.h"
 #include "display.h"
 #include "stats.h"
+#include "sysmon.h"
 #include "yolo.h"
 
 #include <atomic>
@@ -730,6 +731,17 @@ struct Args {
     // Каждый файл само-документируем: в шапке `# key=value` лежат
     // модель, делегат, threads, runs, timestamp и т.п.
     std::string export_prefix;
+    // ---- Мониторинг CPU/памяти ----
+    // --sysmon включает периодический замер потребления процессом RAM
+    // (RSS / VmHWM / VmSwap), CPU (% одного ядра, multi-thread даёт >100)
+    // и системного CPU. Печатается сводка в конце прогона + (если задан
+    // --export) пишется <prefix>.sysmon.csv с per-сэмплом и
+    // <prefix>.sysmon.summary.csv с агрегатами. Для бенчмарка снимаем
+    // baseline до прогрева и финальный замер после; в видео-цикле семплим
+    // раз в --sysmon-interval мс. Работает только на Linux (на dev-хосте
+    // под Windows/macOS init() вернёт false и блок будет пропущен).
+    bool sysmon = false;
+    int  sysmon_interval_ms = 1000;
 };
 
 void print_usage(const char* prog) {
@@ -778,7 +790,12 @@ void print_usage(const char* prog) {
         "                      --benchmark), <prefix>.fps.csv (для видео-\n"
         "                      цикла со --stats), <prefix>.compare.csv (для\n"
         "                      --compare/--compare-cpu). Пути с / создают\n"
-        "                      нужные директории заранее: --export results/run01\n",
+        "                      нужные директории заранее: --export results/run01\n"
+        "  --sysmon            мониторинг CPU/памяти процесса (RSS, VmHWM,\n"
+        "                      потоки, %% ядра) и системного CPU. Сводка\n"
+        "                      в stdout + при --export пишется sysmon.csv\n"
+        "  --sysmon-interval <ms> период семплирования sysmon в видео-цикле\n"
+        "                      (по умолчанию 1000 мс)\n",
         prog, kDefaultDelegate);
 }
 
@@ -844,6 +861,9 @@ bool parse_args(int argc, char** argv, Args& a) {
         }
         else if (s == "--camera-fps"  && i + 1 < argc) a.camera_fps  = std::atoi(argv[++i]);
         else if (s == "--export"      && i + 1 < argc) a.export_prefix = argv[++i];
+        else if (s == "--sysmon")                      a.sysmon       = true;
+        else if (s == "--sysmon-interval" && i + 1 < argc)
+                                                      a.sysmon_interval_ms = std::atoi(argv[++i]);
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
@@ -906,6 +926,30 @@ int main(int argc, char** argv) {
     // Тег для логов: где именно крутится инференс.
     const char* label_main = args.no_delegate ? "CPU" : "NPU";
 
+    // ---- Мониторинг CPU/памяти ----
+    // Инициализируем заранее, чтобы baseline-семпл захватил состояние ещё
+    // до загрузки тензоров и первого invoke. На не-Linux init() вернёт
+    // false; SysAccum останется пустым, а вызовы sample() — безвредными.
+    SysMonitor sysmon;
+    SysAccum   sysmon_acc;
+    if (args.sysmon) {
+        if (!sysmon.init()) {
+            std::fprintf(stderr,
+                "Внимание: --sysmon недоступен (не Linux или /proc нечитаем) — "
+                "пропускаем замеры.\n");
+        } else {
+            std::printf("Мониторинг CPU/памяти включён "
+                        "(ядер в системе: %d, интервал %d мс)\n",
+                        sysmon.num_cpus(), args.sysmon_interval_ms);
+        }
+    }
+    // Открываем оба CSV (per-sample и summary) лениво по факту первого
+    // использования, чтобы не плодить пустые файлы для путей, в которых
+    // sysmon не активирован (например, --camera при --no-export).
+    CsvExport sysmon_csv;
+    bool      sysmon_csv_opened = false;
+    const double sysmon_t0 = now_ms();
+
     // ---- Сводка по тензорам ----
     std::vector<TensorInfo> in_info, out_info;
     for (int idx : eng.interpreter->inputs())
@@ -950,6 +994,100 @@ int main(int argc, char** argv) {
         e.meta("input_dtype",  "%s", dtype_name(in_info[0].dtype));
         std::printf("CSV экспорт (%s): %s\n", kind, e.path().c_str());
         return true;
+    };
+
+    // Открыть (один раз) <prefix>.sysmon.csv с шапкой колонок per-sample.
+    // Возвращает true, если файл готов к writef. Если --export не задан
+    // или sysmon не инициализирован, экспорт молча отключён.
+    auto ensure_sysmon_csv = [&]() -> bool {
+        if (!args.sysmon || !sysmon.initialized()) return false;
+        if (sysmon_csv_opened) return sysmon_csv.is_open();
+        sysmon_csv_opened = true;
+        if (!open_export(sysmon_csv, "sysmon", "sysmon")) return false;
+        sysmon_csv.meta("interval_ms", "%d", args.sysmon_interval_ms);
+        sysmon_csv.meta("num_cpus",    "%d", sysmon.num_cpus());
+        sysmon_csv.header(
+            "t_ms,phase,cpu_proc_pct,sys_cpu_pct,"
+            "rss_kb,vsz_kb,peak_rss_kb,swap_kb,threads,"
+            "mem_total_kb,mem_avail_kb,wall_ms");
+        return true;
+    };
+
+    // Финальная сводка sysmon: один последний семпл + строка-агрегат в
+    // stdout и в <prefix>.sysmon.summary.csv. Идемпотентен — повторные
+    // вызовы перезатрут .summary тем же содержимым; на практике каждая
+    // ветка main вызывает её ровно один раз перед своим return.
+    bool sysmon_finalized = false;
+    auto sysmon_finalize = [&]() {
+        if (sysmon_finalized) return;
+        sysmon_finalized = true;
+        if (!args.sysmon || !sysmon.initialized()) return;
+        // последний семпл захватываем тут же, чтобы попал в агрегат
+        SysSample s = sysmon.sample();
+        if (s.ok) {
+            sysmon_acc.add(s);
+            std::printf("[sysmon final   ] %s\n", sysmon_format(s).c_str());
+            if (sysmon_csv.is_open()) {
+                sysmon_csv.writef(
+                    "%.3f,%s,%.3f,%.3f,"
+                    "%ld,%ld,%ld,%ld,%d,"
+                    "%ld,%ld,%.3f",
+                    now_ms() - sysmon_t0, "final",
+                    s.cpu_proc_pct, s.sys_cpu_pct,
+                    s.rss_kb, s.vsz_kb, s.peak_rss_kb, s.swap_kb, s.threads,
+                    s.mem_total_kb, s.mem_avail_kb, s.wall_ms);
+            }
+        }
+        if (sysmon_acc.empty()) return;
+        std::printf(
+            "[sysmon summary] samples=%d  CPU proc avg=%.1f%% "
+            "max=%.1f%%  sys avg=%.1f%% max=%.1f%%  RSS max=%ld kB  "
+            "VmHWM=%ld kB  threads max=%d\n",
+            sysmon_acc.n,
+            sysmon_acc.cpu_proc_avg(), sysmon_acc.cpu_proc_max,
+            sysmon_acc.sys_cpu_avg(),  sysmon_acc.sys_cpu_max,
+            sysmon_acc.rss_max, sysmon_acc.peak_rss,
+            sysmon_acc.threads_max);
+        if (!args.export_prefix.empty()) {
+            CsvExport ss;
+            if (open_export(ss, "sysmon.summary", "sysmon_summary")) {
+                ss.meta("interval_ms", "%d", args.sysmon_interval_ms);
+                ss.meta("num_cpus",    "%d", sysmon.num_cpus());
+                ss.header(
+                    "samples,cpu_proc_avg_pct,cpu_proc_max_pct,"
+                    "sys_cpu_avg_pct,sys_cpu_max_pct,"
+                    "rss_max_kb,vsz_max_kb,peak_rss_kb,threads_max");
+                ss.writef("%d,%.3f,%.3f,%.3f,%.3f,%ld,%ld,%ld,%d",
+                          sysmon_acc.n,
+                          sysmon_acc.cpu_proc_avg(), sysmon_acc.cpu_proc_max,
+                          sysmon_acc.sys_cpu_avg(),  sysmon_acc.sys_cpu_max,
+                          sysmon_acc.rss_max, sysmon_acc.vsz_max,
+                          sysmon_acc.peak_rss, sysmon_acc.threads_max);
+            }
+        }
+        if (sysmon_csv.is_open()) sysmon_csv.flush();
+    };
+
+    // Один комплексный шаг: снять семпл, добавить в агрегат, напечатать
+    // строку в stdout и (если включён --export) — в sysmon.csv.
+    // phase — короткая метка фазы прогона (init/warmup/bench/video/final).
+    auto sysmon_log = [&](const char* phase) {
+        if (!args.sysmon || !sysmon.initialized()) return;
+        SysSample s = sysmon.sample();
+        if (!s.ok) return;
+        sysmon_acc.add(s);
+        std::printf("[sysmon %-8s] %s\n", phase, sysmon_format(s).c_str());
+        std::fflush(stdout);
+        if (ensure_sysmon_csv()) {
+            sysmon_csv.writef(
+                "%.3f,%s,%.3f,%.3f,"
+                "%ld,%ld,%ld,%ld,%d,"
+                "%ld,%ld,%.3f",
+                now_ms() - sysmon_t0, phase,
+                s.cpu_proc_pct, s.sys_cpu_pct,
+                s.rss_kb, s.vsz_kb, s.peak_rss_kb, s.swap_kb, s.threads,
+                s.mem_total_kb, s.mem_avail_kb, s.wall_ms);
+        }
     };
     // NHWC [1,H,W,3] — типовой формат для путей с изображением. Для чисто
     // рандомного --compare-random разрешаем любой shape (например [1,9,9,1]).
@@ -1016,6 +1154,12 @@ int main(int argc, char** argv) {
         std::printf("Случайный вход: shape=%s, seed=%u\n",
                     shape_to_str(in_info[0].shape).c_str(), seed);
     }
+
+    // Первый замер: фиксируем «старт» — память сразу после загрузки модели,
+    // делегата и заливки входа. CPU-проценты будут посчитаны от init() до
+    // этой точки, поэтому отражают активность во время AllocateTensors /
+    // подготовки делегата.
+    sysmon_log("init");
 
     // ---- YOLO: предварительная подготовка ----
     // Детектируем голову один раз (формат [1, C, A] vs [1, A, C]) до
@@ -1116,6 +1260,11 @@ int main(int argc, char** argv) {
         }
         const double loop_t0 = now_ms();
         std::size_t  frame_n = 0;
+        // Отдельный таймер семплирования sysmon — независим от FPS-лога,
+        // чтобы пользователь мог поставить, например, 5 с интервал sysmon
+        // при ежесекундном FPS-логе. last_sysmon_t = -inf при старте,
+        // чтобы первый семпл сработал почти сразу (после первого кадра).
+        double last_sysmon_t = -1e18;
 
         // orig_w/orig_h — размеры «исходного» кадра. Если источника
         // нет, для YOLO принимаем их равными размерам входа модели —
@@ -1174,6 +1323,16 @@ int main(int argc, char** argv) {
                                fps.fps(), fps.avg_ms(),
                                fps.min_ms(), fps.max_ms(),
                                fps.jitter_ms());
+            }
+            // Семплирование sysmon в видео-цикле: раз в sysmon_interval_ms.
+            // Семплим даже без --stats — нагрузка на CPU/память актуальна
+            // и для чистого --camera/--loop без оверлея.
+            if (args.sysmon && sysmon.initialized()) {
+                const double now = now_ms();
+                if (now - last_sysmon_t >= (double)args.sysmon_interval_ms) {
+                    sysmon_log("video");
+                    last_sysmon_t = now;
+                }
             }
 
             if (disp && frame) {
@@ -1255,7 +1414,9 @@ int main(int argc, char** argv) {
         }
 
         CameraFrameSource src(*cam, /*timeout_ms=*/1000);
-        return run_video_loop(&src, disp.get());
+        int rc = run_video_loop(&src, disp.get());
+        sysmon_finalize();
+        return rc;
     }
 
     // ---- Один прогон ----
@@ -1275,6 +1436,7 @@ int main(int argc, char** argv) {
             const TfLiteTensor* t = eng.interpreter->tensor(out_info[i].index);
             print_output_head(out_info[i], t);
         }
+        sysmon_log("invoke");
     }
 
     // ---- Сравнение точности с эталоном ----
@@ -1613,6 +1775,10 @@ int main(int argc, char** argv) {
     // Накладные ~50–100 нс на now_ms() ничтожны на фоне инференса.
     if (args.benchmark) {
         for (int i = 0; i < args.warmup; ++i) eng.invoke();
+        // После прогрева — фиксируем CPU/память: на этом интервале
+        // прогревочные invoke’ы уже отработали, кэши/JIT делегата
+        // прогрелись, а сам бенчмарк ещё не начался.
+        sysmon_log("warmup");
 
         CsvExport bench_csv;
         const bool dump_bench = open_export(bench_csv, "bench", "benchmark");
@@ -1652,6 +1818,9 @@ int main(int argc, char** argv) {
             std::printf("Бенчмарк: %d итераций, среднее %.3f мс, %.1f инф/с\n",
                         args.runs, avg, 1000.0 / avg);
         }
+        // CPU/память «во время бенчмарка»: дельта от warmup-семпла, что
+        // соответствует ровно периоду runs итераций.
+        sysmon_log("bench");
 
         // ---- Bench summary ----
         // Одна строка с агрегатами. Файл само-достаточен: все
@@ -1691,7 +1860,9 @@ int main(int argc, char** argv) {
     // Источника кадров нет — общий цикл просто крутит invoke + FPS.
     // Полезно, чтобы померить чистую пропускную способность NPU.
     if (args.loop && !args.display) {
-        return run_video_loop(/*src=*/nullptr, /*disp=*/nullptr);
+        int rc = run_video_loop(/*src=*/nullptr, /*disp=*/nullptr);
+        sysmon_finalize();
+        return rc;
     }
 
     // ---- Графический вывод (Wayland/EGL) ----
@@ -1718,7 +1889,9 @@ int main(int argc, char** argv) {
         // препроцессить — только invoke + show_rgb на каждой итерации.
         if (args.loop) {
             StaticFrameSource src(frame, fw, fh);
-            return run_video_loop(&src, disp.get());
+            int rc = run_video_loop(&src, disp.get());
+            sysmon_finalize();
+            return rc;
         }
 
         // ---- Одиночный кадр ----
@@ -1731,11 +1904,12 @@ int main(int argc, char** argv) {
             run_yolo_postproc(img.w, img.h);
             disp->set_boxes(boxes);
         }
-        if (!disp->show_rgb(frame, fw, fh)) return 0;
+        if (!disp->show_rgb(frame, fw, fh)) { sysmon_finalize(); return 0; }
         std::printf("Окно открыто. Закройте его, чтобы выйти.\n");
         // Один статический кадр: блокируемся на событиях Wayland до закрытия.
         while (disp->wait()) {}
     }
 
+    sysmon_finalize();
     return 0;
 }
