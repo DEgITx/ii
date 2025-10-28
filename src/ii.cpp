@@ -794,8 +794,8 @@ void print_usage(const char* prog) {
         "  --sysmon            мониторинг CPU/памяти процесса (RSS, VmHWM,\n"
         "                      потоки, %% ядра) и системного CPU. Сводка\n"
         "                      в stdout + при --export пишется sysmon.csv\n"
-        "  --sysmon-interval <ms> период семплирования sysmon в видео-цикле\n"
-        "                      (по умолчанию 1000 мс)\n",
+        "  --sysmon-interval <ms> период семплирования sysmon внутри длинного\n"
+        "                      бенчмарка и видео-цикла (по умолчанию 1000)\n",
         prog, kDefaultDelegate);
 }
 
@@ -1793,6 +1793,26 @@ int main(int argc, char** argv) {
         // латентностей — нужен для перцентилей в summary. 1000 double’ов
         // = 8 КБ, на пайплайн не влияет.
         std::vector<double> lat;
+        // Периодический семпл sysmon во время бенчмарка: на длинных
+        // прогонах (--runs 5000+ / десятки секунд) одной точкой не
+        // увидишь ни троттлинга по нагреву, ни плавающего RSS, ни
+        // постепенного роста системной нагрузки от соседей по хосту.
+        // last_sysmon_t = -inf, чтобы первый интервал успел набраться.
+        // Сами замеры идут с фазой "bench" — те же колонки, что у
+        // финального семпла «после бенчмарка»; различить можно по t_ms.
+        const bool sysmon_periodic =
+            args.sysmon && sysmon.initialized()
+            && args.sysmon_interval_ms > 0;
+        double last_sysmon_t = -1e18;
+        auto maybe_sysmon = [&]() {
+            if (!sysmon_periodic) return;
+            const double now = now_ms();
+            if (now - last_sysmon_t >= (double)args.sysmon_interval_ms) {
+                sysmon_log("bench");
+                last_sysmon_t = now;
+            }
+        };
+
         if (dump_bench) {
             lat.reserve((size_t)args.runs);
             for (int i = 0; i < args.runs; ++i) {
@@ -1804,6 +1824,7 @@ int main(int argc, char** argv) {
                 if (dt > mx) mx = dt;
                 lat.push_back(dt);
                 bench_csv.writef("%d,%.6f", i, dt);
+                maybe_sysmon();
             }
             bench_csv.flush();
             double avg = sum / args.runs;
@@ -1812,14 +1833,19 @@ int main(int argc, char** argv) {
                         args.runs, avg, mn, mx, 1000.0 / avg);
         } else {
             double s0 = now_ms();
-            for (int i = 0; i < args.runs; ++i) eng.invoke();
+            for (int i = 0; i < args.runs; ++i) {
+                eng.invoke();
+                maybe_sysmon();
+            }
             double s1 = now_ms();
             double avg = (s1 - s0) / args.runs;
             std::printf("Бенчмарк: %d итераций, среднее %.3f мс, %.1f инф/с\n",
                         args.runs, avg, 1000.0 / avg);
         }
-        // CPU/память «во время бенчмарка»: дельта от warmup-семпла, что
-        // соответствует ровно периоду runs итераций.
+        // Финальный семпл «сразу после бенчмарка» — даёт дельту от
+        // последнего periodic-семпла (или от warmup, если periodic не
+        // успел сработать на коротком прогоне). В CSV отличается от
+        // periodic-семплов более коротким wall_ms.
         sysmon_log("bench");
 
         // ---- Bench summary ----
