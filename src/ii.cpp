@@ -1739,6 +1739,19 @@ int main(int argc, char** argv) {
         if (dump_compare_sum) compare_summary_csv.flush();
     };
 
+    // Между «invoke» и «warmup» в режиме --compare* проходит долгий
+    // отрезок времени — оба интерпретатора (целевой и эталонный)
+    // прогоняются по N random-итераций. Без явных меток sysmon
+    // получает «дырку»: длинный сегмент без сэмплов, который потом
+    // выглядит на графике как плоская линия от init/invoke
+    // до warmup и искажает картину «загрузки таргетной модели».
+    // Поэтому ставим маркеры phase=compare до и после run_compare.
+    // На сводных графиках эти точки потом фильтруются (это не
+    // нагрузка целевой модели, а служебная стадия), но в raw CSV
+    // они остаются для диагностики.
+    const bool any_compare = !args.compare_model.empty()
+        || (args.compare_cpu && !args.no_delegate);
+    if (any_compare) sysmon_log("compare");
     if (!args.compare_model.empty()) {
         run_compare(args.compare_model, "REF");
     }
@@ -1750,6 +1763,7 @@ int main(int argc, char** argv) {
             run_compare(args.model, "CPU");
         }
     }
+    if (any_compare) sysmon_log("compare");
 
     // Если входа нет вообще — дальше идти нечего. В режиме --random-input
     // вход уже залит случайным буфером выше, так что --benchmark / --loop
