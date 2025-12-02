@@ -1409,7 +1409,7 @@ int main(int argc, char** argv) {
                     "Поддержка дисплея не собрана (USE_DISPLAY=OFF).\n");
                 return 7;
             }
-            if (!disp->init(args.win_w, args.win_h, "npu", args.vsync))
+            if (!disp->init(args.win_w, args.win_h, "ii", args.vsync))
                 return 7;
         }
 
@@ -1915,7 +1915,7 @@ int main(int argc, char** argv) {
                 "Поддержка дисплея не собрана (USE_DISPLAY=OFF).\n");
             return 7;
         }
-        if (!disp->init(args.win_w, args.win_h, "npu", args.vsync)) return 7;
+        if (!disp->init(args.win_w, args.win_h, "ii", args.vsync)) return 7;
 
         // Что показывать: оригинал картинки или препроцесс.
         const uint8_t* frame = args.show_input ? input_rgb.data()
