@@ -1,4 +1,8 @@
-// Универсальный раннер TFLite-моделей на NPU (внешний делегат).
+// Универсальный раннер моделей на NPU (через внешний делегат
+// TensorFlow Lite) — а также на любом другом бэкенде, реализующем
+// inf::Engine (см. inference.h). Сам раннер не знает про TFLite:
+// конкретный бэкенд выбирается через --backend и подключается на этапе
+// сборки (USE_TFLITE / USE_TENSORRT / USE_DIRECTML).
 //
 // Цель: пропустить изображение через INT8-квантованную модель
 // (например yolov8m_int8.tflite) и получить «сырые» выходы.
@@ -27,7 +31,7 @@
 //   ./ii model.tflite --random-input --benchmark --runs 100   # без картинки
 //   ./ii model.tflite --random-input --compare-cpu --random-runs 50
 //   ./ii yolov8m_int8.tflite --camera --display --yolo  # видео-поток
-//   ./ii yolov8m_int8.tflite --camera /dev/video2 --camera-size 1280x720 \
+//   ./ii yolov8m_int8.tflite --camera /dev/video2 --camera-size 1280x720
 //       --camera-fps 30 --display --yolo --stats        # с замером FPS
 
 #include <algorithm>
@@ -44,11 +48,6 @@
 #include <type_traits>
 #include <vector>
 
-#include "tensorflow/lite/interpreter.h"
-#include "tensorflow/lite/kernels/register.h"
-#include "tensorflow/lite/model.h"
-#include "tensorflow/lite/delegates/external/external_delegate.h"
-
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -57,6 +56,7 @@
 #include "camera.h"
 #include "csv_export.h"
 #include "display.h"
+#include "inference.h"
 #include "stats.h"
 #include "sysmon.h"
 #include "yolo.h"
@@ -71,152 +71,10 @@ void on_sigint(int) { g_interrupted = true; }
 
 namespace {
 
-constexpr const char* kDefaultDelegate = "/lib/libdelegate.so";
-
-// ---------------------------------------------------------------------------
-// Обёртка над интерпретатором TFLite + внешним делегатом.
-// Делегат живёт дольше интерпретатора: сначала разрушаем interpreter,
-// затем сам делегат, иначе TFLite крашится в деструкторе.
-// ---------------------------------------------------------------------------
-struct Engine {
-    std::unique_ptr<tflite::FlatBufferModel> model;
-    tflite::ops::builtin::BuiltinOpResolver resolver;
-    std::unique_ptr<tflite::Interpreter> interpreter;
-    TfLiteDelegate* delegate = nullptr;
-
-    ~Engine() {
-        interpreter.reset();
-        if (delegate) TfLiteExternalDelegateDelete(delegate);
-    }
-
-    bool load(const std::string& model_path,
-              const std::string& delegate_path,
-              int num_threads) {
-        model = tflite::FlatBufferModel::BuildFromFile(model_path.c_str());
-        if (!model) {
-            std::fprintf(stderr, "Не удалось загрузить модель: %s\n",
-                         model_path.c_str());
-            return false;
-        }
-        if (tflite::InterpreterBuilder(*model, resolver)(&interpreter) != kTfLiteOk
-            || !interpreter) {
-            std::fprintf(stderr, "InterpreterBuilder упал.\n");
-            return false;
-        }
-        if (num_threads > 0) interpreter->SetNumThreads(num_threads);
-
-        if (!delegate_path.empty()) {
-            auto opts = TfLiteExternalDelegateOptionsDefault(delegate_path.c_str());
-            delegate = TfLiteExternalDelegateCreate(&opts);
-            if (!delegate) {
-                std::fprintf(stderr,
-                    "Не удалось создать external delegate: %s\n",
-                    delegate_path.c_str());
-                return false;
-            }
-            if (interpreter->ModifyGraphWithDelegate(delegate) != kTfLiteOk) {
-                std::fprintf(stderr, "ModifyGraphWithDelegate упал.\n");
-                return false;
-            }
-            std::printf("Делегат загружен: %s\n", delegate_path.c_str());
-        } else {
-            std::printf("Делегат не используется — CPU.\n");
-        }
-
-        if (interpreter->AllocateTensors() != kTfLiteOk) {
-            std::fprintf(stderr, "AllocateTensors упал.\n");
-            return false;
-        }
-        return true;
-    }
-
-    bool invoke() { return interpreter->Invoke() == kTfLiteOk; }
-};
-
-// ---------------------------------------------------------------------------
-// Описание тензора (срез TfLiteTensor для удобной печати/обработки)
-// ---------------------------------------------------------------------------
-struct TensorInfo {
-    int index = 0;
-    std::string name;
-    std::vector<int> shape;
-    TfLiteType dtype = kTfLiteNoType;
-    float scale = 0.0f;
-    int32_t zero_point = 0;
-    size_t bytes = 0;
-};
-
-TensorInfo describe(const TfLiteTensor* t, int index) {
-    TensorInfo info;
-    info.index = index;
-    info.name = t->name ? t->name : "";
-    info.shape.assign(t->dims->data, t->dims->data + t->dims->size);
-    info.dtype = t->type;
-    info.scale = t->params.scale;
-    info.zero_point = t->params.zero_point;
-    info.bytes = t->bytes;
-    return info;
-}
-
-const char* dtype_name(TfLiteType t) {
-    switch (t) {
-        case kTfLiteFloat32: return "float32";
-        case kTfLiteFloat16: return "float16";
-        case kTfLiteInt8:    return "int8";
-        case kTfLiteUInt8:   return "uint8";
-        case kTfLiteInt16:   return "int16";
-        case kTfLiteUInt16:  return "uint16";
-        case kTfLiteInt32:   return "int32";
-        case kTfLiteUInt32:  return "uint32";
-        case kTfLiteInt64:   return "int64";
-        case kTfLiteBool:    return "bool";
-        default:             return "?";
-    }
-}
-
-size_t dtype_size(TfLiteType t) {
-    switch (t) {
-        case kTfLiteFloat32:
-        case kTfLiteInt32:
-        case kTfLiteUInt32:  return 4;
-        case kTfLiteInt64:   return 8;
-        case kTfLiteFloat16:
-        case kTfLiteInt16:
-        case kTfLiteUInt16:  return 2;
-        case kTfLiteInt8:
-        case kTfLiteUInt8:
-        case kTfLiteBool:    return 1;
-        default:             return 1;
-    }
-}
-
-// IEEE 754 binary16 -> binary32 (без зависимости от __fp16 / F16C).
-// Корректно обрабатывает denormals, ±0, ±inf и NaN.
-inline float half_to_float(uint16_t h) {
-    const uint32_t sign = (uint32_t)(h >> 15) & 0x1u;
-    const uint32_t exp  = (uint32_t)(h >> 10) & 0x1Fu;
-    uint32_t       mant = (uint32_t)h & 0x3FFu;
-    uint32_t bits;
-    if (exp == 0) {
-        if (mant == 0) {
-            bits = sign << 31;                       // ±0
-        } else {
-            // denormal: нормализуем, сдвигая мантиссу влево.
-            int e = -1;
-            do { ++e; mant <<= 1; } while ((mant & 0x400u) == 0);
-            mant &= 0x3FFu;
-            bits = (sign << 31) | ((127u - 15u - (uint32_t)e) << 23)
-                 | (mant << 13);
-        }
-    } else if (exp == 31) {
-        bits = (sign << 31) | (0xFFu << 23) | (mant << 13);  // inf / NaN
-    } else {
-        bits = (sign << 31) | ((exp + 127u - 15u) << 23) | (mant << 13);
-    }
-    float out;
-    std::memcpy(&out, &bits, sizeof(out));
-    return out;
-}
+// Историческое имя — оставлено как алиас, чтобы не плодить inf::TensorDesc
+// в каждой строчке. Всё остальное (DType, half_to_float, dtype_name,
+// dtype_size) приходит из inference.h.
+using TensorInfo = inf::TensorDesc;
 
 size_t numel(const std::vector<int>& shape) {
     size_t n = 1;
@@ -247,7 +105,7 @@ void print_tensor(const char* prefix, const TensorInfo& t) {
     std::printf("%s %-32s shape=[", prefix, t.name.c_str());
     for (size_t i = 0; i < t.shape.size(); ++i)
         std::printf("%s%d", i ? "," : "", t.shape[i]);
-    std::printf("] dtype=%s", dtype_name(t.dtype));
+    std::printf("] dtype=%s", inf::dtype_name(t.dtype));
     if (t.scale != 0.0f)
         std::printf(" quant=(scale=%.6g, zp=%d)", t.scale, t.zero_point);
     std::printf("\n");
@@ -319,12 +177,15 @@ inline void letterbox(const Image& src, int target_w, int target_h,
 // Заполнение входного тензора. На вход — RGB HWC uint8 [0..255].
 // Нормализуется в [0,1] и квантуется по scale/zero_point модели для
 // целочисленных типов. (Логика идентична quantize_to_input.)
+//
+// data — сырой указатель на память входа модели (см. Engine::input_data).
+// Бэкенд гарантирует, что буфер достаточен для info.bytes.
 // ---------------------------------------------------------------------------
 bool fill_input(const std::vector<uint8_t>& rgb, const TensorInfo& info,
-                TfLiteTensor* tensor) {
+                void* data) {
     const size_t n = rgb.size();
 
-    // Универсальная квантователь под произвольный целочисленный тип.
+    // Универсальный квантователь под произвольный целочисленный тип.
     auto quant_int = [&](auto* p, int lo, int hi) {
         using T = std::decay_t<decltype(*p)>;
         const float s  = info.scale ? info.scale : 1.0f;
@@ -338,38 +199,37 @@ bool fill_input(const std::vector<uint8_t>& rgb, const TensorInfo& info,
     };
 
     switch (info.dtype) {
-        case kTfLiteFloat32: {
-            float* p = reinterpret_cast<float*>(tensor->data.data);
+        case inf::DType::Float32: {
+            float* p = reinterpret_cast<float*>(data);
             for (size_t i = 0; i < n; ++i) p[i] = rgb[i] / 255.0f;
             return true;
         }
-        case kTfLiteInt8:
-            quant_int(reinterpret_cast<int8_t*>(tensor->data.data), -128, 127);
+        case inf::DType::Int8:
+            quant_int(reinterpret_cast<int8_t*>(data), -128, 127);
             return true;
-        case kTfLiteUInt8:
-            quant_int(reinterpret_cast<uint8_t*>(tensor->data.data), 0, 255);
+        case inf::DType::UInt8:
+            quant_int(reinterpret_cast<uint8_t*>(data), 0, 255);
             return true;
-        case kTfLiteInt16:
-            quant_int(reinterpret_cast<int16_t*>(tensor->data.data),
-                      -32768, 32767);
+        case inf::DType::Int16:
+            quant_int(reinterpret_cast<int16_t*>(data), -32768, 32767);
             return true;
-        case kTfLiteUInt16:
-            quant_int(reinterpret_cast<uint16_t*>(tensor->data.data),
-                      0, 65535);
+        case inf::DType::UInt16:
+            quant_int(reinterpret_cast<uint16_t*>(data), 0, 65535);
             return true;
         default:
             std::fprintf(stderr, "Неподдерживаемый dtype входа: %s (код %d)\n",
-                         dtype_name(info.dtype), (int)info.dtype);
+                         inf::dtype_name(info.dtype), (int)info.dtype);
             return false;
     }
 }
 
 // ---------------------------------------------------------------------------
 // Печать первых n_show элементов выхода в float (с деквантованием).
+// data — Engine::output_data(i).
 // ---------------------------------------------------------------------------
-void print_output_head(const TensorInfo& info, const TfLiteTensor* tensor,
+void print_output_head(const TensorInfo& info, const void* data,
                        int n_show = 10) {
-    size_t total = info.bytes / dtype_size(info.dtype);
+    size_t total = info.bytes / inf::dtype_size(info.dtype);
     n_show = (int)std::min<size_t>((size_t)n_show, total);
 
     const float s  = info.scale ? info.scale : 1.0f;
@@ -378,27 +238,27 @@ void print_output_head(const TensorInfo& info, const TfLiteTensor* tensor,
     for (int i = 0; i < n_show; ++i) {
         float v = 0.0f;
         switch (info.dtype) {
-            case kTfLiteFloat32:
-                v = reinterpret_cast<const float*>(tensor->data.data)[i];
+            case inf::DType::Float32:
+                v = reinterpret_cast<const float*>(data)[i];
                 break;
-            case kTfLiteFloat16:
-                v = half_to_float(
-                    reinterpret_cast<const uint16_t*>(tensor->data.data)[i]);
+            case inf::DType::Float16:
+                v = inf::half_to_float(
+                    reinterpret_cast<const uint16_t*>(data)[i]);
                 break;
-            case kTfLiteInt8:
-                v = (reinterpret_cast<const int8_t*>(tensor->data.data)[i] - zp) * s;
+            case inf::DType::Int8:
+                v = (reinterpret_cast<const int8_t*>(data)[i] - zp) * s;
                 break;
-            case kTfLiteUInt8:
-                v = (reinterpret_cast<const uint8_t*>(tensor->data.data)[i] - zp) * s;
+            case inf::DType::UInt8:
+                v = (reinterpret_cast<const uint8_t*>(data)[i] - zp) * s;
                 break;
-            case kTfLiteInt16:
-                v = (reinterpret_cast<const int16_t*>(tensor->data.data)[i] - zp) * s;
+            case inf::DType::Int16:
+                v = (reinterpret_cast<const int16_t*>(data)[i] - zp) * s;
                 break;
-            case kTfLiteUInt16:
-                v = ((int)reinterpret_cast<const uint16_t*>(tensor->data.data)[i] - zp) * s;
+            case inf::DType::UInt16:
+                v = ((int)reinterpret_cast<const uint16_t*>(data)[i] - zp) * s;
                 break;
-            case kTfLiteInt32:
-                v = ((float)reinterpret_cast<const int32_t*>(tensor->data.data)[i]
+            case inf::DType::Int32:
+                v = ((float)reinterpret_cast<const int32_t*>(data)[i]
                      - (float)zp) * s;
                 break;
             default: break;
@@ -427,9 +287,9 @@ double now_ms() {
 // в полноценном смысле) — берём сырое значение как float, иначе деление
 // на ноль / нулевая шкала всё бы обнулило.
 // ---------------------------------------------------------------------------
-bool dequantize_output(const TensorInfo& info, const TfLiteTensor* tensor,
+bool dequantize_output(const TensorInfo& info, const void* data,
                        std::vector<float>& out) {
-    const std::size_t ds = dtype_size(info.dtype);
+    const std::size_t ds = inf::dtype_size(info.dtype);
     const std::size_t total = info.bytes / ds;
     out.resize(total);
 
@@ -437,49 +297,42 @@ bool dequantize_output(const TensorInfo& info, const TfLiteTensor* tensor,
     const int   zp = info.zero_point;
 
     switch (info.dtype) {
-        case kTfLiteFloat32: {
-            std::memcpy(out.data(), tensor->data.data,
-                        total * sizeof(float));
+        case inf::DType::Float32: {
+            std::memcpy(out.data(), data, total * sizeof(float));
             return true;
         }
-        case kTfLiteFloat16: {
-            const uint16_t* p =
-                reinterpret_cast<const uint16_t*>(tensor->data.data);
+        case inf::DType::Float16: {
+            const uint16_t* p = reinterpret_cast<const uint16_t*>(data);
             for (std::size_t i = 0; i < total; ++i)
-                out[i] = half_to_float(p[i]);
+                out[i] = inf::half_to_float(p[i]);
             return true;
         }
-        case kTfLiteInt8: {
-            const int8_t* p =
-                reinterpret_cast<const int8_t*>(tensor->data.data);
+        case inf::DType::Int8: {
+            const int8_t* p = reinterpret_cast<const int8_t*>(data);
             for (std::size_t i = 0; i < total; ++i)
                 out[i] = (p[i] - zp) * s;
             return true;
         }
-        case kTfLiteUInt8: {
-            const uint8_t* p =
-                reinterpret_cast<const uint8_t*>(tensor->data.data);
+        case inf::DType::UInt8: {
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
             for (std::size_t i = 0; i < total; ++i)
                 out[i] = (p[i] - zp) * s;
             return true;
         }
-        case kTfLiteInt16: {
-            const int16_t* p =
-                reinterpret_cast<const int16_t*>(tensor->data.data);
+        case inf::DType::Int16: {
+            const int16_t* p = reinterpret_cast<const int16_t*>(data);
             for (std::size_t i = 0; i < total; ++i)
                 out[i] = (p[i] - zp) * s;
             return true;
         }
-        case kTfLiteUInt16: {
-            const uint16_t* p =
-                reinterpret_cast<const uint16_t*>(tensor->data.data);
+        case inf::DType::UInt16: {
+            const uint16_t* p = reinterpret_cast<const uint16_t*>(data);
             for (std::size_t i = 0; i < total; ++i)
                 out[i] = ((int)p[i] - zp) * s;
             return true;
         }
-        case kTfLiteInt32: {
-            const int32_t* p =
-                reinterpret_cast<const int32_t*>(tensor->data.data);
+        case inf::DType::Int32: {
+            const int32_t* p = reinterpret_cast<const int32_t*>(data);
             for (std::size_t i = 0; i < total; ++i)
                 out[i] = ((float)p[i] - (float)zp) * s;
             return true;
@@ -492,7 +345,7 @@ bool dequantize_output(const TensorInfo& info, const TfLiteTensor* tensor,
                 std::fprintf(stderr,
                     "Деквантование не поддерживает dtype=%s (код %d). "
                     "Дальнейшие подобные сообщения подавлены.\n",
-                    dtype_name(info.dtype), (int)info.dtype);
+                    inf::dtype_name(info.dtype), (int)info.dtype);
                 warned = true;
             }
             return false;
@@ -675,7 +528,10 @@ private:
 struct Args {
     std::string model;
     std::string image;
-    std::string delegate = kDefaultDelegate;
+    // Имя бэкенда инференса: "tflite" (дефолт; единственный собираемый
+    // сейчас) или будущие "tensorrt" / "directml". См. inf::make_engine.
+    std::string backend = "tflite";
+    std::string delegate = inf::default_delegate_path();
     bool no_delegate = false;
     bool benchmark = false;
     int runs = 100;
@@ -745,11 +601,22 @@ struct Args {
 };
 
 void print_usage(const char* prog) {
+    const char* def_delegate = inf::default_delegate_path();
+    const char* def_delegate_show = (def_delegate && *def_delegate)
+        ? def_delegate : "(нет на этой платформе)";
+    // Собираем список собранных бэкендов для подсказки в --help.
+    std::string backends_str;
+    for (const auto& b : inf::available_backends()) {
+        if (!backends_str.empty()) backends_str += ", ";
+        backends_str += b;
+    }
+    if (backends_str.empty()) backends_str = "(нет)";
     std::printf(
         "Usage: %s <model.tflite> [image] [options]\n"
         "  image не обязателен в режиме --random-input.\n"
         "Options:\n"
-        "  --delegate <path>   путь к внешний делегату (по умолчанию %s)\n"
+        "  --backend <name>    бэкенд инференса (доступны: %s; def tflite)\n"
+        "  --delegate <path>   путь к делегату/плагину (по умолчанию %s)\n"
         "  --no-delegate       запустить на CPU (без делегата)\n"
         "  --benchmark         прогрев + замер скорости\n"
         "  --runs <N>          число итераций бенчмарка (по умолчанию 100)\n"
@@ -796,7 +663,7 @@ void print_usage(const char* prog) {
         "                      в stdout + при --export пишется sysmon.csv\n"
         "  --sysmon-interval <ms> период семплирования sysmon внутри длинного\n"
         "                      бенчмарка и видео-цикла (по умолчанию 1000)\n",
-        prog, kDefaultDelegate);
+        prog, backends_str.c_str(), def_delegate_show);
 }
 
 bool parse_args(int argc, char** argv, Args& a) {
@@ -813,7 +680,8 @@ bool parse_args(int argc, char** argv, Args& a) {
     }
     for (int i = start; i < argc; ++i) {
         std::string s = argv[i];
-        if      (s == "--delegate"    && i + 1 < argc) a.delegate    = argv[++i];
+        if      (s == "--backend"     && i + 1 < argc) a.backend     = argv[++i];
+        else if (s == "--delegate"    && i + 1 < argc) a.delegate    = argv[++i];
         else if (s == "--no-delegate")                 a.no_delegate = true;
         else if (s == "--benchmark")                   a.benchmark   = true;
         else if (s == "--runs"        && i + 1 < argc) a.runs        = std::atoi(argv[++i]);
@@ -918,13 +786,30 @@ int main(int argc, char** argv) {
             args.image.c_str(), args.camera_device.c_str());
     }
 
-    Engine eng;
-    if (!eng.load(args.model,
-                  args.no_delegate ? std::string{} : args.delegate,
-                  args.threads)) return 2;
+    auto eng = inf::make_engine(args.backend);
+    if (!eng) {
+        std::fprintf(stderr,
+            "Не удалось создать бэкенд '%s'. Доступные: ",
+            args.backend.c_str());
+        bool first = true;
+        for (const auto& b : inf::available_backends()) {
+            std::fprintf(stderr, "%s%s", first ? "" : ", ", b.c_str());
+            first = false;
+        }
+        std::fprintf(stderr, "\n");
+        return 2;
+    }
+    inf::Engine::Options eopts;
+    eopts.delegate_path = args.no_delegate ? std::string{} : args.delegate;
+    eopts.num_threads   = args.threads;
+    if (!eng->load(args.model, eopts)) return 2;
 
-    // Тег для логов: где именно крутится инференс.
+    // Тег для логов: где именно крутится инференс. С NPU/делегатом
+    // подразумевается ускоритель; без делегата — CPU. Бэкенд тоже
+    // печатается отдельно (см. backend_name) — пользователю важно знать,
+    // запускается ли он на tflite/tensorrt/directml.
     const char* label_main = args.no_delegate ? "CPU" : "NPU";
+    std::printf("Бэкенд инференса: %s\n", eng->backend_name());
 
     // ---- Мониторинг CPU/памяти ----
     // Инициализируем заранее, чтобы baseline-семпл захватил состояние ещё
@@ -951,11 +836,13 @@ int main(int argc, char** argv) {
     const double sysmon_t0 = now_ms();
 
     // ---- Сводка по тензорам ----
-    std::vector<TensorInfo> in_info, out_info;
-    for (int idx : eng.interpreter->inputs())
-        in_info.push_back(describe(eng.interpreter->tensor(idx), idx));
-    for (int idx : eng.interpreter->outputs())
-        out_info.push_back(describe(eng.interpreter->tensor(idx), idx));
+    // Бэкенд уже подготовил описание тензоров в load(); просто берём ссылки.
+    // Копируем в локальные вектора: дальнейший код переиндексирует in_info[0]
+    // и т.п., а ссылки бэкенда живут до конца жизни Engine, так что в
+    // принципе можно было бы и константной ссылкой — но копия 50–200 байт
+    // погоды не делает, а независимость от бэкенда удобнее.
+    std::vector<TensorInfo> in_info  = eng->inputs();
+    std::vector<TensorInfo> out_info = eng->outputs();
 
     std::printf("Входы:\n");
     for (auto& t : in_info)  print_tensor(" -", t);
@@ -1112,7 +999,7 @@ int main(int argc, char** argv) {
     //     перегенерируют — для замера скорости содержимое не важно).
     Image img;
     std::vector<uint8_t> input_rgb;
-    TfLiteTensor* in_t = eng.interpreter->tensor(in_info[0].index);
+    void* in_t = eng->input_data(0);
     double t0 = 0.0, t1 = 0.0;
     if (has_camera) {
         // Для камеры ждём первый кадр уже в основном цикле — здесь лишь
@@ -1199,8 +1086,7 @@ int main(int argc, char** argv) {
     // размеры исходного кадра (для обратного letterbox-маппинга).
     auto run_yolo_postproc = [&](int orig_w, int orig_h) {
         if (!args.yolo) return;
-        const TfLiteTensor* t = eng.interpreter->tensor(
-            out_info[yolo_head.output_index].index);
+        const void* t = eng->output_data(yolo_head.output_index);
         if (!dequantize_output(out_info[yolo_head.output_index], t,
                                yolo_dequant)) return;
         dets = decode_yolov8(yolo_dequant.data(),
@@ -1291,7 +1177,7 @@ int main(int argc, char** argv) {
                 }
             }
 
-            if (!eng.invoke()) {
+            if (!eng->invoke()) {
                 std::fprintf(stderr, "Invoke упал.\n");
                 break;
             }
@@ -1428,12 +1314,12 @@ int main(int argc, char** argv) {
         || (args.random_input && !args.compare_cpu && args.compare_model.empty()));
     if (do_single_invoke) {
         t0 = now_ms();
-        if (!eng.invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
+        if (!eng->invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
         t1 = now_ms();
         std::printf("Инференс: %.3f мс\n", t1 - t0);
 
         for (size_t i = 0; i < out_info.size(); ++i) {
-            const TfLiteTensor* t = eng.interpreter->tensor(out_info[i].index);
+            const void* t = eng->output_data((int)i);
             print_output_head(out_info[i], t);
         }
         sysmon_log("invoke");
@@ -1491,14 +1377,24 @@ int main(int argc, char** argv) {
                            const char* ref_label) {
         std::printf("\n=== Сравнение %s vs %s (%s) ===\n",
                     label_main, ref_label, ref_model_path.c_str());
-        Engine ref;
-        if (!ref.load(ref_model_path, std::string{}, args.threads)) return;
+        // Эталонная модель всегда крутится на CPU того же бэкенда, что
+        // и основная: для tflite это «та же арифметика, без делегата»,
+        // что и есть «золотой» референс. В будущем, если бэкенд эталона
+        // понадобится менять (например, сверять TensorRT vs TFLite-CPU),
+        // здесь можно будет принимать опцию --compare-backend.
+        auto ref = inf::make_engine(args.backend);
+        if (!ref) {
+            std::fprintf(stderr,
+                "[%s] не удалось создать бэкенд '%s' для эталона.\n",
+                ref_label, args.backend.c_str());
+            return;
+        }
+        inf::Engine::Options ropts;
+        ropts.num_threads = args.threads;
+        if (!ref->load(ref_model_path, ropts)) return;
 
-        std::vector<TensorInfo> ref_in, ref_out;
-        for (int idx : ref.interpreter->inputs())
-            ref_in.push_back(describe(ref.interpreter->tensor(idx), idx));
-        for (int idx : ref.interpreter->outputs())
-            ref_out.push_back(describe(ref.interpreter->tensor(idx), idx));
+        std::vector<TensorInfo> ref_in  = ref->inputs();
+        std::vector<TensorInfo> ref_out = ref->outputs();
 
         if (ref_in.size() != 1) {
             std::fprintf(stderr,
@@ -1520,8 +1416,8 @@ int main(int argc, char** argv) {
                 ref_label, shape_to_str(rs).c_str());
             return;
         }
-        TfLiteTensor* main_in_t = eng.interpreter->tensor(in_info[0].index);
-        TfLiteTensor* ref_in_t  = ref.interpreter->tensor(ref_in[0].index);
+        void* main_in_t = eng->input_data(0);
+        void* ref_in_t  = ref->input_data(0);
 
         const size_t n_out = std::min(out_info.size(), ref_out.size());
         if (out_info.size() != ref_out.size()) {
@@ -1545,20 +1441,18 @@ int main(int argc, char** argv) {
         // run_idx используется только для CSV-экспорта (per-run строки),
         // на агрегатную статистику не влияет.
         auto compare_once = [&](int run_idx) -> bool {
-            if (!eng.invoke()) {
+            if (!eng->invoke()) {
                 std::fprintf(stderr, "[main] Invoke упал.\n");
                 return false;
             }
-            if (!ref.invoke()) {
+            if (!ref->invoke()) {
                 std::fprintf(stderr, "[%s] Invoke упал.\n", ref_label);
                 return false;
             }
             std::vector<float> a, b;
             for (size_t i = 0; i < n_out; ++i) {
-                const TfLiteTensor* ta =
-                    eng.interpreter->tensor(out_info[i].index);
-                const TfLiteTensor* tb =
-                    ref.interpreter->tensor(ref_out[i].index);
+                const void* ta = eng->output_data((int)i);
+                const void* tb = ref->output_data((int)i);
                 if (!dequantize_output(out_info[i], ta, a)) continue;
                 if (!dequantize_output(ref_out[i], tb, b)) continue;
                 const size_t m = std::min(a.size(), b.size());
@@ -1788,7 +1682,7 @@ int main(int argc, char** argv) {
     // (для гистограмм / квантилей p50/p95/p99 / поиска выбросов).
     // Накладные ~50–100 нс на now_ms() ничтожны на фоне инференса.
     if (args.benchmark) {
-        for (int i = 0; i < args.warmup; ++i) eng.invoke();
+        for (int i = 0; i < args.warmup; ++i) eng->invoke();
         // После прогрева — фиксируем CPU/память: на этом интервале
         // прогревочные invoke’ы уже отработали, кэши/JIT делегата
         // прогрелись, а сам бенчмарк ещё не начался.
@@ -1831,7 +1725,7 @@ int main(int argc, char** argv) {
             lat.reserve((size_t)args.runs);
             for (int i = 0; i < args.runs; ++i) {
                 double t0b = now_ms();
-                eng.invoke();
+                eng->invoke();
                 double dt = now_ms() - t0b;
                 sum += dt;
                 if (dt < mn) mn = dt;
@@ -1848,7 +1742,7 @@ int main(int argc, char** argv) {
         } else {
             double s0 = now_ms();
             for (int i = 0; i < args.runs; ++i) {
-                eng.invoke();
+                eng->invoke();
                 maybe_sysmon();
             }
             double s1 = now_ms();
