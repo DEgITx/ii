@@ -74,6 +74,7 @@ add_executable(ii
     ii.cpp
     inference.cpp
     image_proc.cpp
+    tile.cpp
     yolo.cpp)
 
 # ---- Платформо-зависимые флаги компилятора и линкер-флаги ----------------

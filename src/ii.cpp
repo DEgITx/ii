@@ -67,6 +67,7 @@
 #include "inference.h"
 #include "stats.h"
 #include "sysmon.h"
+#include "tile.h"
 #include "yolo.h"
 
 #include <atomic>
@@ -601,6 +602,25 @@ struct Args {
     int          output_index = -1;             // -1 = автодетект единственного
     std::string  output_range_str = "unit";     // unit | signed | byte
     std::string  save_output_path;              // PNG-путь для одиночного прогона
+    // ---- Tiling-режим (sliding window) для image-to-image моделей --------
+    // Когда модель имеет маленькое окно входа (FSRCNN 96×96 и т.п.), вместо
+    // того чтобы letterbox’ить весь кадр в 96×96 (и терять детали), мы
+    // пробегаем исходным разрешением сеткой тайлов размером с окно модели,
+    // прогоняем каждый тайл независимо и сшиваем выходы в полноразмерный
+    // canvas. На дисплее и в FPS-счётчике «один полный кадр = 1 такт» —
+    // т.е. фреймрейт показывает реальную пропускную способность на
+    // исходном разрешении (а не на сжатом до 96×96).
+    //
+    // Требования: image-shaped выход (NHWC [1,Hout,Wout,1|3]) с целочисленным
+    // масштабом относительно входа (для SR ×2/×3/×4, для denoise/enhance ×1).
+    // Несовместимо с --yolo, --compare*, --random-input (нужен реальный
+    // источник кадров: image либо --camera).
+    bool         tile_mode    = false;
+    // Перекрытие тайлов в пикселях input-space. 0 — стык в стык
+    // (быстро, могут быть видны швы у SR-моделей). 4..16 — линейное
+    // feathering в зоне overlap, швы становятся незаметны ценой
+    // ~16 байт на пиксель canvas’а (float-аккумуляторы).
+    int          tile_overlap = 0;
     // ---- Захват с камеры (V4L2) ----
     // Когда задан --camera, источник кадров — V4L2-устройство, а не
     // картинка/random. Включает свой собственный цикл инференса (с
@@ -695,6 +715,18 @@ void print_usage(const char* prog) {
         "  --save-output <p>   сохранить декодированный выход в PNG (только\n"
         "                      одиночный инференс — для --loop/--camera не имеет\n"
         "                      смысла плодить кадры на каждом такте)\n"
+        "  --tile              tiling/sliding-window для image-to-image моделей\n"
+        "                      с маленьким окном (FSRCNN 96x96 и т.п.).\n"
+        "                      Кадр режется на тайлы размером со входом модели,\n"
+        "                      каждый тайл прогоняется отдельно, результаты\n"
+        "                      сшиваются в полноразмерный canvas. FPS считается\n"
+        "                      на полный кадр (= 1 такт). Требует image-shaped\n"
+        "                      выход с целочисленным масштабом; несовместимо с\n"
+        "                      --yolo / --compare* / --random-input.\n"
+        "  --tile-overlap <N>  перекрытие тайлов, пикселей в input-space\n"
+        "                      (по умолчанию 0). >0 включает линейное\n"
+        "                      feathering — швы становятся незаметны, ценой\n"
+        "                      ~16 байт/пиксель canvas'а на float-буферы.\n"
         "  --random-input      использовать случайный входной буфер вместо\n"
         "                      изображения; работает с одиночным инференсом,\n"
         "                      --benchmark, --loop, --compare* (картинку можно\n"
@@ -762,6 +794,8 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--output-index"  && i + 1 < argc) a.output_index = std::atoi(argv[++i]);
         else if (s == "--output-range"  && i + 1 < argc) a.output_range_str = argv[++i];
         else if (s == "--save-output"   && i + 1 < argc) a.save_output_path = argv[++i];
+        else if (s == "--tile")                          a.tile_mode    = true;
+        else if (s == "--tile-overlap"  && i + 1 < argc) a.tile_overlap = std::atoi(argv[++i]);
         else if (s == "--random-input"
               || s == "--compare-random")              a.random_input = true;
         else if ((s == "--random-runs" || s == "--compare-runs")
@@ -870,6 +904,48 @@ int main(int argc, char** argv) {
             "Внимание: --save-output игнорируется в режиме --loop/--camera "
             "(имеет смысл только для одиночного инференса).\n");
     }
+    // Валидация --tile: режим осмыслен только для image-to-image моделей с
+    // реальным источником кадров и без альтернативных интерпретаций выхода.
+    if (args.tile_mode) {
+        if (args.yolo) {
+            std::fprintf(stderr,
+                "--tile и --yolo несовместимы: выход модели либо image-to-image, "
+                "либо детекции.\n");
+            return 1;
+        }
+        if (args.compare_cpu || !args.compare_model.empty()) {
+            std::fprintf(stderr,
+                "--tile несовместим с --compare*: сравнение работает с одиночным "
+                "invoke, а не tile-pass'ом. Прогоните --compare отдельно.\n");
+            return 1;
+        }
+        if (args.random_input) {
+            std::fprintf(stderr,
+                "--tile несовместим с --random-input: нужен реальный кадр для "
+                "разбиения на тайлы.\n");
+            return 1;
+        }
+        if (!has_image && !has_camera) {
+            std::fprintf(stderr,
+                "--tile требует источник кадров: image или --camera.\n");
+            return 1;
+        }
+        if (args.tile_overlap < 0) {
+            std::fprintf(stderr,
+                "--tile-overlap должен быть >= 0 (получено %d).\n",
+                args.tile_overlap);
+            return 1;
+        }
+        if (args.show_input) {
+            // input_rgb в tile-режиме содержит только последний обработанный
+            // тайл — толку показывать его на экране нет. Не блокируем,
+            // только предупреждаем: пусть пользователь сам решит.
+            std::fprintf(stderr,
+                "Внимание: --show-input в режиме --tile показывает только "
+                "последний тайл (бессмысленно). Используйте --show-output "
+                "для просмотра canvas’а или дефолт для исходника.\n");
+        }
+    }
 
     auto eng = inf::make_engine(args.backend);
     if (!eng) {
@@ -947,7 +1023,7 @@ int main(int argc, char** argv) {
     // в видео-цикле не повторяется. Если не нашлось — это фатально для
     // соответствующих режимов.
     const bool decode_output_needed =
-        args.show_output || !args.save_output_path.empty();
+        args.show_output || !args.save_output_path.empty() || args.tile_mode;
     int image_output_idx = -1;
     if (decode_output_needed) {
         if (args.output_index >= 0) {
@@ -983,6 +1059,60 @@ int main(int argc, char** argv) {
             out_info[image_output_idx].name.c_str(),
             shape_to_str(out_info[image_output_idx].shape).c_str(),
             args.output_range_str.c_str());
+    }
+
+    // ---- Масштаб модели для tile-режима ---------------------------------
+    // Размер выхода относительно входа должен быть целым: для SR это ×2/×3/
+    // ×4, для denoise/enhance — ×1. Нецелочисленный масштаб сделал бы
+    // позиционирование тайлов в canvas неоднозначным, поэтому валим сразу.
+    // Значения по умолчанию (1,1) безопасны и не используются вне tile-режима.
+    int scale_x = 1, scale_y = 1;
+    if (args.tile_mode) {
+        if (image_output_idx < 0) {
+            std::fprintf(stderr,
+                "--tile требует image-shaped выход (NHWC [1,H,W,1|3]).\n");
+            return 3;
+        }
+        // Вход модели уже проверен ниже как [1,H,W,1|3]; здесь предполагаем
+        // те же поля. Берём их явно из shape входа.
+        const auto& is_ = in_info[0].shape;
+        if (is_.size() != 4 || is_[0] != 1) {
+            std::fprintf(stderr,
+                "--tile поддерживает только NHWC [1,H,W,1|3] вход (получено %s).\n",
+                shape_to_str(is_).c_str());
+            return 3;
+        }
+        const int in_h_v = is_[1];
+        const int in_w_v = is_[2];
+        if (in_h_v <= 0 || in_w_v <= 0) {
+            std::fprintf(stderr,
+                "--tile: размеры входа [%d,%d] должны быть статическими и > 0 "
+                "(динамические/неизвестные оси не поддержаны).\n",
+                in_h_v, in_w_v);
+            return 3;
+        }
+        const auto& os = out_info[image_output_idx].shape;
+        if (os[1] <= 0 || os[2] <= 0
+            || os[1] % in_h_v != 0 || os[2] % in_w_v != 0) {
+            std::fprintf(stderr,
+                "--tile: размер выхода [%d,%d] должен быть целочисленно "
+                "кратен размеру входа [%d,%d].\n",
+                os[1], os[2], in_h_v, in_w_v);
+            return 3;
+        }
+        scale_y = os[1] / in_h_v;
+        scale_x = os[2] / in_w_v;
+        if (args.tile_overlap >= in_w_v || args.tile_overlap >= in_h_v) {
+            std::fprintf(stderr,
+                "--tile-overlap=%d должен быть строго меньше входа %dx%d "
+                "(иначе шаг сетки <= 0).\n",
+                args.tile_overlap, in_w_v, in_h_v);
+            return 3;
+        }
+        std::printf(
+            "Tile: %dx%d, scale=%dx (выход %dx%d), overlap=%d%s\n",
+            in_w_v, in_h_v, scale_x, os[2], os[1], args.tile_overlap,
+            args.tile_overlap > 0 ? " (linear feathering)" : "");
     }
 
     // ---- Экспорт замеров в CSV ----
@@ -1170,13 +1300,27 @@ int main(int argc, char** argv) {
             in_w, in_h, in_c);
     } else if (has_image) {
         if (!load_image(args.image, img)) return 4;
-        std::printf(
-            "Изображение: %s  %dx%d -> letterbox %dx%dx%d%s\n",
-            args.image.c_str(), img.w, img.h, in_w, in_h, in_c,
-            in_c == 1 ? " (RGB→luma BT.601 перед инференсом)" : "");
-
-        letterbox(img, in_w, in_h, input_rgb);
-        if (!fill_model_from_rgb()) return 5;
+        if (args.tile_mode) {
+            // В tile-режиме источник остаётся исходного разрешения; летающий
+            // letterbox не нужен — каждый тайл нарезается из img.rgb прямо
+            // в input_rgb внутри run_tile_pass.
+            const auto layout = tile::plan_tiles(
+                img.w, img.h, in_w, in_h, args.tile_overlap);
+            std::printf(
+                "Изображение: %s  %dx%d -> tile %dx%d×%d тайлов "
+                "(scale=%dx, overlap=%d, выход %dx%d)%s\n",
+                args.image.c_str(), img.w, img.h,
+                in_w, in_h, layout.count(), scale_x, args.tile_overlap,
+                img.w * scale_x, img.h * scale_y,
+                in_c == 1 ? " [RGB→luma BT.601 каждый тайл]" : "");
+        } else {
+            std::printf(
+                "Изображение: %s  %dx%d -> letterbox %dx%dx%d%s\n",
+                args.image.c_str(), img.w, img.h, in_w, in_h, in_c,
+                in_c == 1 ? " (RGB→luma BT.601 перед инференсом)" : "");
+            letterbox(img, in_w, in_h, input_rgb);
+            if (!fill_model_from_rgb()) return 5;
+        }
     } else {
         // --random-input без картинки: формируем случайный буфер длиной
         // numel(shape). fill_input трактует его плоско, так что для любого
@@ -1250,6 +1394,51 @@ int main(int argc, char** argv) {
         const void* data = eng->output_data(image_output_idx);
         return imgproc::decode_image_output(out_info[image_output_idx],
                                             data, dec_opts, out_img);
+    };
+
+    // ---- Tiling: sliding-window pass через всю исходную картинку --------
+    // Один полный pass: спланировать сетку тайлов размером с вход модели,
+    // для каждого тайла извлечь RGB → fill_input → invoke → декодировать →
+    // вставить в canvas. На выходе out_img заполняется полноразмерным
+    // RGB-кадром (исходное разрешение × scale модели), и весь дальнейший
+    // display/save код подхватывает его без изменений.
+    //
+    // Возвращает false при фатальной ошибке (Invoke упал) — вызывающая
+    // сторона должна прервать цикл. Декод одного тайла, не сработавший,
+    // пропускается без обрыва — для видео-цикла это важно, иначе один
+    // битый кадр уронит весь поток.
+    tile::TileCanvas tile_canvas;
+    auto run_tile_pass = [&](const uint8_t* src_rgb,
+                             int src_w, int src_h) -> bool {
+        if (image_output_idx < 0) return false;
+        const auto layout = tile::plan_tiles(
+            src_w, src_h, in_w, in_h, args.tile_overlap);
+        tile_canvas.reset(src_w * scale_x, src_h * scale_y,
+                          args.tile_overlap * scale_x,
+                          args.tile_overlap > 0);
+        for (int j = 0; j < layout.ny(); ++j) {
+            for (int i = 0; i < layout.nx(); ++i) {
+                const int x0 = layout.x0[i];
+                const int y0 = layout.y0[j];
+                tile::extract_tile(src_rgb, src_w, src_h, x0, y0,
+                                   in_w, in_h, input_rgb);
+                if (!fill_model_from_rgb()) return false;
+                if (!eng->invoke()) return false;
+                if (!decode_current_output()) continue;
+                tile_canvas.paste(out_img,
+                                  x0 * scale_x, y0 * scale_y);
+            }
+        }
+        tile_canvas.finalize();
+        // Заливаем итог в out_img: остальной код (display/save/show_output)
+        // и так уже умеет работать с out_img — никаких ветвлений снаружи.
+        // Копия canvas.rgb (~единицы МБ для 1080p) ничтожна на фоне сотен
+        // мс per-tile инференса.
+        out_img.width        = tile_canvas.width;
+        out_img.height       = tile_canvas.height;
+        out_img.channels_src = 3;
+        out_img.rgb          = tile_canvas.rgb;
+        return true;
     };
 
     // Декодирование выхода YOLO для последнего инференса. Вызывается
@@ -1342,15 +1531,22 @@ int main(int argc, char** argv) {
                 }
                 orig_w = fw;
                 orig_h = fh;
-                if (needs_preprocess) {
+                if (args.tile_mode) {
+                    // Tile-pass совмещает preprocess+fill+invoke+decode на
+                    // уровне отдельных тайлов. Один FPS-«тик» цикла =
+                    // один полный кадр, как пользователь и ожидает.
+                    if (!run_tile_pass(frame, fw, fh)) break;
+                } else if (needs_preprocess) {
                     letterbox(frame, fw, fh, in_w, in_h, input_rgb);
                     if (!fill_model_from_rgb()) break;
                 }
             }
 
-            if (!eng->invoke()) {
-                std::fprintf(stderr, "Invoke упал.\n");
-                break;
+            if (!args.tile_mode) {
+                if (!eng->invoke()) {
+                    std::fprintf(stderr, "Invoke упал.\n");
+                    break;
+                }
             }
             fps.tick();
             ++frame_n;
@@ -1361,8 +1557,10 @@ int main(int argc, char** argv) {
             }
             // Декодирование выхода-картинки делаем только когда оно реально
             // нужно для отображения — в чистом --loop без дисплея смысла
-            // тратить CPU на dequant миллионов пикселей нет.
-            if (args.show_output && disp) {
+            // тратить CPU на dequant миллионов пикселей нет. В tile-режиме
+            // out_img уже заполнен внутри run_tile_pass (canvas) — повторный
+            // decode не нужен.
+            if (args.show_output && disp && !args.tile_mode) {
                 decode_current_output();
             }
 
@@ -1506,22 +1704,40 @@ int main(int argc, char** argv) {
         || (args.random_input && !args.compare_cpu && args.compare_model.empty()));
     if (do_single_invoke) {
         t0 = now_ms();
-        if (!eng->invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
+        if (args.tile_mode) {
+            // Один полный pass по тайлам: внутри run_tile_pass — N инфёров,
+            // декод каждого тайла и сборка canvas в out_img.
+            if (!run_tile_pass(img.rgb.data(), img.w, img.h)) {
+                std::fprintf(stderr, "Tile pass упал.\n");
+                return 6;
+            }
+        } else {
+            if (!eng->invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
+        }
         t1 = now_ms();
-        std::printf("Инференс: %.3f мс\n", t1 - t0);
+        std::printf("Инференс: %.3f мс%s\n", t1 - t0,
+                    args.tile_mode ? " (полный tile-pass)" : "");
 
-        for (size_t i = 0; i < out_info.size(); ++i) {
-            const void* t = eng->output_data((int)i);
-            print_output_head(out_info[i], t);
+        if (!args.tile_mode) {
+            // В tile-режиме «последний» инвок — это последний тайл, печатать
+            // его голову неинформативно: реальный итог — canvas в out_img.
+            for (size_t i = 0; i < out_info.size(); ++i) {
+                const void* t = eng->output_data((int)i);
+                print_output_head(out_info[i], t);
+            }
         }
         sysmon_log("invoke");
 
         // Декод выхода-изображения для одиночного прогона: нужен
         // и для --show-output (используется ниже в display-блоке),
         // и для --save-output (сохранение в PNG прямо здесь — это
-        // единственный момент, когда оно осмысленно).
+        // единственный момент, когда оно осмысленно). В tile-режиме
+        // out_img уже заполнен полноразмерным canvas’ом — декодировать
+        // повторно не нужно.
         if (decode_output_needed) {
-            if (decode_current_output()) {
+            const bool have_output =
+                args.tile_mode ? !out_img.rgb.empty() : decode_current_output();
+            if (have_output) {
                 std::printf(
                     "Декодирован выход: %dx%d, исх. каналов=%d "
                     "(всего %zu uint8 RGB байт)\n",
@@ -1909,7 +2125,17 @@ int main(int argc, char** argv) {
     // (для гистограмм / квантилей p50/p95/p99 / поиска выбросов).
     // Накладные ~50–100 нс на now_ms() ничтожны на фоне инференса.
     if (args.benchmark) {
-        for (int i = 0; i < args.warmup; ++i) eng->invoke();
+        // В tile-режиме «один прогон» — это полный pass по всем тайлам
+        // исходного кадра. Меряем именно его, чтобы пользователь видел
+        // реальный FPS на исходном разрешении, а не на 96×96.
+        // В обычном режиме — один eng->invoke() как раньше.
+        auto bench_step = [&]() -> bool {
+            if (args.tile_mode) {
+                return run_tile_pass(img.rgb.data(), img.w, img.h);
+            }
+            return eng->invoke();
+        };
+        for (int i = 0; i < args.warmup; ++i) bench_step();
         // После прогрева — фиксируем CPU/память: на этом интервале
         // прогревочные invoke’ы уже отработали, кэши/JIT делегата
         // прогрелись, а сам бенчмарк ещё не начался.
@@ -1920,6 +2146,14 @@ int main(int argc, char** argv) {
         if (dump_bench) {
             bench_csv.meta("warmup", "%d", args.warmup);
             bench_csv.meta("runs",   "%d", args.runs);
+            if (args.tile_mode) {
+                bench_csv.meta("tile_mode",    "%s", "1");
+                bench_csv.meta("tile_overlap", "%d", args.tile_overlap);
+                bench_csv.meta("tile_in",      "%dx%d", in_w, in_h);
+                bench_csv.meta("source_in",    "%dx%d", img.w, img.h);
+                bench_csv.meta("source_out",   "%dx%d",
+                               img.w * scale_x, img.h * scale_y);
+            }
             bench_csv.header("run,ms");
         }
 
@@ -1952,7 +2186,7 @@ int main(int argc, char** argv) {
             lat.reserve((size_t)args.runs);
             for (int i = 0; i < args.runs; ++i) {
                 double t0b = now_ms();
-                eng->invoke();
+                bench_step();
                 double dt = now_ms() - t0b;
                 sum += dt;
                 if (dt < mn) mn = dt;
@@ -1963,19 +2197,25 @@ int main(int argc, char** argv) {
             }
             bench_csv.flush();
             double avg = sum / args.runs;
-            std::printf("Бенчмарк: %d итераций, среднее %.3f мс "
-                        "(min %.3f, max %.3f), %.1f инф/с\n",
-                        args.runs, avg, mn, mx, 1000.0 / avg);
+            std::printf("Бенчмарк: %d %s, среднее %.3f мс "
+                        "(min %.3f, max %.3f), %.1f %s/с\n",
+                        args.runs,
+                        args.tile_mode ? "полных кадров" : "итераций",
+                        avg, mn, mx, 1000.0 / avg,
+                        args.tile_mode ? "кадр" : "инф");
         } else {
             double s0 = now_ms();
             for (int i = 0; i < args.runs; ++i) {
-                eng->invoke();
+                bench_step();
                 maybe_sysmon();
             }
             double s1 = now_ms();
             double avg = (s1 - s0) / args.runs;
-            std::printf("Бенчмарк: %d итераций, среднее %.3f мс, %.1f инф/с\n",
-                        args.runs, avg, 1000.0 / avg);
+            std::printf("Бенчмарк: %d %s, среднее %.3f мс, %.1f %s/с\n",
+                        args.runs,
+                        args.tile_mode ? "полных кадров" : "итераций",
+                        avg, 1000.0 / avg,
+                        args.tile_mode ? "кадр" : "инф");
         }
         // Финальный семпл «сразу после бенчмарка» — даёт дельту от
         // последнего periodic-семпла (или от warmup, если periodic не
@@ -2020,8 +2260,15 @@ int main(int argc, char** argv) {
     // ---- Видео-цикл без окна ----
     // Источника кадров нет — общий цикл просто крутит invoke + FPS.
     // Полезно, чтобы померить чистую пропускную способность NPU.
+    // В tile-режиме источник обязателен (статический исходник),
+    // чтобы run_tile_pass получал полноразмерный кадр для нарезки.
     if (args.loop && !args.display) {
-        int rc = run_video_loop(/*src=*/nullptr, /*disp=*/nullptr);
+        std::unique_ptr<StaticFrameSource> static_src;
+        if (args.tile_mode && has_image) {
+            static_src = std::make_unique<StaticFrameSource>(
+                img.rgb.data(), img.w, img.h);
+        }
+        int rc = run_video_loop(static_src.get(), /*disp=*/nullptr);
         sysmon_finalize();
         return rc;
     }
@@ -2063,8 +2310,16 @@ int main(int argc, char** argv) {
         // Источник статический: вход модели уже залит в image-блоке
         // выше, поэтому StaticFrameSource просит цикл ничего не
         // препроцессить — только invoke + show_rgb на каждой итерации.
+        // В tile-режиме источник для run_tile_pass — это всегда исходное
+        // изображение (а не letterbox/canvas), потому что тайлы нарезаются
+        // из исходного разрешения. Frame, который отображается в окне,
+        // выбирается отдельно внутри run_video_loop по тем же приоритетам
+        // (--show-output > --show-input > исходный кадр).
         if (args.loop) {
-            StaticFrameSource src(frame, fw, fh);
+            const uint8_t* src_buf = args.tile_mode ? img.rgb.data() : frame;
+            const int      src_w   = args.tile_mode ? img.w : fw;
+            const int      src_h   = args.tile_mode ? img.h : fh;
+            StaticFrameSource src(src_buf, src_w, src_h);
             int rc = run_video_loop(&src, disp.get());
             sysmon_finalize();
             return rc;
