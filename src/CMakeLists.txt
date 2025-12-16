@@ -5,8 +5,20 @@
 #   * Linux / BSP — полный набор (Wayland/EGL/GLES2, V4L2);
 #   * Linux dev-host без видеокарты — собирайте с -DUSE_DISPLAY=OFF;
 #   * Windows / macOS dev-host — Wayland/V4L2 не собираются, делегата нет,
-#     раннер работает в CPU-режиме (или с альтернативным бэкендом, когда
-#     он появится — TensorRT / DirectML).
+#     раннер работает в CPU-режиме (или с альтернативным бэкендом —
+#     TensorRT / DirectML).
+#
+# Доступные бэкенды инференса (включаются опциями CMake):
+#   * USE_TFLITE   (ON  по умолчанию) — TensorFlow Lite + external delegate
+#                                       (включая внешний NPU-делегат на NPU);
+#   * USE_TENSORRT (OFF по умолчанию) — NVIDIA TensorRT 10+, GPU;
+#                                       требует CUDA Runtime и nvinfer
+#                                       (опционально nvonnxparser для
+#                                       сборки .engine из .onnx);
+#   * USE_DIRECTML (OFF по умолчанию) — ONNX Runtime + DirectML EP,
+#                                       NPU/GPU/iGPU под Windows
+#                                       (на не-Windows собирается только
+#                                       CPU EP — полезно для регрессий).
 #
 # Пример (Linux, на устройстве/в SDK BSP):
 #     cmake -S . -B build -DTFLITE_ROOT=/usr
@@ -48,13 +60,14 @@ else()
     option(USE_CAMERA  "Сборка с V4L2 backend'ом для захвата с камеры"          OFF)
 endif()
 
-# Бэкенды инференса. TFLite пока единственный реализованный, поэтому
-# по-умолчанию ON. TensorRT/DirectML — placeholder под будущие реализации
-# (см. inference.cpp:make_engine). Когда они появятся, эти опции включат
-# линковку соответствующих *.cpp + библиотек.
+# Бэкенды инференса. TFLite по-умолчанию ON (это основной путь внешний NPU-делегат
+# на NPU). TensorRT и DirectML — опциональны: их сборка требует
+# внешних SDK (CUDA+TensorRT и ONNX Runtime соответственно), поэтому
+# по-умолчанию OFF; включаются опциями ниже + указанием путей через
+# TRT_ROOT / ORT_ROOT (см. блоки ниже).
 option(USE_TFLITE    "Сборка с бэкендом TensorFlow Lite"                       ON)
-option(USE_TENSORRT  "Сборка с бэкендом NVIDIA TensorRT (placeholder)"        OFF)
-option(USE_DIRECTML  "Сборка с бэкендом DirectML/Windows ML (placeholder)"    OFF)
+option(USE_TENSORRT  "Сборка с бэкендом NVIDIA TensorRT (требует CUDA+nvinfer)" OFF)
+option(USE_DIRECTML  "Сборка с бэкендом DirectML/Windows ML (требует ORT)"      OFF)
 
 # ---- Бинарь (без бэкендов; они подключаются ниже опционально) ------------
 add_executable(ii
@@ -129,20 +142,143 @@ if(USE_TFLITE)
     target_compile_definitions(ii PRIVATE INF_HAS_TFLITE=1)
 endif()
 
-# ---- Бэкенд: TensorRT (заготовка) ----------------------------------------
-# Когда появится inference_tensorrt.cpp, здесь будет find_package(CUDA) +
-# подключение nvinfer/nvonnxparser и target_sources(ii PRIVATE inference_tensorrt.cpp).
+# ---- Бэкенд: TensorRT ----------------------------------------------------
+# Требует TensorRT 10+ (enqueueV3 / setTensorAddress) и CUDA Runtime.
+# Пути к TRT задаются через -DTRT_ROOT=/path или явно
+# -DTRT_INCLUDE_DIR=... -DTRT_NVINFER_LIB=... ; nvonnxparser ищется
+# опционально (без него бэкенд работает, но только с .engine/.plan).
 if(USE_TENSORRT)
-    message(FATAL_ERROR
-        "USE_TENSORRT=ON, но бэкенд TensorRT пока не реализован. "
-        "Добавьте inference_tensorrt.cpp перед включением опции.")
+    # CUDA Runtime: используем современный модуль CUDAToolkit (CMake 3.17+),
+    # он подбирает CUDA::cudart как импортированную цель без ручного
+    # прописывания путей. На старых CMake — find_package(CUDA REQUIRED).
+    find_package(CUDAToolkit QUIET)
+    if(NOT CUDAToolkit_FOUND)
+        find_package(CUDA REQUIRED)
+        set(_INF_CUDART_LIB ${CUDA_CUDART_LIBRARY})
+        set(_INF_CUDA_INCLUDE_DIR ${CUDA_INCLUDE_DIRS})
+    else()
+        # Используем импортированный таргет ниже.
+    endif()
+
+    set(TRT_ROOT "" CACHE PATH "Корень TensorRT (содержит include/ и lib/)")
+
+    find_path(TRT_INCLUDE_DIR
+        NAMES NvInfer.h
+        HINTS ${TRT_ROOT}/include
+              /usr/include /usr/local/include
+              /usr/include/x86_64-linux-gnu
+              /usr/include/aarch64-linux-gnu)
+
+    find_library(TRT_NVINFER_LIB
+        NAMES nvinfer nvinfer_10
+        HINTS ${TRT_ROOT}/lib ${TRT_ROOT}/lib64 ${TRT_ROOT}/bin
+              /usr/lib /usr/local/lib
+              /usr/lib/x86_64-linux-gnu
+              /usr/lib/aarch64-linux-gnu)
+
+    find_library(TRT_NVONNXPARSER_LIB
+        NAMES nvonnxparser nvonnxparser_10
+        HINTS ${TRT_ROOT}/lib ${TRT_ROOT}/lib64 ${TRT_ROOT}/bin
+              /usr/lib /usr/local/lib
+              /usr/lib/x86_64-linux-gnu
+              /usr/lib/aarch64-linux-gnu)
+
+    if(NOT TRT_INCLUDE_DIR OR NOT TRT_NVINFER_LIB)
+        message(FATAL_ERROR
+            "Не найден TensorRT. Передайте -DTRT_ROOT=/path или "
+            "-DTRT_INCLUDE_DIR=... -DTRT_NVINFER_LIB=... (поставьте "
+            "TensorRT 10+ из NVIDIA-репозитория или соберите без "
+            "TRT: -DUSE_TENSORRT=OFF).")
+    endif()
+
+    message(STATUS "TensorRT include: ${TRT_INCLUDE_DIR}")
+    message(STATUS "TensorRT lib:     ${TRT_NVINFER_LIB}")
+    if(TRT_NVONNXPARSER_LIB)
+        message(STATUS "TensorRT onnxparser: ${TRT_NVONNXPARSER_LIB}")
+    else()
+        message(STATUS "TensorRT onnxparser: НЕ найден — поддержка .onnx "
+                       "отключена, доступны только .engine/.plan/.trt")
+    endif()
+
+    target_sources(ii PRIVATE inference_tensorrt.cpp)
+    target_include_directories(ii PRIVATE ${TRT_INCLUDE_DIR})
+    target_link_libraries(ii PRIVATE ${TRT_NVINFER_LIB})
+    if(CUDAToolkit_FOUND)
+        target_link_libraries(ii PRIVATE CUDA::cudart)
+    else()
+        target_include_directories(ii PRIVATE ${_INF_CUDA_INCLUDE_DIR})
+        target_link_libraries(ii PRIVATE ${_INF_CUDART_LIB})
+    endif()
+    if(TRT_NVONNXPARSER_LIB)
+        target_link_libraries(ii PRIVATE ${TRT_NVONNXPARSER_LIB})
+        target_compile_definitions(ii PRIVATE INF_TRT_HAS_ONNX=1)
+    endif()
+    target_compile_definitions(ii PRIVATE INF_HAS_TENSORRT=1)
 endif()
 
-# ---- Бэкенд: DirectML (заготовка) ----------------------------------------
+# ---- Бэкенд: DirectML (через ONNX Runtime) -------------------------------
+# Бэкенд реализован поверх ONNX Runtime + DirectML execution provider —
+# это и есть продакшн-стек Windows ML. Сборка требует поставки ORT с
+# заголовками + onnxruntime.dll/lib. На Windows дополнительно ищем
+# dml_provider_factory.h (поставляется в той же тарбе ORT) и включаем
+# INF_DML_EP_AVAILABLE, без которого собирается только CPU EP-режим.
 if(USE_DIRECTML)
-    message(FATAL_ERROR
-        "USE_DIRECTML=ON, но бэкенд DirectML пока не реализован. "
-        "Добавьте inference_directml.cpp перед включением опции.")
+    set(ORT_ROOT "" CACHE PATH
+        "Корень ONNX Runtime (содержит include/ и lib/)")
+
+    find_path(ORT_INCLUDE_DIR
+        NAMES onnxruntime_cxx_api.h
+        HINTS ${ORT_ROOT}/include
+              ${ORT_ROOT}/include/onnxruntime
+              ${ORT_ROOT}/include/onnxruntime/core/session
+              /usr/include /usr/local/include
+              /usr/include/onnxruntime)
+
+    find_library(ORT_LIB
+        NAMES onnxruntime
+        HINTS ${ORT_ROOT}/lib ${ORT_ROOT}/lib64 ${ORT_ROOT}/bin
+              /usr/lib /usr/local/lib
+              /usr/lib/x86_64-linux-gnu)
+
+    if(NOT ORT_INCLUDE_DIR OR NOT ORT_LIB)
+        message(FATAL_ERROR
+            "Не найден ONNX Runtime. Скачайте релиз с GitHub "
+            "(microsoft/onnxruntime) и передайте -DORT_ROOT=/path. "
+            "Для DirectML на Windows нужна сборка onnxruntime-win-x64-* "
+            "(содержит dml_provider_factory.h).")
+    endif()
+
+    message(STATUS "ONNX Runtime include: ${ORT_INCLUDE_DIR}")
+    message(STATUS "ONNX Runtime lib:     ${ORT_LIB}")
+
+    target_sources(ii PRIVATE inference_directml.cpp)
+    target_include_directories(ii PRIVATE ${ORT_INCLUDE_DIR})
+    target_link_libraries(ii PRIVATE ${ORT_LIB})
+    target_compile_definitions(ii PRIVATE INF_HAS_DIRECTML=1)
+
+    if(WIN32)
+        # dml_provider_factory.h обычно лежит рядом с onnxruntime_cxx_api.h.
+        find_path(ORT_DML_PROVIDER_HEADER
+            NAMES dml_provider_factory.h
+            HINTS ${ORT_INCLUDE_DIR}
+                  ${ORT_ROOT}/include
+                  ${ORT_ROOT}/include/onnxruntime)
+        if(ORT_DML_PROVIDER_HEADER)
+            target_compile_definitions(ii PRIVATE INF_DML_EP_AVAILABLE=1)
+            message(STATUS "DirectML EP: подключён (header: "
+                           "${ORT_DML_PROVIDER_HEADER})")
+        else()
+            message(WARNING
+                "Не найден dml_provider_factory.h — DirectML EP не "
+                "активирован. Поставьте onnxruntime-win-x64-* "
+                "(или onnxruntime-directml). Бэкенд 'directml' "
+                "соберётся, но будет работать только в CPU-EP режиме.")
+        endif()
+    else()
+        message(STATUS "DirectML EP: недоступен на ${CMAKE_SYSTEM_NAME} — "
+                       "бэкенд 'directml' собирается только с CPU EP "
+                       "(полезно для регрессий ONNX vs TFLite).")
+    endif()
 endif()
 
 # ---- Backend для камеры (V4L2) -------------------------------------------
