@@ -103,10 +103,35 @@ std::string shape_to_str(const std::vector<int>& shape) {
     return s;
 }
 
-// Является ли shape «картинкой» NHWC [1,H,W,3] — единственный формат, под
-// который заточены letterbox/изображение/--display/--yolo.
-bool is_nhwc3(const std::vector<int>& s) {
-    return s.size() == 4 && s[0] == 1 && s[3] == 3;
+// Число каналов «картиночного» входа модели по shape:
+//   * 3 — обычная RGB-модель NHWC [1,H,W,3];
+//   * 1 — grayscale/Y-моделей NHWC [1,H,W,1] (FSRCNN-Y, denoise по
+//         яркости, и т.п.) — на вход подаём luma (BT.601) от RGB-кадра;
+//   * 0 — не «картинка» в этом смысле, обычные пайплайны letterbox/
+//         display/yolo не применимы.
+int image_input_channels(const std::vector<int>& s) {
+    if (s.size() != 4 || s[0] != 1) return 0;
+    if (s[3] == 1 || s[3] == 3) return s[3];
+    return 0;
+}
+
+inline bool is_image_input(const std::vector<int>& s) {
+    return image_input_channels(s) > 0;
+}
+
+// RGB HWC → grayscale HW (BT.601 luma). Интовая аппроксимация:
+// Y = (77*R + 150*G + 29*B) / 256. Сумма коэффициентов = 256 → сдвиг
+// вправо на 8 ровно делит на 256, без округления (отклонение от точной
+// BT.601 ≤ 1 на старшем бите — для квантования к INT8 это шум модели).
+inline void rgb_to_gray(const uint8_t* rgb, std::size_t pixels,
+                        std::vector<uint8_t>& gray) {
+    gray.resize(pixels);
+    for (std::size_t i = 0; i < pixels; ++i) {
+        const unsigned r = rgb[i * 3 + 0];
+        const unsigned g = rgb[i * 3 + 1];
+        const unsigned b = rgb[i * 3 + 2];
+        gray[i] = (uint8_t)((77u * r + 150u * g + 29u * b) >> 8);
+    }
 }
 
 void print_tensor(const char* prefix, const TensorInfo& t) {
@@ -1080,15 +1105,21 @@ int main(int argc, char** argv) {
                 s.mem_total_kb, s.mem_avail_kb, s.wall_ms);
         }
     };
-    // NHWC [1,H,W,3] — типовой формат для путей с изображением. Для чисто
-    // рандомного --compare-random разрешаем любой shape (например [1,9,9,1]).
+    // NHWC [1,H,W,1|3] — типовой формат для путей с изображением:
+    //   * C=3 — обычная RGB-модель;
+    //   * C=1 — grayscale/Y-модель (FSRCNN-Y, denoise по яркости и т.п.);
+    //     RGB-кадр конвертируем в luma BT.601 непосредственно перед
+    //     fill_input, см. fill_model_from_rgb ниже.
+    // Для чисто рандомного --compare-random разрешаем любой shape
+    // (например [1,9,9,1]) — buffer трактуется плоско.
     const auto& s = in_info[0].shape;
-    const bool nhwc3 = is_nhwc3(s);
+    const int  in_c  = image_input_channels(s);
+    const bool nhwc_img = in_c > 0;
     int in_h = 0, in_w = 0;
-    if (nhwc3) { in_h = s[1]; in_w = s[2]; }
-    if (has_image && !nhwc3) {
+    if (nhwc_img) { in_h = s[1]; in_w = s[2]; }
+    if (has_image && !nhwc_img) {
         std::fprintf(stderr,
-            "Для путей с изображением поддерживается только NHWC [1,H,W,3]. "
+            "Для путей с изображением поддерживается только NHWC [1,H,W,1|3]. "
             "Получено shape=%s.\n", shape_to_str(s).c_str());
         return 3;
     }
@@ -1102,32 +1133,54 @@ int main(int argc, char** argv) {
     //     по shape входа и заливаем его (один раз; benchmark/loop не
     //     перегенерируют — для замера скорости содержимое не важно).
     Image img;
+    // input_rgb — letterbox-кадр для модели и для --show-input в окне
+    // (всегда 3 канала, потому что Display::show_rgb принимает RGB).
+    // input_gray используется только когда in_c == 1: RGB → Y перед
+    // fill_input, чтобы байтовый размер буфера совпал с numel тензора.
     std::vector<uint8_t> input_rgb;
+    std::vector<uint8_t> input_gray;
     void* in_t = eng->input_data(0);
     double t0 = 0.0, t1 = 0.0;
+
+    // Один источник правды для «как залить RGB-кадр в модель» — вызывается
+    // из image-пути, видео-цикла, камеры и одиночного random-пути (после
+    // вспомогательной интерпретации random-буфера как RGB-кадра in_w x in_h,
+    // см. ниже). Для C=1 делает RGB → luma; для C=3 — отдаёт буфер напрямую.
+    auto fill_model_from_rgb = [&]() -> bool {
+        if (in_c == 1) {
+            rgb_to_gray(input_rgb.data(), (size_t)in_w * in_h, input_gray);
+            return fill_input(input_gray, in_info[0], in_t);
+        }
+        return fill_input(input_rgb, in_info[0], in_t);
+    };
     if (has_camera) {
         // Для камеры ждём первый кадр уже в основном цикле — здесь лишь
-        // проверяем, что вход модели совместим (NHWC [1,H,W,3]).
-        if (!nhwc3) {
+        // проверяем, что вход модели совместим (NHWC [1,H,W,1|3]).
+        if (!nhwc_img) {
             std::fprintf(stderr,
-                "Для --camera нужен вход NHWC [1,H,W,3], получено %s.\n",
+                "Для --camera нужен вход NHWC [1,H,W,1|3], получено %s.\n",
                 shape_to_str(s).c_str());
             return 4;
         }
-        std::printf("Камера: устройство=%s, запрошено %dx%d @ %d fps\n",
-                    args.camera_device.c_str(),
-                    args.camera_w, args.camera_h, args.camera_fps);
+        std::printf(
+            "Камера: устройство=%s, запрошено %dx%d @ %d fps, "
+            "вход модели %dx%dx%d\n",
+            args.camera_device.c_str(),
+            args.camera_w, args.camera_h, args.camera_fps,
+            in_w, in_h, in_c);
     } else if (has_image) {
         if (!load_image(args.image, img)) return 4;
-        std::printf("Изображение: %s  %dx%d -> letterbox %dx%d\n",
-                    args.image.c_str(), img.w, img.h, in_w, in_h);
+        std::printf(
+            "Изображение: %s  %dx%d -> letterbox %dx%dx%d%s\n",
+            args.image.c_str(), img.w, img.h, in_w, in_h, in_c,
+            in_c == 1 ? " (RGB→luma BT.601 перед инференсом)" : "");
 
         letterbox(img, in_w, in_h, input_rgb);
-        if (!fill_input(input_rgb, in_info[0], in_t)) return 5;
+        if (!fill_model_from_rgb()) return 5;
     } else {
         // --random-input без картинки: формируем случайный буфер длиной
         // numel(shape). fill_input трактует его плоско, так что для любого
-        // ранга/раскладки результат корректен.
+        // ранга/раскладки результат корректен (включая grayscale-входы).
         const size_t n_in = numel(in_info[0].shape);
         if (n_in == 0) {
             std::fprintf(stderr,
@@ -1291,7 +1344,7 @@ int main(int argc, char** argv) {
                 orig_h = fh;
                 if (needs_preprocess) {
                     letterbox(frame, fw, fh, in_w, in_h, input_rgb);
-                    if (!fill_input(input_rgb, in_info[0], in_t)) break;
+                    if (!fill_model_from_rgb()) break;
                 }
             }
 
@@ -1562,15 +1615,16 @@ int main(int argc, char** argv) {
             return;
         }
         const auto& rs = ref_in[0].shape;
-        const bool ref_nhwc3 = is_nhwc3(rs);
+        const int  ref_c        = image_input_channels(rs);
+        const bool ref_nhwc_img = ref_c > 0;
         int ref_h = 0, ref_w = 0;
-        if (ref_nhwc3) { ref_h = rs[1]; ref_w = rs[2]; }
-        // Жёстко требуем [1,H,W,3] только в image-режиме compare: там мы
+        if (ref_nhwc_img) { ref_h = rs[1]; ref_w = rs[2]; }
+        // Жёстко требуем [1,H,W,1|3] только в image-режиме compare: там мы
         // letterbox’им реальную картинку в ref. В --compare-random никаких
         // картинок нет — сравниваем тензор-в-тензор любого ранга.
-        if (has_image && !ref_nhwc3) {
+        if (has_image && !ref_nhwc_img) {
             std::fprintf(stderr,
-                "[%s] для сравнения по изображению ожидаю вход NHWC [1,H,W,3]; "
+                "[%s] для сравнения по изображению ожидаю вход NHWC [1,H,W,1|3]; "
                 "получено shape=%s; пропуск.\n",
                 ref_label, shape_to_str(rs).c_str());
             return;
@@ -1672,7 +1726,14 @@ int main(int argc, char** argv) {
             const size_t ref_n    = numel(rs);
             const bool same_shape = (in_info[0].shape == rs);
             const bool same_numel = (main_n == ref_n);
-            const bool both_img   = nhwc3 && ref_nhwc3;
+            // «letterbox под ref» поддерживаем только для RGB-картинок
+            // (in_c == ref_c == 3). letterbox() работает на 3-канальном
+            // буфере; для grayscale-vs-grayscale потребовался бы отдельный
+            // 1-канальный letterbox, для grayscale-vs-RGB — ещё и конверсия
+            // luma↔RGB. Случай редкий — фолбэкаем в «независимый рандом»
+            // (помечается в логе как несопоставимый по diff’у).
+            const bool both_img   = nhwc_img && ref_nhwc_img
+                                    && in_c == 3 && ref_c == 3;
 
             const char* mode_note;
             if      (same_shape) mode_note = " (общий буфер)";
@@ -1726,10 +1787,17 @@ int main(int argc, char** argv) {
             }
             // main_in_t уже заполнен исходным letterbox’ом во внешнем коде —
             // не перезаливаем, чтобы избежать лишней работы. Заливаем только
-            // ref (его размер может отличаться).
+            // ref (его размер и/или число каналов может отличаться: для
+            // ref_c == 1 конвертируем RGB → luma BT.601, как в основном пути).
             std::vector<uint8_t> ref_rgb;
             letterbox(img, ref_w, ref_h, ref_rgb);
-            if (!fill_input(ref_rgb, ref_in[0], ref_in_t)) return;
+            if (ref_c == 1) {
+                std::vector<uint8_t> ref_gray;
+                rgb_to_gray(ref_rgb.data(), (size_t)ref_w * ref_h, ref_gray);
+                if (!fill_input(ref_gray, ref_in[0], ref_in_t)) return;
+            } else {
+                if (!fill_input(ref_rgb, ref_in[0], ref_in_t)) return;
+            }
             if (!compare_once(0)) return;
             ++runs_done;
         }
