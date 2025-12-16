@@ -33,6 +33,13 @@
 //   ./ii yolov8m_int8.tflite --camera --display --yolo  # видео-поток
 //   ./ii yolov8m_int8.tflite --camera /dev/video2 --camera-size 1280x720
 //       --camera-fps 30 --display --yolo --stats        # с замером FPS
+//
+// Image-to-image модели (SR / enhance / denoise):
+//   ./ii fsrcnn_qat.tflite img.jpg --display --show-output    # SR на экране
+//   ./ii fsrcnn_qat.tflite img.jpg --save-output out.png      # SR в файл
+//   ./ii enhance_int8.tflite img.jpg --display --show-output  # low-light на экране
+//   ./ii enhance_int8.tflite --camera --display --show-output # enhance live
+//   ./ii model.tflite img.jpg --show-output --save-output o.png --output-range signed
 
 #include <algorithm>
 #include <chrono>
@@ -56,6 +63,7 @@
 #include "camera.h"
 #include "csv_export.h"
 #include "display.h"
+#include "image_proc.h"
 #include "inference.h"
 #include "stats.h"
 #include "sysmon.h"
@@ -556,6 +564,18 @@ struct Args {
     // ---- Проверка точности относительно эталона ----
     bool        compare_cpu = false; // ту же модель прогнать на CPU и сравнить
     std::string compare_model;       // путь к эталонной .tflite (CPU)
+    // ---- Декодирование выхода как изображения (FSRCNN / enhance / denoise) ----
+    // Сценарий: модель делает image-to-image — апскейл (FSRCNN), осветление
+    // (LiteEnhanceNet) или фильтр шума (DnCNN). Выход имеет shape
+    // NHWC [1,H_out,W_out,1|3] и значения в диапазоне (см. output_range).
+    // С --show-output показываем декодированный кадр модели вместо
+    // оригинала / препроцесса; алгоритм декодирования живёт в image_proc.h,
+    // ii.cpp лишь вызывает его и подсовывает буфер в Display::show_rgb.
+    // Несовместимо с --yolo (там выход — это головы детекций, а не картинка).
+    bool         show_output  = false;
+    int          output_index = -1;             // -1 = автодетект единственного
+    std::string  output_range_str = "unit";     // unit | signed | byte
+    std::string  save_output_path;              // PNG-путь для одиночного прогона
     // ---- Захват с камеры (V4L2) ----
     // Когда задан --camera, источник кадров — V4L2-устройство, а не
     // картинка/random. Включает свой собственный цикл инференса (с
@@ -639,6 +659,17 @@ void print_usage(const char* prog) {
         "  --compare-cpu       прогнать ту же модель на CPU и сравнить выходы\n"
         "  --compare <path>    прогнать эталонную .tflite на CPU и сравнить\n"
         "                      (например, исходный float32 vs INT8 на NPU)\n"
+        "  --show-output       выводить декодированный выход модели как картинку\n"
+        "                      (для image-to-image: FSRCNN, enhance, denoise).\n"
+        "                      Несовместимо с --yolo. По умолчанию ищем единственный\n"
+        "                      выход формы NHWC [1,H,W,1|3]; см. --output-index.\n"
+        "  --output-index <i>  индекс выходного тензора-изображения (если у модели\n"
+        "                      несколько image-shaped выходов; def — автодетект)\n"
+        "  --output-range <r>  диапазон значений выхода: unit (=[0..1], default),\n"
+        "                      signed (=[-1..1]), byte (=[0..255])\n"
+        "  --save-output <p>   сохранить декодированный выход в PNG (только\n"
+        "                      одиночный инференс — для --loop/--camera не имеет\n"
+        "                      смысла плодить кадры на каждом такте)\n"
         "  --random-input      использовать случайный входной буфер вместо\n"
         "                      изображения; работает с одиночным инференсом,\n"
         "                      --benchmark, --loop, --compare* (картинку можно\n"
@@ -702,6 +733,10 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--classes"     && i + 1 < argc) a.classes_path = argv[++i];
         else if (s == "--compare-cpu")                 a.compare_cpu = true;
         else if (s == "--compare"     && i + 1 < argc) a.compare_model = argv[++i];
+        else if (s == "--show-output")                 a.show_output  = true;
+        else if (s == "--output-index"  && i + 1 < argc) a.output_index = std::atoi(argv[++i]);
+        else if (s == "--output-range"  && i + 1 < argc) a.output_range_str = argv[++i];
+        else if (s == "--save-output"   && i + 1 < argc) a.save_output_path = argv[++i];
         else if (s == "--random-input"
               || s == "--compare-random")              a.random_input = true;
         else if ((s == "--random-runs" || s == "--compare-runs")
@@ -774,16 +809,41 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "--random-runs должен быть >= 1.\n");
         return 1;
     }
-    if (args.random_input && args.display && !has_image && !has_camera) {
+    // При чистом --random-input без картинки/камеры показать оригинал нечего,
+    // но с --show-output есть что: декодированный выход модели от случайного
+    // входа — полезно для sanity-чека SR/enhance на dev-хосте.
+    if (args.random_input && args.display && !has_image && !has_camera
+        && !args.show_output) {
         std::fprintf(stderr,
-            "--display требует источник кадров (image или --camera); "
-            "при чистом --random-input нечего показывать.\n");
+            "--display требует источник кадров (image или --camera) либо "
+            "--show-output; при чистом --random-input нечего показывать.\n");
         return 1;
     }
     if (has_camera && !args.image.empty()) {
         std::fprintf(stderr,
             "Внимание: image=%s проигнорирован, активен --camera %s.\n",
             args.image.c_str(), args.camera_device.c_str());
+    }
+    // --show-output (декодирование выхода как картинки) и --yolo (декодирование
+    // выхода как боксов) — взаимоисключающие интерпретации одного и того же
+    // выхода. Лучше упасть рано с понятным сообщением.
+    if (args.show_output && args.yolo) {
+        std::fprintf(stderr,
+            "--show-output и --yolo несовместимы: выход модели — либо "
+            "image, либо детекции.\n");
+        return 1;
+    }
+    imgproc::OutputRange output_range = imgproc::OutputRange::Unit;
+    if (!imgproc::parse_output_range(args.output_range_str, output_range)) {
+        std::fprintf(stderr,
+            "Неизвестный --output-range: '%s'. Допустимые: unit, signed, byte.\n",
+            args.output_range_str.c_str());
+        return 1;
+    }
+    if (!args.save_output_path.empty() && (args.loop || has_camera)) {
+        std::fprintf(stderr,
+            "Внимание: --save-output игнорируется в режиме --loop/--camera "
+            "(имеет смысл только для одиночного инференса).\n");
     }
 
     auto eng = inf::make_engine(args.backend);
@@ -854,6 +914,50 @@ int main(int argc, char** argv) {
             "Эта реализация рассчитана на 1 вход, у модели %zu.\n",
             in_info.size());
         return 3;
+    }
+
+    // ---- Индекс выхода-изображения (для --show-output / --save-output) ----
+    // Один раз после load: либо берём явно указанный --output-index, либо
+    // ищем единственный image-shaped выход среди всех. Решение кешируется,
+    // в видео-цикле не повторяется. Если не нашлось — это фатально для
+    // соответствующих режимов.
+    const bool decode_output_needed =
+        args.show_output || !args.save_output_path.empty();
+    int image_output_idx = -1;
+    if (decode_output_needed) {
+        if (args.output_index >= 0) {
+            if (args.output_index >= (int)out_info.size()) {
+                std::fprintf(stderr,
+                    "--output-index %d вне диапазона (выходов %zu).\n",
+                    args.output_index, out_info.size());
+                return 3;
+            }
+            image_output_idx = args.output_index;
+            if (!imgproc::is_image_output(out_info[image_output_idx])) {
+                std::fprintf(stderr,
+                    "Выход[%d] '%s' shape=%s не похож на изображение "
+                    "(ожидаю NHWC [1,H,W,1|3]).\n",
+                    image_output_idx,
+                    out_info[image_output_idx].name.c_str(),
+                    shape_to_str(out_info[image_output_idx].shape).c_str());
+                return 3;
+            }
+        } else {
+            image_output_idx = imgproc::detect_image_output_index(out_info);
+            if (image_output_idx < 0) {
+                std::fprintf(stderr,
+                    "Не нашёл единственного image-shaped выхода среди %zu. "
+                    "Уточните --output-index <i>.\n",
+                    out_info.size());
+                return 3;
+            }
+        }
+        std::printf(
+            "Выход для отображения: [%d] %s shape=%s, диапазон=%s\n",
+            image_output_idx,
+            out_info[image_output_idx].name.c_str(),
+            shape_to_str(out_info[image_output_idx].shape).c_str(),
+            args.output_range_str.c_str());
     }
 
     // ---- Экспорт замеров в CSV ----
@@ -1081,6 +1185,20 @@ int main(int argc, char** argv) {
     std::vector<Detection>  dets;
     std::vector<DisplayBox> boxes;
 
+    // ---- Общий буфер декодированного выхода-изображения ----
+    // Используется одиночным инференсом, видео-циклом и камерой. После
+    // первого invoke размер RGB-буфера фиксируется и в видео-цикле не
+    // перевыделяется (decode_image_output делает .assign() того же размера).
+    imgproc::OutputImage    out_img;
+    imgproc::DecodeOptions  dec_opts;
+    dec_opts.range = output_range;
+    auto decode_current_output = [&]() -> bool {
+        if (image_output_idx < 0) return false;
+        const void* data = eng->output_data(image_output_idx);
+        return imgproc::decode_image_output(out_info[image_output_idx],
+                                            data, dec_opts, out_img);
+    };
+
     // Декодирование выхода YOLO для последнего инференса. Вызывается
     // из run_video_loop и из одиночного display-кадра. orig_w/orig_h —
     // размеры исходного кадра (для обратного letterbox-маппинга).
@@ -1188,6 +1306,12 @@ int main(int argc, char** argv) {
                 run_yolo_postproc(orig_w, orig_h);
                 if (disp) disp->set_boxes(boxes);
             }
+            // Декодирование выхода-картинки делаем только когда оно реально
+            // нужно для отображения — в чистом --loop без дисплея смысла
+            // тратить CPU на dequant миллионов пикселей нет.
+            if (args.show_output && disp) {
+                decode_current_output();
+            }
 
             // log_due() надо звать всегда, когда есть хоть один потребитель
             // периодического тика (stdout-лог под --stats или CSV-экспорт),
@@ -1222,10 +1346,25 @@ int main(int argc, char** argv) {
             }
 
             if (disp && frame) {
-                const uint8_t* show = args.show_input ? input_rgb.data()
-                                                      : frame;
-                const int sw = args.show_input ? in_w : orig_w;
-                const int sh = args.show_input ? in_h : orig_h;
+                // Приоритет: --show-output > --show-input > исходный кадр.
+                // Для --show-output берём актуально-декодированный буфер;
+                // если он пуст (ошибка decode на этом кадре) — фолбэк на
+                // обычный путь, чтобы окно не «замерзало» из-за одного бэда.
+                const uint8_t* show;
+                int sw, sh;
+                if (args.show_output && !out_img.rgb.empty()) {
+                    show = out_img.rgb.data();
+                    sw   = out_img.width;
+                    sh   = out_img.height;
+                } else if (args.show_input) {
+                    show = input_rgb.data();
+                    sw   = in_w;
+                    sh   = in_h;
+                } else {
+                    show = frame;
+                    sw   = orig_w;
+                    sh   = orig_h;
+                }
                 if (!disp->show_rgb(show, sw, sh)) break;
             }
         }
@@ -1323,6 +1462,26 @@ int main(int argc, char** argv) {
             print_output_head(out_info[i], t);
         }
         sysmon_log("invoke");
+
+        // Декод выхода-изображения для одиночного прогона: нужен
+        // и для --show-output (используется ниже в display-блоке),
+        // и для --save-output (сохранение в PNG прямо здесь — это
+        // единственный момент, когда оно осмысленно).
+        if (decode_output_needed) {
+            if (decode_current_output()) {
+                std::printf(
+                    "Декодирован выход: %dx%d, исх. каналов=%d "
+                    "(всего %zu uint8 RGB байт)\n",
+                    out_img.width, out_img.height, out_img.channels_src,
+                    out_img.rgb.size());
+                if (!args.save_output_path.empty()) {
+                    if (imgproc::save_png(out_img, args.save_output_path)) {
+                        std::printf("Сохранено: %s\n",
+                                    args.save_output_path.c_str());
+                    }
+                }
+            }
+        }
     }
 
     // ---- Сравнение точности с эталоном ----
@@ -1800,8 +1959,10 @@ int main(int argc, char** argv) {
     }
 
     // ---- Графический вывод (Wayland/EGL) ----
-    // Показываем либо оригинальное изображение, либо то, что реально
-    // ушло в сеть после letterbox’а (полезно для отладки препроцессинга).
+    // Показываем один из трёх возможных буферов в зависимости от флагов:
+    //   --show-output  → декодированный выход модели (SR/enhance/denoise);
+    //   --show-input   → препроцессированный letterbox-вход (отладка);
+    //   default        → оригинальная картинка.
     if (args.display) {
         auto disp = make_display();
         if (!disp) {
@@ -1811,11 +1972,24 @@ int main(int argc, char** argv) {
         }
         if (!disp->init(args.win_w, args.win_h, "ii", args.vsync)) return 7;
 
-        // Что показывать: оригинал картинки или препроцесс.
-        const uint8_t* frame = args.show_input ? input_rgb.data()
-                                               : img.rgb.data();
-        const int fw = args.show_input ? in_w : img.w;
-        const int fh = args.show_input ? in_h : img.h;
+        const uint8_t* frame;
+        int fw, fh;
+        if (args.show_output && !out_img.rgb.empty()) {
+            frame = out_img.rgb.data();
+            fw    = out_img.width;
+            fh    = out_img.height;
+        } else if (args.show_input) {
+            frame = input_rgb.data();
+            fw    = in_w;
+            fh    = in_h;
+        } else {
+            // Без картинки (--random-input) тут будет img.rgb=empty —
+            // но мы сюда не попадём, проверка на старте отсекла такой
+            // путь, требуя или image, или --camera, или --show-output.
+            frame = img.rgb.data();
+            fw    = img.w;
+            fh    = img.h;
+        }
 
         // ---- Цикл с окном ----
         // Источник статический: вход модели уже залит в image-блоке

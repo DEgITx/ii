@@ -73,6 +73,7 @@ option(USE_DIRECTML  "Сборка с бэкендом DirectML/Windows ML (тр
 add_executable(ii
     ii.cpp
     inference.cpp
+    image_proc.cpp
     yolo.cpp)
 
 # ---- Платформо-зависимые флаги компилятора и линкер-флаги ----------------
