@@ -113,11 +113,21 @@ void TileCanvas::reset(int w, int h, int overlap_out_, bool blend_) {
 
     const size_t pixels    = (size_t)w * h;
     const size_t rgb_bytes = pixels * 3;
-    rgb.assign(rgb_bytes, 0);
+
     if (blend) {
+        // blend=true: rgb всё равно полностью переписывается в finalize(),
+        // НО finalize пропускает пиксели с weight==0 (непокрытые) — для
+        // них старое содержимое осталось бы. Зануляем для предсказуемости.
+        rgb.assign(rgb_bytes, 0);
         acc.assign(rgb_bytes, 0.0f);
         weight.assign(pixels, 0.0f);
     } else {
+        // overwrite-режим: plan_tiles снэпает последний тайл к краю,
+        // так что canvas покрывается тайлами целиком — каждый байт rgb
+        // гарантированно перезаписан paste’ом (или decode-into-canvas).
+        // resize без zero-init — для первой реcет’ом инициализированной
+        // памяти бывает один memset, дальше — no-op.
+        if (rgb.size() != rgb_bytes) rgb.resize(rgb_bytes);
         acc.clear();
         weight.clear();
     }

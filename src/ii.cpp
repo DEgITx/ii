@@ -215,22 +215,72 @@ inline void letterbox(const Image& src, int target_w, int target_h,
 // data — сырой указатель на память входа модели (см. Engine::input_data).
 // Бэкенд гарантирует, что буфер достаточен для info.bytes.
 // ---------------------------------------------------------------------------
+// Кэш квантования входа. Подкладываем 256-элементную LUT (вход uint8
+// имеет ровно 256 возможных значений), что убирает std::lround / fmul /
+// clamp из горячего цикла. В tile-режиме это в районе 9216 элементов
+// квантования на тайл × 24 тайла = 220K вызовов lround на кадр без
+// кэша; с LUT — одна индексация в L1.
+//
+// Ключ кэша = (dtype, scale, zp); в --compare-режиме два разных info
+// будут пинг-понговать ключ и пересчитывать LUT, но это копейки
+// (256 итераций) на фоне даже одного инвока.
+struct InputQuantCache {
+    inf::DType dtype = inf::DType::Unknown;
+    float      scale = 0.0f;
+    int        zero_point = 0;
+    bool       valid = false;
+    uint8_t    lut8[256]{};      // для Int8 (bit-pattern) / UInt8
+    uint16_t   lut16[256]{};     // для Int16 (bit-pattern) / UInt16
+};
+
+inline bool ensure_input_quant_lut(InputQuantCache& c,
+                                   const inf::TensorDesc& info) {
+    if (c.valid
+        && c.dtype == info.dtype
+        && c.scale == info.scale
+        && c.zero_point == info.zero_point) {
+        return true;
+    }
+    const float s  = info.scale ? info.scale : 1.0f;
+    const int   zp = info.zero_point;
+    int lo = 0, hi = 0;
+    switch (info.dtype) {
+        case inf::DType::Int8:   lo = -128;   hi = 127;   break;
+        case inf::DType::UInt8:  lo = 0;      hi = 255;   break;
+        case inf::DType::Int16:  lo = -32768; hi = 32767; break;
+        case inf::DType::UInt16: lo = 0;      hi = 65535; break;
+        default:
+            c.valid = false;
+            return false;
+    }
+    for (int u = 0; u < 256; ++u) {
+        int q = (int)std::lround((u / 255.0f) / s + zp);
+        if (q < lo) q = lo;
+        if (q > hi) q = hi;
+        // Сохраняем bit-pattern целевого типа в беззнаковом контейнере —
+        // в горячем цикле просто кастуем к int8_t/int16_t и пишем в
+        // буфер модели.
+        if (info.dtype == inf::DType::Int8 || info.dtype == inf::DType::UInt8) {
+            c.lut8[u] = (uint8_t)q;
+        } else {
+            c.lut16[u] = (uint16_t)q;
+        }
+    }
+    c.dtype      = info.dtype;
+    c.scale      = info.scale;
+    c.zero_point = info.zero_point;
+    c.valid      = true;
+    return true;
+}
+
 bool fill_input(const std::vector<uint8_t>& rgb, const TensorInfo& info,
                 void* data) {
     const size_t n = rgb.size();
 
-    // Универсальный квантователь под произвольный целочисленный тип.
-    auto quant_int = [&](auto* p, int lo, int hi) {
-        using T = std::decay_t<decltype(*p)>;
-        const float s  = info.scale ? info.scale : 1.0f;
-        const int   zp = info.zero_point;
-        for (size_t i = 0; i < n; ++i) {
-            int q = (int)std::lround((rgb[i] / 255.0f) / s + zp);
-            if (q < lo) q = lo;
-            if (q > hi) q = hi;
-            p[i] = (T)q;
-        }
-    };
+    // Один кэш на тред — параметры info стабильны за прогон, переключение
+    // между двумя info (compare-mode) переинициализирует таблицу за 256
+    // итераций, что несущественно.
+    thread_local InputQuantCache cache;
 
     switch (info.dtype) {
         case inf::DType::Float32: {
@@ -238,18 +288,34 @@ bool fill_input(const std::vector<uint8_t>& rgb, const TensorInfo& info,
             for (size_t i = 0; i < n; ++i) p[i] = rgb[i] / 255.0f;
             return true;
         }
-        case inf::DType::Int8:
-            quant_int(reinterpret_cast<int8_t*>(data), -128, 127);
+        case inf::DType::Int8: {
+            ensure_input_quant_lut(cache, info);
+            int8_t* p = reinterpret_cast<int8_t*>(data);
+            const uint8_t* lut = cache.lut8;
+            for (size_t i = 0; i < n; ++i) p[i] = (int8_t)lut[rgb[i]];
             return true;
-        case inf::DType::UInt8:
-            quant_int(reinterpret_cast<uint8_t*>(data), 0, 255);
+        }
+        case inf::DType::UInt8: {
+            ensure_input_quant_lut(cache, info);
+            uint8_t* p = reinterpret_cast<uint8_t*>(data);
+            const uint8_t* lut = cache.lut8;
+            for (size_t i = 0; i < n; ++i) p[i] = lut[rgb[i]];
             return true;
-        case inf::DType::Int16:
-            quant_int(reinterpret_cast<int16_t*>(data), -32768, 32767);
+        }
+        case inf::DType::Int16: {
+            ensure_input_quant_lut(cache, info);
+            int16_t* p = reinterpret_cast<int16_t*>(data);
+            const uint16_t* lut = cache.lut16;
+            for (size_t i = 0; i < n; ++i) p[i] = (int16_t)lut[rgb[i]];
             return true;
-        case inf::DType::UInt16:
-            quant_int(reinterpret_cast<uint16_t*>(data), 0, 65535);
+        }
+        case inf::DType::UInt16: {
+            ensure_input_quant_lut(cache, info);
+            uint16_t* p = reinterpret_cast<uint16_t*>(data);
+            const uint16_t* lut = cache.lut16;
+            for (size_t i = 0; i < n; ++i) p[i] = lut[rgb[i]];
             return true;
+        }
         default:
             std::fprintf(stderr, "Неподдерживаемый dtype входа: %s (код %d)\n",
                          inf::dtype_name(info.dtype), (int)info.dtype);
@@ -1385,15 +1451,24 @@ int main(int argc, char** argv) {
     // ---- Общий буфер декодированного выхода-изображения ----
     // Используется одиночным инференсом, видео-циклом и камерой. После
     // первого invoke размер RGB-буфера фиксируется и в видео-цикле не
-    // перевыделяется (decode_image_output делает .assign() того же размера).
+    // перевыделяется (decode_image_output делает .resize() того же размера).
     imgproc::OutputImage    out_img;
     imgproc::DecodeOptions  dec_opts;
     dec_opts.range = output_range;
+
+    // Кэш LUT для INT8/UInt8 квантования выхода. Параметры (dtype, scale,
+    // zp, range) не меняются за время прогона, поэтому LUT строится один
+    // раз и переиспользуется во всех вызовах decode (в tile-режиме —
+    // десятки/сотни раз за кадр). Без LUT каждый из ~150K пикселей
+    // выхода 384×384 проходил через std::lround — ~30 тактов/пиксель;
+    // с LUT — одна индексация на 1 такт.
+    imgproc::DecodeCache    dec_cache;
     auto decode_current_output = [&]() -> bool {
         if (image_output_idx < 0) return false;
         const void* data = eng->output_data(image_output_idx);
         return imgproc::decode_image_output(out_info[image_output_idx],
-                                            data, dec_opts, out_img);
+                                            data, dec_opts, out_img,
+                                            &dec_cache);
     };
 
     // ---- Tiling: sliding-window pass через всю исходную картинку --------
@@ -1402,6 +1477,14 @@ int main(int argc, char** argv) {
     // вставить в canvas. На выходе out_img заполняется полноразмерным
     // RGB-кадром (исходное разрешение × scale модели), и весь дальнейший
     // display/save код подхватывает его без изменений.
+    //
+    // Оптимизация overwrite-пути: вместо «decode → промежуточный out_img →
+    // paste в canvas» (две полные записи декодированного тайла в DRAM),
+    // вызываем decode_image_output_to и пишем сразу в нужную позицию
+    // canvas’а. На кадр это экономит ~канваc-в-байтах memcpy и столько
+    // же memset (~16 МБ DRAM-трафика для 1996×1332 при 24 тайлах).
+    // Blend-режим (overlap > 0) всё ещё идёт через out_img + paste,
+    // потому что paste делает взвешенное накопление в float-acc.
     //
     // Возвращает false при фатальной ошибке (Invoke упал) — вызывающая
     // сторона должна прервать цикл. Декод одного тайла, не сработавший,
@@ -1413,9 +1496,11 @@ int main(int argc, char** argv) {
         if (image_output_idx < 0) return false;
         const auto layout = tile::plan_tiles(
             src_w, src_h, in_w, in_h, args.tile_overlap);
+        const bool blend = (args.tile_overlap > 0);
         tile_canvas.reset(src_w * scale_x, src_h * scale_y,
-                          args.tile_overlap * scale_x,
-                          args.tile_overlap > 0);
+                          args.tile_overlap * scale_x, blend);
+        const std::size_t canvas_stride = (std::size_t)tile_canvas.width * 3;
+        const auto& tile_info = out_info[image_output_idx];
         for (int j = 0; j < layout.ny(); ++j) {
             for (int i = 0; i < layout.nx(); ++i) {
                 const int x0 = layout.x0[i];
@@ -1424,20 +1509,42 @@ int main(int argc, char** argv) {
                                    in_w, in_h, input_rgb);
                 if (!fill_model_from_rgb()) return false;
                 if (!eng->invoke()) return false;
-                if (!decode_current_output()) continue;
-                tile_canvas.paste(out_img,
-                                  x0 * scale_x, y0 * scale_y);
+                const void* tdata = eng->output_data(image_output_idx);
+                if (blend) {
+                    // В blend-режиме без out_img не обойтись: paste
+                    // выполняет взвешенное накопление в acc/weight.
+                    if (!imgproc::decode_image_output(
+                            tile_info, tdata, dec_opts, out_img,
+                            &dec_cache)) {
+                        continue;
+                    }
+                    tile_canvas.paste(out_img,
+                                      x0 * scale_x, y0 * scale_y);
+                } else {
+                    // Overwrite-режим: пишем декодированный тайл сразу
+                    // в нужную позицию canvas’а — никаких промежуточных
+                    // буферов и memcpy. Тайл целиком помещается в canvas
+                    // (plan_tiles снэпает последний к краю), поэтому
+                    // дополнительного клиппинга не требуется.
+                    if (!imgproc::decode_image_output_to(
+                            tile_info, tdata, dec_opts,
+                            tile_canvas.rgb.data(), canvas_stride,
+                            x0 * scale_x, y0 * scale_y,
+                            &dec_cache)) {
+                        continue;
+                    }
+                }
             }
         }
         tile_canvas.finalize();
-        // Заливаем итог в out_img: остальной код (display/save/show_output)
-        // и так уже умеет работать с out_img — никаких ветвлений снаружи.
-        // Копия canvas.rgb (~единицы МБ для 1080p) ничтожна на фоне сотен
-        // мс per-tile инференса.
+        // Перекидываем итог в out_img через swap (O(1), вместо copy ~8 МБ
+        // для 1996×1332). Следующий вызов reset() переиспользует ту же
+        // память — выделение не требуется. Размер фиксируется по первому
+        // кадру (src_w/src_h в живом видео-цикле обычно постоянны).
         out_img.width        = tile_canvas.width;
         out_img.height       = tile_canvas.height;
         out_img.channels_src = 3;
-        out_img.rgb          = tile_canvas.rgb;
+        std::swap(out_img.rgb, tile_canvas.rgb);
         return true;
     };
 

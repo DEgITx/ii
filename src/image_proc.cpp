@@ -41,6 +41,187 @@ inline float to_unit(float v, OutputRange r) {
     return v;
 }
 
+// Пересчитать LUT кэша под текущие параметры квантования, если они
+// изменились. Возвращает true, если LUT валиден и применим для
+// горячего цикла (т.е. dtype ∈ {Int8, UInt8} и cache != nullptr).
+bool ensure_decode_lut(DecodeCache* cache, const inf::TensorDesc& info,
+                       OutputRange range) {
+    if (!cache) return false;
+    if (info.dtype != inf::DType::Int8 && info.dtype != inf::DType::UInt8) {
+        cache->lut_valid = false;
+        return false;
+    }
+    if (cache->lut_valid
+        && cache->dtype == info.dtype
+        && cache->scale == info.scale
+        && cache->zero_point == info.zero_point
+        && cache->range == range) {
+        return true;  // кэш актуален — горячий путь
+    }
+
+    const float scale = info.scale != 0.0f ? info.scale : 1.0f;
+    const int   zp    = info.zero_point;
+    if (info.dtype == inf::DType::Int8) {
+        // Индекс LUT = uint8-перепрочтение int8: u ∈ [0..127] → int8 0..127,
+        // u ∈ [128..255] → int8 -128..-1. Так в горячем цикле достаточно
+        // привести int8 к uint8 и сразу обратиться в таблицу.
+        for (int u = 0; u < 256; ++u) {
+            const int q = (int)(int8_t)u;
+            cache->lut[u] = to_byte(to_unit((q - zp) * scale, range));
+        }
+    } else {
+        for (int u = 0; u < 256; ++u) {
+            cache->lut[u] = to_byte(to_unit((u - zp) * scale, range));
+        }
+    }
+    cache->dtype      = info.dtype;
+    cache->scale      = info.scale;
+    cache->zero_point = info.zero_point;
+    cache->range      = range;
+    cache->lut_valid  = true;
+    return true;
+}
+
+// Тайтовое ядро декодера: проходит по тензору и пишет в произвольный
+// уголок буфера с заданным шагом строки. Параметризован функтором
+// conv (TSrc → uint8_t), что позволяет одним шаблоном обслуживать
+// и LUT-ветку для int8/uint8 и общую float-ветку.
+//
+// dst_base — адрес «логического» (dst_x, dst_y) пикселя в буфере, т.е.
+// caller уже сдвинул его на (dst_y * stride + dst_x * 3).
+template <typename TSrc, typename FConv>
+void decode_kernel(const TSrc* p, int w, int h, int c,
+                   uint8_t* dst_base, std::size_t stride, FConv conv) {
+    if (c == 3) {
+        for (int y = 0; y < h; ++y) {
+            uint8_t*    dp = dst_base + (std::size_t)y * stride;
+            const TSrc* sp = p + (std::size_t)y * w * 3;
+            for (int x = 0; x < w; ++x) {
+                dp[0] = conv(sp[0]);
+                dp[1] = conv(sp[1]);
+                dp[2] = conv(sp[2]);
+                dp += 3;
+                sp += 3;
+            }
+        }
+    } else {
+        for (int y = 0; y < h; ++y) {
+            uint8_t*    dp = dst_base + (std::size_t)y * stride;
+            const TSrc* sp = p + (std::size_t)y * w;
+            for (int x = 0; x < w; ++x) {
+                const uint8_t b = conv(*sp++);
+                dp[0] = b;
+                dp[1] = b;
+                dp[2] = b;
+                dp += 3;
+            }
+        }
+    }
+}
+
+// Общая «развилка по dtype» для декода: и `decode_image_output`, и
+// `decode_image_output_to` сходятся сюда. dst_base уже сдвинут на
+// (dst_x, dst_y) caller’ом; stride — байты между строками назначения.
+bool decode_dispatch(const inf::TensorDesc& info, const void* data,
+                     const DecodeOptions& opt,
+                     uint8_t* dst_base, std::size_t stride,
+                     DecodeCache* cache) {
+    const int   w     = info.shape[2];
+    const int   h     = info.shape[1];
+    const int   c     = info.shape[3];
+    const float scale = info.scale != 0.0f ? info.scale : 1.0f;
+    const int   zp    = info.zero_point;
+    const auto  range = opt.range;
+
+    // Локальный кэш — если caller не передал свой. Тогда LUT строится
+    // на каждый вызов, но это всё ещё в 30+ раз быстрее, чем lround
+    // на каждый пиксель: 256-итераций инициализации против H·W·C
+    // итераций горячего цикла.
+    DecodeCache  local;
+    DecodeCache* cc = cache ? cache : &local;
+
+    switch (info.dtype) {
+        case inf::DType::Int8: {
+            ensure_decode_lut(cc, info, range);
+            const uint8_t* lut = cc->lut;
+            const int8_t*  p   = reinterpret_cast<const int8_t*>(data);
+            decode_kernel(p, w, h, c, dst_base, stride,
+                          [lut](int8_t v) { return lut[(uint8_t)v]; });
+            return true;
+        }
+        case inf::DType::UInt8: {
+            ensure_decode_lut(cc, info, range);
+            const uint8_t* lut = cc->lut;
+            const uint8_t* p   = reinterpret_cast<const uint8_t*>(data);
+            decode_kernel(p, w, h, c, dst_base, stride,
+                          [lut](uint8_t v) { return lut[v]; });
+            return true;
+        }
+        case inf::DType::Float32: {
+            const float* p = reinterpret_cast<const float*>(data);
+            decode_kernel(p, w, h, c, dst_base, stride,
+                          [range](float v) {
+                              return to_byte(to_unit(v, range));
+                          });
+            return true;
+        }
+        case inf::DType::Float16: {
+            const uint16_t* p = reinterpret_cast<const uint16_t*>(data);
+            decode_kernel(p, w, h, c, dst_base, stride,
+                          [range](uint16_t v) {
+                              return to_byte(
+                                  to_unit(inf::half_to_float(v), range));
+                          });
+            return true;
+        }
+        case inf::DType::Int16: {
+            const int16_t* p = reinterpret_cast<const int16_t*>(data);
+            decode_kernel(p, w, h, c, dst_base, stride,
+                          [range, scale, zp](int16_t v) {
+                              return to_byte(
+                                  to_unit(((int)v - zp) * scale, range));
+                          });
+            return true;
+        }
+        case inf::DType::UInt16: {
+            const uint16_t* p = reinterpret_cast<const uint16_t*>(data);
+            decode_kernel(p, w, h, c, dst_base, stride,
+                          [range, scale, zp](uint16_t v) {
+                              return to_byte(
+                                  to_unit(((int)v - zp) * scale, range));
+                          });
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
+// Проверка dtype с warn-once для нештатных типов (общая часть для
+// обеих публичных функций).
+bool check_decode_dtype(const inf::TensorDesc& info) {
+    switch (info.dtype) {
+        case inf::DType::Float32:
+        case inf::DType::Float16:
+        case inf::DType::Int8:
+        case inf::DType::UInt8:
+        case inf::DType::Int16:
+        case inf::DType::UInt16:
+            return true;
+        default: {
+            static bool warned = false;
+            if (!warned) {
+                std::fprintf(stderr,
+                    "image_proc: dtype выхода=%s не поддержан для "
+                    "image-decode. Последующие подобные сообщения "
+                    "подавлены.\n", inf::dtype_name(info.dtype));
+                warned = true;
+            }
+            return false;
+        }
+    }
+}
+
 }  // namespace
 
 bool parse_output_range(const std::string& name, OutputRange& out) {
@@ -81,7 +262,8 @@ int detect_image_output_index(const std::vector<inf::TensorDesc>& outs) {
 }
 
 bool decode_image_output(const inf::TensorDesc& info, const void* data,
-                         const DecodeOptions& opt, OutputImage& out) {
+                         const DecodeOptions& opt, OutputImage& out,
+                         DecodeCache* cache) {
     if (!is_image_output(info)) {
         std::fprintf(stderr,
             "image_proc: выход '%s' не похож на изображение "
@@ -89,131 +271,49 @@ bool decode_image_output(const inf::TensorDesc& info, const void* data,
             info.name.c_str(), info.shape.size());
         return false;
     }
+    if (!check_decode_dtype(info)) {
+        out.rgb.clear();
+        return false;
+    }
 
     const int h = info.shape[1];
     const int w = info.shape[2];
     const int c = info.shape[3];
 
-    // Per-tensor квантование: scale==0 трактуем как «не квантован» —
-    // оставляем как float, иначе на выходе был бы ноль.
-    const float scale = info.scale != 0.0f ? info.scale : 1.0f;
-    const int   zp    = info.zero_point;
-
-    const size_t pixels = (size_t)w * h;
-    const size_t n      = pixels * (size_t)c;
-
-    // Заранее проверяем dtype, чтобы при отказе оставить out.rgb пустым —
-    // ii.cpp использует empty() как индикатор fail-on-frame и фолбэкается
-    // на оригинальный кадр в видео-цикле.
-    switch (info.dtype) {
-        case inf::DType::Float32:
-        case inf::DType::Float16:
-        case inf::DType::Int8:
-        case inf::DType::UInt8:
-        case inf::DType::Int16:
-        case inf::DType::UInt16:
-            break;
-        default: {
-            static bool warned = false;
-            if (!warned) {
-                std::fprintf(stderr,
-                    "image_proc: dtype выхода=%s не поддержан для "
-                    "image-decode. Последующие подобные сообщения "
-                    "подавлены.\n", inf::dtype_name(info.dtype));
-                warned = true;
-            }
-            out.rgb.clear();
-            return false;
-        }
-    }
-
-    out.width  = w;
-    out.height = h;
+    out.width        = w;
+    out.height       = h;
     out.channels_src = c;
-    out.rgb.assign((size_t)w * h * 3, 0);
 
-    // Записать один пиксель в out.rgb. Для C=3 индекс i — линейный по
-    // элементам тензора; для C=1 — индекс пикселя, значение льётся в
-    // R=G=B. Это два разных tight-цикла, чтобы не плодить условий в
-    // горячем пути.
-    auto put_3ch = [&](size_t i, float v) {
-        out.rgb[i] = to_byte(to_unit(v, opt.range));
-    };
-    auto put_1ch = [&](size_t k, float v) {
-        const uint8_t b = to_byte(to_unit(v, opt.range));
-        out.rgb[k * 3 + 0] = b;
-        out.rgb[k * 3 + 1] = b;
-        out.rgb[k * 3 + 2] = b;
-    };
+    // resize вместо assign(N, 0): после первого кадра размер не меняется
+    // и resize становится no-op (никаких memset’ов). Если буфер меньше
+    // нужного — резервируем без zero-init «хвоста», т.к. весь объём
+    // сразу же перезаписывается decode_kernel’ом.
+    const std::size_t need = (std::size_t)w * h * 3;
+    if (out.rgb.size() != need) out.rgb.resize(need);
 
-    switch (info.dtype) {
-        case inf::DType::Float32: {
-            const float* p = reinterpret_cast<const float*>(data);
-            if (c == 3) { for (size_t i = 0; i < n; ++i)      put_3ch(i, p[i]); }
-            else        { for (size_t k = 0; k < pixels; ++k) put_1ch(k, p[k]); }
-            return true;
-        }
-        case inf::DType::Float16: {
-            const uint16_t* p = reinterpret_cast<const uint16_t*>(data);
-            if (c == 3) {
-                for (size_t i = 0; i < n; ++i)
-                    put_3ch(i, inf::half_to_float(p[i]));
-            } else {
-                for (size_t k = 0; k < pixels; ++k)
-                    put_1ch(k, inf::half_to_float(p[k]));
-            }
-            return true;
-        }
-        case inf::DType::Int8: {
-            const int8_t* p = reinterpret_cast<const int8_t*>(data);
-            if (c == 3) {
-                for (size_t i = 0; i < n; ++i)
-                    put_3ch(i, ((int)p[i] - zp) * scale);
-            } else {
-                for (size_t k = 0; k < pixels; ++k)
-                    put_1ch(k, ((int)p[k] - zp) * scale);
-            }
-            return true;
-        }
-        case inf::DType::UInt8: {
-            const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
-            if (c == 3) {
-                for (size_t i = 0; i < n; ++i)
-                    put_3ch(i, ((int)p[i] - zp) * scale);
-            } else {
-                for (size_t k = 0; k < pixels; ++k)
-                    put_1ch(k, ((int)p[k] - zp) * scale);
-            }
-            return true;
-        }
-        case inf::DType::Int16: {
-            const int16_t* p = reinterpret_cast<const int16_t*>(data);
-            if (c == 3) {
-                for (size_t i = 0; i < n; ++i)
-                    put_3ch(i, ((int)p[i] - zp) * scale);
-            } else {
-                for (size_t k = 0; k < pixels; ++k)
-                    put_1ch(k, ((int)p[k] - zp) * scale);
-            }
-            return true;
-        }
-        case inf::DType::UInt16: {
-            const uint16_t* p = reinterpret_cast<const uint16_t*>(data);
-            if (c == 3) {
-                for (size_t i = 0; i < n; ++i)
-                    put_3ch(i, ((int)p[i] - zp) * scale);
-            } else {
-                for (size_t k = 0; k < pixels; ++k)
-                    put_1ch(k, ((int)p[k] - zp) * scale);
-            }
-            return true;
-        }
-        default:
-            // Не достижимо — guard выше уже отсеял неподдерживаемые dtype.
-            // Оставляем явный return для строгих компиляторов.
-            out.rgb.clear();
-            return false;
+    return decode_dispatch(info, data, opt,
+                           out.rgb.data(), (std::size_t)w * 3, cache);
+}
+
+bool decode_image_output_to(const inf::TensorDesc& info, const void* data,
+                            const DecodeOptions& opt,
+                            uint8_t* dst_rgb, std::size_t dst_stride,
+                            int dst_x, int dst_y,
+                            DecodeCache* cache) {
+    if (!is_image_output(info)) {
+        std::fprintf(stderr,
+            "image_proc: выход '%s' не похож на изображение "
+            "(ожидаю NHWC [1,H,W,1|3], получил shape ранга %zu).\n",
+            info.name.c_str(), info.shape.size());
+        return false;
     }
+    if (!check_decode_dtype(info)) return false;
+    if (!dst_rgb || dst_stride == 0) return false;
+
+    uint8_t* base = dst_rgb
+                  + (std::size_t)dst_y * dst_stride
+                  + (std::size_t)dst_x * 3;
+    return decode_dispatch(info, data, opt, base, dst_stride, cache);
 }
 
 bool save_png(const OutputImage& img, const std::string& path) {

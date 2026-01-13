@@ -66,6 +66,25 @@ struct OutputImage {
     std::vector<uint8_t> rgb;      // HWC RGB, размер = w*h*3
 };
 
+// Кэш квантования для горячего декода. Для квантованных INT8/UInt8 выходов
+// каждый возможный байт даёт ровно один результат — заранее посчитанная
+// 256-байтная таблица «q → uint8 в [0..255]» полностью убирает std::lround,
+// fmul, clamp из горячего цикла. Это критично в tile-режиме, где decode
+// вызывается N раз за кадр (для 96×96 → 384×384 это 147 К пикселей × 24
+// тайла = 3.5 М вызовов lround на кадр без кэша).
+//
+// Cache key = (dtype, scale, zp, range). Пересчёт срабатывает, только если
+// что-то реально поменялось — в стабильном видео-цикле это сравнение
+// четырёх полей за вызов decode.
+struct DecodeCache {
+    inf::DType  dtype = inf::DType::Unknown;
+    float       scale = 0.0f;
+    int         zero_point = 0;
+    OutputRange range = OutputRange::Unit;
+    bool        lut_valid = false;
+    uint8_t     lut[256]{};  // используется только для Int8/UInt8
+};
+
 // Похож ли тензор на изображение: NHWC [1,H,W,1] или [1,H,W,3] с H,W >= 2.
 bool is_image_output(const inf::TensorDesc& info);
 
@@ -78,8 +97,33 @@ int detect_image_output_index(const std::vector<inf::TensorDesc>& outs);
 
 // Декодировать тензор в RGB-кадр. Печатает причину отказа в stderr
 // (один раз) для нештатных dtype/shape, что важно в видео-цикле.
+//
+// Если передан cache, для INT8/UInt8 выходов используется 256-байтная
+// LUT (см. DecodeCache). nullptr — каждый вызов сам пересчитывает
+// таблицу (для не-горячих путей это копейки, и старый код вызовов
+// продолжает компилироваться без изменений).
 bool decode_image_output(const inf::TensorDesc& info, const void* data,
-                         const DecodeOptions& opt, OutputImage& out);
+                         const DecodeOptions& opt, OutputImage& out,
+                         DecodeCache* cache = nullptr);
+
+// Декодировать тензор напрямую в (под-)область внешнего RGB-буфера,
+// без промежуточной аллокации. Используется tile-режимом: каждый
+// тайл пишется сразу в нужную позицию canvas, что убирает один
+// memcpy и один memset на тайл (~10 МБ DRAM-трафика на кадр для
+// 1996×1332 × 24 тайла).
+//
+// dst_rgb       — указатель на начало буфера (0,0 верхний-левый);
+// dst_stride    — байты между началами соседних строк (>= dst_w * 3);
+// dst_x, dst_y  — позиция верхнего-левого угла декодированного тайла.
+//
+// Caller отвечает за то, что dst_x + W и dst_y + H влезают в буфер
+// (W, H — размеры выхода тензора). Для tile.plan_tiles это гарантировано
+// «snap-to-edge» логикой.
+bool decode_image_output_to(const inf::TensorDesc& info, const void* data,
+                            const DecodeOptions& opt,
+                            uint8_t* dst_rgb, std::size_t dst_stride,
+                            int dst_x, int dst_y,
+                            DecodeCache* cache = nullptr);
 
 // Сохранить кадр в PNG через stb_image_write. Возвращает false и
 // печатает причину в stderr при ошибке записи.
