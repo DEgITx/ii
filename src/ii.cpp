@@ -72,10 +72,42 @@
 
 #include <atomic>
 #include <csignal>
+#ifndef _WIN32
+#include <signal.h>   // pthread_sigmask
+#endif
 
 namespace {
 std::atomic<bool> g_interrupted{false};
 void on_sigint(int) { g_interrupted = true; }
+
+// «Осторожный» Ctrl+C: блокируем SIGINT в текущем потоке на время
+// инференса. Без этого сигнал прилетает посреди poll() в драйвере
+// внешний NPU-делегат, тот возвращает EINTR и репортит «Inference poll timeout»
+// (code=1534) — NPU остаётся в неконсистентном состоянии и часто
+// требует ребута устройства. С блокировкой SIGINT просто ставится
+// в очередь ядром и доставляется сразу после возврата из invoke();
+// обработчик on_sigint всё так же выставит g_interrupted, и цикл
+// корректно выйдет на следующей итерации.
+struct SigintGuard {
+#ifndef _WIN32
+    sigset_t old{};
+    bool active{false};
+    SigintGuard() {
+        sigset_t s;
+        sigemptyset(&s);
+        sigaddset(&s, SIGINT);
+        active = (pthread_sigmask(SIG_BLOCK, &s, &old) == 0);
+    }
+    ~SigintGuard() {
+        if (active) pthread_sigmask(SIG_SETMASK, &old, nullptr);
+    }
+#endif
+};
+
+inline bool safe_invoke(inf::Engine& e) {
+    SigintGuard g;
+    return e.invoke();
+}
 }  // namespace
 
 namespace {
@@ -1508,7 +1540,7 @@ int main(int argc, char** argv) {
                 tile::extract_tile(src_rgb, src_w, src_h, x0, y0,
                                    in_w, in_h, input_rgb);
                 if (!fill_model_from_rgb()) return false;
-                if (!eng->invoke()) return false;
+                if (!safe_invoke(*eng)) return false;
                 const void* tdata = eng->output_data(image_output_idx);
                 if (blend) {
                     // В blend-режиме без out_img не обойтись: paste
@@ -1650,7 +1682,7 @@ int main(int argc, char** argv) {
             }
 
             if (!args.tile_mode) {
-                if (!eng->invoke()) {
+                if (!safe_invoke(*eng)) {
                     std::fprintf(stderr, "Invoke упал.\n");
                     break;
                 }
@@ -1819,7 +1851,7 @@ int main(int argc, char** argv) {
                 return 6;
             }
         } else {
-            if (!eng->invoke()) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
+            if (!safe_invoke(*eng)) { std::fprintf(stderr, "Invoke упал.\n"); return 6; }
         }
         t1 = now_ms();
         std::printf("Инференс: %.3f мс%s\n", t1 - t0,
@@ -1977,11 +2009,11 @@ int main(int argc, char** argv) {
         // run_idx используется только для CSV-экспорта (per-run строки),
         // на агрегатную статистику не влияет.
         auto compare_once = [&](int run_idx) -> bool {
-            if (!eng->invoke()) {
+            if (!safe_invoke(*eng)) {
                 std::fprintf(stderr, "[main] Invoke упал.\n");
                 return false;
             }
-            if (!ref->invoke()) {
+            if (!safe_invoke(*ref)) {
                 std::fprintf(stderr, "[%s] Invoke упал.\n", ref_label);
                 return false;
             }
@@ -2240,7 +2272,7 @@ int main(int argc, char** argv) {
             if (args.tile_mode) {
                 return run_tile_pass(img.rgb.data(), img.w, img.h);
             }
-            return eng->invoke();
+            return safe_invoke(*eng);
         };
         for (int i = 0; i < args.warmup; ++i) bench_step();
         // После прогрева — фиксируем CPU/память: на этом интервале
