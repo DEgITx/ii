@@ -1656,6 +1656,13 @@ int main(int argc, char** argv) {
         // scale_to_original в этом случае становится тождественным.
         int orig_w = in_w, orig_h = in_h;
 
+        // Однократный лог «что и где показываем» — печатаем после
+        // первого успешного prepass, когда orig_w/orig_h уже актуальны
+        // и (для tile-режима) tile_canvas уже размечен под исходное
+        // разрешение. Без этого пользователь видит, например, FPS 20.5
+        // и не понимает, какое разрешение реально пошло в окно.
+        bool first_frame_logged = false;
+
         while (!g_interrupted && (!disp || disp->poll())) {
             const uint8_t* frame = nullptr;
             if (src) {
@@ -1689,6 +1696,66 @@ int main(int argc, char** argv) {
             }
             fps.tick();
             ++frame_n;
+
+            // Однократный лог: фактические размеры источника и (если
+            // включён --display) что именно уйдёт в окно. Делаем это
+            // после первого invoke / tile-pass — на этот момент orig_w/h
+            // и (для tile-mode) tile_canvas размечены под актуальное
+            // разрешение источника, а out_img/output-shape известны.
+            if (!first_frame_logged) {
+                first_frame_logged = true;
+                if (src) {
+                    std::printf("Источник кадров: %dx%d%s\n",
+                                orig_w, orig_h,
+                                has_camera ? " (камера)" : " (статический)");
+                }
+                if (args.tile_mode && src) {
+                    const auto layout = tile::plan_tiles(
+                        orig_w, orig_h, in_w, in_h, args.tile_overlap);
+                    std::printf(
+                        "Tile pass: %d тайлов/кадр (%dx%d сетка), "
+                        "canvas %dx%d\n",
+                        layout.count(), layout.nx(), layout.ny(),
+                        orig_w * scale_x, orig_h * scale_y);
+                }
+                if (disp) {
+                    // Та же логика приоритета, что и в show_rgb ниже.
+                    const char* kind;
+                    int sw = orig_w, sh = orig_h;
+                    if (args.show_output && image_output_idx >= 0) {
+                        kind = "выход модели (--show-output)";
+                        if (args.tile_mode) {
+                            sw = orig_w * scale_x;
+                            sh = orig_h * scale_y;
+                        } else {
+                            const auto& os =
+                                out_info[image_output_idx].shape;
+                            if (os.size() == 4) {
+                                sh = os[1];
+                                sw = os[2];
+                            }
+                        }
+                    } else if (args.show_input) {
+                        kind = "letterbox-вход (--show-input)";
+                        sw = in_w;
+                        sh = in_h;
+                    } else {
+                        kind = "исходный кадр";
+                    }
+                    std::printf(
+                        "Display показывает: %s %dx%d "
+                        "(окно %dx%d, letterbox)\n",
+                        kind, sw, sh, args.win_w, args.win_h);
+                    if (args.tile_mode && !args.show_output) {
+                        std::printf(
+                            "Подсказка: NPU собирает canvas %dx%d, "
+                            "но в окно идёт исходник — добавьте "
+                            "--show-output, чтобы увидеть результат.\n",
+                            orig_w * scale_x, orig_h * scale_y);
+                    }
+                    std::fflush(stdout);
+                }
+            }
 
             if (args.yolo) {
                 run_yolo_postproc(orig_w, orig_h);
@@ -1816,6 +1883,22 @@ int main(int argc, char** argv) {
             return 7;
         }
 
+        // Раскладка тайлов теперь известна — камера сообщила фактические
+        // width()/height() (драйвер мог выбрать ближайшее к запрошенному
+        // --camera-size). Печатаем по тому же шаблону, что и для картинки,
+        // чтобы пользователю не пришлось считать тайлы в уме.
+        if (args.tile_mode) {
+            const auto layout = tile::plan_tiles(
+                cam->width(), cam->height(), in_w, in_h, args.tile_overlap);
+            std::printf(
+                "Камера: %dx%d -> tile %dx%d×%d тайлов "
+                "(scale=%dx, overlap=%d, выход %dx%d)%s\n",
+                cam->width(), cam->height(),
+                in_w, in_h, layout.count(), scale_x, args.tile_overlap,
+                cam->width() * scale_x, cam->height() * scale_y,
+                in_c == 1 ? " [RGB→luma BT.601 каждый тайл]" : "");
+        }
+
         std::unique_ptr<Display> disp;
         if (args.display) {
             disp = make_display();
@@ -1826,6 +1909,9 @@ int main(int argc, char** argv) {
             }
             if (!disp->init(args.win_w, args.win_h, "ii", args.vsync))
                 return 7;
+            std::printf("Display: окно %dx%d, vsync=%s\n",
+                        args.win_w, args.win_h,
+                        args.vsync ? "on" : "off");
         }
 
         CameraFrameSource src(*cam, /*timeout_ms=*/1000);
@@ -2425,6 +2511,9 @@ int main(int argc, char** argv) {
             return 7;
         }
         if (!disp->init(args.win_w, args.win_h, "ii", args.vsync)) return 7;
+        std::printf("Display: окно %dx%d, vsync=%s\n",
+                    args.win_w, args.win_h,
+                    args.vsync ? "on" : "off");
 
         const uint8_t* frame;
         int fw, fh;
