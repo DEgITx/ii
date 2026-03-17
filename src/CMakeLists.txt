@@ -72,6 +72,10 @@ option(USE_DIRECTML  "Сборка с бэкендом DirectML/Windows ML (тр
 # ---- Бинарь (без бэкендов; они подключаются ниже опционально) ------------
 add_executable(ii
     ii.cpp
+    cli.cpp
+    preprocess.cpp
+    tensor_utils.cpp
+    yolo_render.cpp
     inference.cpp
     image_proc.cpp
     tile.cpp
