@@ -115,12 +115,31 @@ void TileCanvas::reset(int w, int h, int overlap_out_, bool blend_) {
     const size_t rgb_bytes = pixels * 3;
 
     if (blend) {
-        // blend=true: rgb всё равно полностью переписывается в finalize(),
-        // НО finalize пропускает пиксели с weight==0 (непокрытые) — для
-        // них старое содержимое осталось бы. Зануляем для предсказуемости.
-        rgb.assign(rgb_bytes, 0);
-        acc.assign(rgb_bytes, 0.0f);
-        weight.assign(pixels, 0.0f);
+        // rgb: при blend (overlap > 0) каждый пиксель canvas’а покрыт хотя
+        // бы одним тайлом с ненулевым весом (axis_w ≥ 1/overlap_out > 0),
+        // поэтому finalize() перезаписывает rgb целиком. Зануляем лишь при
+        // (ре)аллокации — как предсказуемый чёрный фон для гипотетических
+        // непокрытых пикселей (finalize() их пропускает). Учитываем, что
+        // ii.cpp свапает rgb с out_img между кадрами: вернувшийся буфер уже
+        // нужного размера, повторно его не трогаем (полное покрытие гарантирует
+        // перезапись всех пикселей в finalize()).
+        if (rgb.size() != rgb_bytes) rgb.assign(rgb_bytes, 0);
+
+        // acc/weight обязаны быть нулевыми перед накоплением (paste делает
+        // +=). finalize() зануляет каждую использованную ячейку сразу после
+        // деления, а непокрытые ячейки paste() не трогает вовсе — значит
+        // после успешного прохода буферы целиком нулевые (blend_clean=true),
+        // и полный memset на ~42 МБ можно пропустить. Он нужен лишь при
+        // (ре)аллокации или если предыдущий проход прервался до finalize().
+        if (acc.size() != rgb_bytes)      acc.assign(rgb_bytes, 0.0f);
+        else if (!blend_clean)            std::fill(acc.begin(), acc.end(), 0.0f);
+
+        if (weight.size() != pixels)      weight.assign(pixels, 0.0f);
+        else if (!blend_clean)            std::fill(weight.begin(), weight.end(), 0.0f);
+
+        // На входе в накопление буферы гарантированно нулевые (одной из
+        // веток выше). paste() сбросит флаг, как только начнёт писать.
+        blend_clean = true;
     } else {
         // overwrite-режим: plan_tiles снэпает последний тайл к краю,
         // так что canvas покрывается тайлами целиком — каждый байт rgb
@@ -130,6 +149,7 @@ void TileCanvas::reset(int w, int h, int overlap_out_, bool blend_) {
         if (rgb.size() != rgb_bytes) rgb.resize(rgb_bytes);
         acc.clear();
         weight.clear();
+        blend_clean = false;  // float-буферы освобождены, инвариант не действует
     }
 }
 
@@ -181,6 +201,10 @@ void TileCanvas::paste(const imgproc::OutputImage& tile, int dst_x, int dst_y) {
     const int x_end = std::min(tile.width,  width  - dst_x);
     if (y_beg >= y_end || x_beg >= x_end) return;
 
+    // Начинаем накопление в acc/weight — буферы больше не «чистые».
+    // Если проход прервётся до finalize(), следующий reset() это увидит.
+    blend_clean = false;
+
     for (int y = y_beg; y < y_end; ++y) {
         const float wy = axis_w(y, tile.height, overlap_out);
         const uint8_t* sp_row =
@@ -204,15 +228,24 @@ void TileCanvas::finalize() {
     const size_t pixels = (size_t)width * height;
     for (size_t k = 0; k < pixels; ++k) {
         const float w = weight[k];
-        if (w <= 0.0f) continue;  // пиксель не покрыт ни одним тайлом
+        if (w <= 0.0f) continue;  // пиксель не покрыт ни одним тайлом — acc/weight уже 0
         const float inv = 1.0f / w;
         for (int c = 0; c < 3; ++c) {
             float v = acc[k * 3 + c] * inv;
             if (v < 0.0f)   v = 0.0f;
             if (v > 255.0f) v = 255.0f;
             rgb[k * 3 + c] = (uint8_t)std::lround(v);
+            // Возвращаем ячейку в нулевое состояние прямо здесь: строка уже
+            // в кэше (только что прочитали acc), так что запись почти
+            // бесплатна — и следующий reset() пропустит полный memset.
+            acc[k * 3 + c] = 0.0f;
         }
+        weight[k] = 0.0f;
     }
+    // Все использованные ячейки занулены, непокрытые и так были нулевыми ⇒
+    // буферы целиком чисты независимо от того, каким будет покрытие в
+    // следующем кадре. Корректно даже при смене layout без смены размера.
+    blend_clean = true;
 }
 
 }  // namespace tile
