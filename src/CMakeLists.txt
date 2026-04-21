@@ -79,6 +79,7 @@ add_executable(ii
     inference.cpp
     image_proc.cpp
     tile.cpp
+    parallel.cpp
     yolo.cpp)
 
 # ---- Платформо-зависимые флаги компилятора и линкер-флаги ----------------
@@ -102,6 +103,13 @@ endif()
 if(UNIX)
     target_link_libraries(ii PRIVATE dl pthread)
 endif()
+
+# std::thread / std::async (модуль parallel.cpp — пул потоков). MSVC тащит
+# поддержку потоков сам; glibc уже покрыт pthread выше, но Threads::Threads
+# даёт правильный флаг (-pthread) и для MinGW, и для прочих тулчейнов.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+target_link_libraries(ii PRIVATE Threads::Threads)
 
 # ---- stb (одноголовники для image/resize, без внешних зависимостей) -------
 include(FetchContent)
