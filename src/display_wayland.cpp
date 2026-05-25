@@ -1,7 +1,7 @@
 // Wayland + EGL + GLES2 backend для отображения RGB-кадров.
 //
 // Логика:
-//   * подключаемся к Wayland-композитору (Wayland-композитор);
+//   * подключаемся к Wayland-композитору (Weston, Mutter, KWin и т.п.);
 //   * создаём wl_surface + xdg_toplevel (xdg-shell, стандартное окно);
 //   * поверх wl_egl_window поднимаем EGL-контекст + GLES2;
 //   * рендерим один полноэкранный квад с RGB-текстурой;
