@@ -1,16 +1,17 @@
-# Сборка C++ раннера TFLite + (опционального) внешний NPU-делегат делегата + Wayland/EGL
-# вывода / V4L2 камеры.
+# Сборка C++ раннера: бэкенды инференса (TFLite / TensorRT / DirectML) +
+# Wayland/EGL вывод + V4L2 камера.
 #
 # Поддерживаемые платформы:
-#   * Linux / BSP — полный набор (Wayland/EGL/GLES2, V4L2);
+#   * Linux (в т.ч. встраиваемый / SBC) — полный набор (Wayland/EGL/GLES2,
+#     V4L2);
 #   * Linux dev-host без видеокарты — собирайте с -DUSE_DISPLAY=OFF;
 #   * Windows / macOS dev-host — Wayland/V4L2 не собираются, делегата нет,
 #     раннер работает в CPU-режиме (или с альтернативным бэкендом —
 #     TensorRT / DirectML).
 #
 # Доступные бэкенды инференса (включаются опциями CMake):
-#   * USE_TFLITE   (ON  по умолчанию) — TensorFlow Lite + external delegate
-#                                       (включая внешний NPU-делегат на NPU);
+#   * USE_TFLITE   (ON  по умолчанию) — TensorFlow Lite + опциональный
+#                                       внешний делегат (NPU/GPU);
 #   * USE_TENSORRT (OFF по умолчанию) — NVIDIA TensorRT 10+, GPU;
 #                                       требует CUDA Runtime и nvinfer
 #                                       (опционально nvonnxparser для
@@ -20,7 +21,7 @@
 #                                       (на не-Windows собирается только
 #                                       CPU EP — полезно для регрессий).
 #
-# Пример (Linux, на устройстве/в SDK BSP):
+# Пример (Linux):
 #     cmake -S . -B build -DTFLITE_ROOT=/usr
 #     cmake --build build -j
 #
@@ -60,14 +61,21 @@ else()
     option(USE_CAMERA  "Сборка с V4L2 backend'ом для захвата с камеры"          OFF)
 endif()
 
-# Бэкенды инференса. TFLite по-умолчанию ON (это основной путь внешний NPU-делегат
-# на NPU). TensorRT и DirectML — опциональны: их сборка требует
-# внешних SDK (CUDA+TensorRT и ONNX Runtime соответственно), поэтому
-# по-умолчанию OFF; включаются опциями ниже + указанием путей через
-# TRT_ROOT / ORT_ROOT (см. блоки ниже).
+# Бэкенды инференса. TFLite по-умолчанию ON (CPU + опциональный внешний
+# делегат). TensorRT и DirectML — опциональны: их сборка требует внешних
+# SDK (CUDA+TensorRT и ONNX Runtime соответственно), поэтому по-умолчанию
+# OFF; включаются опциями ниже + указанием путей через TRT_ROOT / ORT_ROOT
+# (см. блоки ниже).
 option(USE_TFLITE    "Сборка с бэкендом TensorFlow Lite"                       ON)
 option(USE_TENSORRT  "Сборка с бэкендом NVIDIA TensorRT (требует CUDA+nvinfer)" OFF)
 option(USE_DIRECTML  "Сборка с бэкендом DirectML/Windows ML (требует ORT)"      OFF)
+
+# Опциональный модуль внешнего NPU-делегата TFLite (см. delegate_neutron.cpp).
+# Подставляет платформенный дефолтный путь к .so-плагину делегата на Linux.
+# По умолчанию OFF — ядро раннера не зависит ни от какого конкретного
+# ускорителя; путь к делегату всегда можно задать через --delegate.
+option(USE_NEUTRON_DELEGATE
+    "Подключить опциональный модуль внешнего NPU-делегата (Linux)"            OFF)
 
 # ---- Бинарь (без бэкендов; они подключаются ниже опционально) ------------
 add_executable(ii
@@ -77,6 +85,7 @@ add_executable(ii
     tensor_utils.cpp
     yolo_render.cpp
     inference.cpp
+    delegate.cpp
     image_proc.cpp
     tile.cpp
     parallel.cpp
@@ -154,6 +163,15 @@ if(USE_TFLITE)
     target_include_directories(ii PRIVATE ${TFLITE_INCLUDE_DIR})
     target_link_libraries(ii PRIVATE ${TFLITE_LIB})
     target_compile_definitions(ii PRIVATE INF_HAS_TFLITE=1)
+endif()
+
+# ---- Опциональный модуль внешнего NPU-делегата ---------------------------
+# Платформенно-специфичная мелочь: дефолтный путь к .so-плагину делегата.
+# Отделён от ядра, чтобы раннер не был привязан ни к одному ускорителю.
+if(USE_NEUTRON_DELEGATE)
+    target_sources(ii PRIVATE delegate_neutron.cpp)
+    target_compile_definitions(ii PRIVATE INF_HAS_DELEGATE_MODULE=1)
+    message(STATUS "Delegate module: внешний NPU-делегат (ON)")
 endif()
 
 # ---- Бэкенд: TensorRT ----------------------------------------------------
@@ -355,5 +373,6 @@ message(STATUS "  compiler : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSI
 message(STATUS "  TFLite   : ${USE_TFLITE}")
 message(STATUS "  TensorRT : ${USE_TENSORRT}")
 message(STATUS "  DirectML : ${USE_DIRECTML}")
+message(STATUS "  DelegMod : ${USE_NEUTRON_DELEGATE}")
 message(STATUS "  Display  : ${USE_DISPLAY}")
 message(STATUS "  Camera   : ${USE_CAMERA}")

@@ -20,7 +20,7 @@
 // Жизненный цикл:
 //   auto eng = inf::make_engine();              // дефолтный бэкенд
 //   inf::Engine::Options opts;
-//   opts.delegate_path = "/lib/libdelegate.so";
+//   opts.delegate_path = "/path/to/libdelegate.so";   // или "" — CPU
 //   opts.num_threads   = 4;
 //   if (!eng->load("model.tflite", opts)) ...;
 //   void* in = eng->input_data(0);
@@ -158,10 +158,11 @@ std::unique_ptr<Engine> make_engine(const std::string& backend = "");
 // Список бэкендов, собранных в текущий бинарь. Удобно для --help / UI.
 std::vector<std::string> available_backends();
 
-// Платформенный дефолт для пути к делегату:
-//   * Linux  -> "/lib/libdelegate.so" (BSP);
-//   * прочие -> "" (нет смысла подставлять путь, которого не существует).
-// ii.cpp использует это как значение по-умолчанию --delegate.
+// Платформенный дефолт для пути к внешнему делегату TFLite. По умолчанию
+// пуст ("") — раннер работает на CPU / выбранном бэкенде без делегата.
+// Конкретный путь может подставить опциональный модуль делегата,
+// собираемый отдельно (см. delegate.cpp + опции CMake), либо пользователь
+// через --delegate. ii.cpp использует это как значение по-умолчанию.
 const char* default_delegate_path();
 
 }  // namespace inf

@@ -117,15 +117,8 @@ std::vector<std::string> available_backends() {
     return out;
 }
 
-const char* default_delegate_path() {
-#if defined(_WIN32)
-    // На Windows нет ни внешний делегата (BSP), ни «системного»
-    // расположения для .dll-плагинов TFLite. Делегат должен указываться
-    // пользователем явно либо вообще не использоваться.
-    return "";
-#else
-    return "/lib/libdelegate.so";
-#endif
-}
+// default_delegate_path() вынесена в delegate.cpp (платформенно-нейтральная
+// часть) + опциональные модули делегатов — чтобы ядро инференса не зависело
+// от конкретного ускорителя.
 
 }  // namespace inf
