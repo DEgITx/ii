@@ -55,4 +55,11 @@ void rgb_to_gray(const uint8_t* rgb, std::size_t pixels,
 bool fill_input(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
                 void* data);
 
+// Заливка входа в NCHW-раскладке (channel-planar) — для ONNX-моделей
+// [1,C,H,W]. На вход тот же HWC-буфер, что и у fill_input (как из letterbox),
+// плюс геометрия C/H/W; пиксели транспонируются HWC -> CHW. Нормализация и
+// квантование идентичны fill_input.
+bool fill_input_nchw(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
+                     void* data, int C, int H, int W);
+
 }  // namespace iirun

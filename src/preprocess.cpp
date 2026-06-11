@@ -183,4 +183,66 @@ bool fill_input(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
     }
 }
 
+bool fill_input_nchw(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
+                     void* data, int C, int H, int W) {
+    const std::size_t HW = (std::size_t)H * W;
+    if (rgb.size() < HW * (std::size_t)C) {
+        std::fprintf(stderr, "fill_input_nchw: буфер RGB меньше C*H*W.\n");
+        return false;
+    }
+    thread_local InputQuantCache cache;
+
+    // src = rgb[(y*W+x)*C + c]  (HWC),  dst = data[c*H*W + (y*W+x)]  (CHW).
+    // Внутренний цикл по hw держит непрерывную запись в dst-плоскость канала.
+    switch (info.dtype) {
+        case inf::DType::Float32: {
+            float* p = reinterpret_cast<float*>(data);
+            for (int c = 0; c < C; ++c)
+                for (std::size_t hw = 0; hw < HW; ++hw)
+                    p[c * HW + hw] = rgb[hw * C + c] / 255.0f;
+            return true;
+        }
+        case inf::DType::Int8: {
+            ensure_input_quant_lut(cache, info);
+            int8_t* p = reinterpret_cast<int8_t*>(data);
+            const uint8_t* lut = cache.lut8;
+            for (int c = 0; c < C; ++c)
+                for (std::size_t hw = 0; hw < HW; ++hw)
+                    p[c * HW + hw] = (int8_t)lut[rgb[hw * C + c]];
+            return true;
+        }
+        case inf::DType::UInt8: {
+            ensure_input_quant_lut(cache, info);
+            uint8_t* p = reinterpret_cast<uint8_t*>(data);
+            const uint8_t* lut = cache.lut8;
+            for (int c = 0; c < C; ++c)
+                for (std::size_t hw = 0; hw < HW; ++hw)
+                    p[c * HW + hw] = lut[rgb[hw * C + c]];
+            return true;
+        }
+        case inf::DType::Int16: {
+            ensure_input_quant_lut(cache, info);
+            int16_t* p = reinterpret_cast<int16_t*>(data);
+            const uint16_t* lut = cache.lut16;
+            for (int c = 0; c < C; ++c)
+                for (std::size_t hw = 0; hw < HW; ++hw)
+                    p[c * HW + hw] = (int16_t)lut[rgb[hw * C + c]];
+            return true;
+        }
+        case inf::DType::UInt16: {
+            ensure_input_quant_lut(cache, info);
+            uint16_t* p = reinterpret_cast<uint16_t*>(data);
+            const uint16_t* lut = cache.lut16;
+            for (int c = 0; c < C; ++c)
+                for (std::size_t hw = 0; hw < HW; ++hw)
+                    p[c * HW + hw] = lut[rgb[hw * C + c]];
+            return true;
+        }
+        default:
+            std::fprintf(stderr, "fill_input_nchw: dtype %s не поддержан.\n",
+                         inf::dtype_name(info.dtype));
+            return false;
+    }
+}
+
 }  // namespace iirun

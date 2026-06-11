@@ -45,7 +45,8 @@ add_executable(ii_tests
     ${CMAKE_CURRENT_SOURCE_DIR}/test_tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_graph.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_onnx.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_onnx.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_bridge.cpp)
 
 # Заголовки раннера + stb (для preprocess.cpp). stb_SOURCE_DIR заполнен
 # в корневом CMakeLists через FetchContent (tests подключается после).

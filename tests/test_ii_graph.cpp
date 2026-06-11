@@ -103,6 +103,76 @@ TEST(Executor, ConvReluPool) {
     EXPECT_NEAR(y->data[3], 54.0f, 1e-4f);
 }
 
+// Композиция в стиле YOLOv8: Conv -> SiLU(Sigmoid+Mul) -> MaxPool ->
+// Conv -> Resize(upsample) -> Concat со «skip» -> Conv-голова -> Reshape ->
+// Sigmoid. Проверяем, что весь набор слоёв стыкуется и даёт конечный
+// тензор правильной формы со значениями в [0,1].
+TEST(Executor, YoloLikeGraph) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"y"};
+    // Лёгкие детерминированные веса (важна стыковка форм, не числа).
+    g.initializers["w1"] = Tensor(Shape{8, 3, 3, 3}, 0.05f);
+    g.initializers["w2"] = Tensor(Shape{8, 8, 3, 3}, 0.05f);
+    g.initializers["wh"] = Tensor(Shape{4, 16, 1, 1}, 0.05f);
+    g.initializers["scales"] = Tensor(Shape{4}, std::vector<float>{1, 1, 2, 2});
+    g.initializers["newshape"] = Tensor(Shape{3}, std::vector<float>{1, 4, 256});
+
+    auto pad1 = [](Node n) {
+        n.attrs["pads"] = Attribute{{1, 1, 1, 1}, {}, ""};
+        n.attrs["strides"] = Attribute{{1, 1}, {}, ""};
+        return n;
+    };
+    // stem: Conv -> SiLU -> MaxPool/2
+    g.nodes.push_back(pad1(mk("Conv", {"x", "w1"}, {"c1"})));
+    g.nodes.push_back(mk("Sigmoid", {"c1"}, {"sg1"}));
+    g.nodes.push_back(mk("Mul", {"c1", "sg1"}, {"a1"}));   // a1 = SiLU(c1) [1,8,16,16]
+    Node pool = mk("MaxPool", {"a1"}, {"p1"});
+    pool.attrs["kernel_shape"] = Attribute{{2, 2}, {}, ""};
+    pool.attrs["strides"] = Attribute{{2, 2}, {}, ""};
+    g.nodes.push_back(pool);                                // p1 [1,8,8,8]
+    // deeper conv + upsample back to 16x16
+    g.nodes.push_back(pad1(mk("Conv", {"p1", "w2"}, {"c2"})));
+    g.nodes.push_back(mk("Resize", {"c2", "", "scales"}, {"up"}));  // [1,8,16,16]
+    // concat skip(a1) + up -> [1,16,16,16] -> head conv -> [1,4,16,16]
+    Node cat = mk("Concat", {"a1", "up"}, {"cc"});
+    cat.attrs["axis"] = Attribute{{1}, {}, ""};
+    g.nodes.push_back(cat);
+    g.nodes.push_back(mk("Conv", {"cc", "wh"}, {"hd"}));    // 1x1, [1,4,16,16]
+    g.nodes.push_back(mk("Reshape", {"hd", "newshape"}, {"flat"}));  // [1,4,256]
+    g.nodes.push_back(mk("Sigmoid", {"flat"}, {"y"}));
+
+    Executor ex(g);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{1, 3, 16, 16}, 0.5f);
+    ASSERT_TRUE(ex.run(in));
+    const Tensor* y = ex.output(0);
+    ASSERT_NE(y, nullptr);
+    EXPECT_EQ(y->shape, (Shape{1, 4, 256}));
+    for (float v : y->data) {
+        EXPECT_GE(v, 0.0f);
+        EXPECT_LE(v, 1.0f);
+        EXPECT_FALSE(std::isnan(v));
+    }
+}
+
+// Identity — проброс; Cast к int — усечение к нулю.
+TEST(Executor, IdentityAndCast) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"id", "ci"};
+    g.nodes.push_back(mk("Identity", {"x"}, {"id"}));
+    Node cast = mk("Cast", {"x"}, {"ci"});
+    cast.attrs["to"] = Attribute{{7}, {}, ""};  // INT64 -> усечение
+    g.nodes.push_back(cast);
+    Executor ex(g);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{3}, std::vector<float>{1.9f, -1.9f, 2.0f});
+    ASSERT_TRUE(ex.run(in));
+    EXPECT_EQ(ex.value("id")->data, (std::vector<float>{1.9f, -1.9f, 2.0f}));
+    EXPECT_EQ(ex.value("ci")->data, (std::vector<float>{1, -1, 2}));
+}
+
 TEST(Executor, UnknownOpFails) {
     Graph g;
     g.input_names = {"x"};

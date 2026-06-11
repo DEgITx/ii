@@ -68,6 +68,23 @@ Shape to_shape(const Tensor& t) {
     return s;
 }
 
+// То же, но как «список целых» (для starts/ends/axes/scales-индексов и пр.).
+std::vector<std::int64_t> ints_of(const Tensor& t) {
+    std::vector<std::int64_t> v(t.data.size());
+    for (std::size_t i = 0; i < t.data.size(); ++i)
+        v[i] = static_cast<std::int64_t>(std::llround(t.data[i]));
+    return v;
+}
+
+// Список int из входа i (opset≥13/≥10/≥18) или из атрибута name (старые
+// opset'ы) — многие ONNX-операции мигрировали параметры из атрибутов во входы.
+std::vector<std::int64_t> ints_in_or_attr(const std::vector<const Tensor*>& in,
+                                          std::size_t i, const Node& n,
+                                          const char* attr) {
+    if (i < in.size() && in[i] && !in[i]->empty()) return ints_of(*in[i]);
+    return n.ints(attr);
+}
+
 std::vector<Tensor> one(Tensor t) { return std::vector<Tensor>{std::move(t)}; }
 
 void register_all() {
@@ -185,6 +202,106 @@ void register_all() {
     });
     register_op("Transpose", [](auto& in, const Node& n) {
         return one(transpose(need(in, 0, "X"), n.ints("perm")));
+    });
+
+    // --- доп. поэлементные (YOLOv8-головы, трансформеры) ---
+    register_op("Exp",        [](auto& in, const Node&) { return one(exp_(need(in, 0, "X"))); });
+    register_op("Sqrt",       [](auto& in, const Node&) { return one(sqrt_(need(in, 0, "X"))); });
+    register_op("Abs",        [](auto& in, const Node&) { return one(abs_(need(in, 0, "X"))); });
+    register_op("Neg",        [](auto& in, const Node&) { return one(neg(need(in, 0, "X"))); });
+    register_op("Reciprocal", [](auto& in, const Node&) { return one(reciprocal(need(in, 0, "X"))); });
+    register_op("Pow", [](auto& in, const Node&) { return one(pow_(need(in, 0, "A"), need(in, 1, "B"))); });
+    register_op("Min", [](auto& in, const Node&) { return one(min_(need(in, 0, "A"), need(in, 1, "B"))); });
+    register_op("Max", [](auto& in, const Node&) { return one(max_(need(in, 0, "A"), need(in, 1, "B"))); });
+
+    // --- resize (neck upsample) ---
+    register_op("Resize", [](auto& in, const Node&) {
+        const Tensor& x = need(in, 0, "X");
+        const Tensor* sc = opt(in, 2);   // scales
+        const Tensor* sz = opt(in, 3);   // sizes
+        std::vector<float> scales;
+        if (sc && !sc->empty()) {
+            for (float v : sc->data) scales.push_back(v);
+        } else if (sz && !sz->empty()) {
+            for (int i = 0; i < x.ndim(); ++i)
+                scales.push_back(sz->data[(std::size_t)i] / (float)x.shape[i]);
+        } else {
+            throw std::runtime_error("Resize: нет ни scales, ни sizes");
+        }
+        return one(resize_nearest(x, scales));
+    });
+
+    // --- split (C2f) ---
+    register_op("Split", [](auto& in, const Node& n) {
+        const Tensor& x = need(in, 0, "X");
+        std::int64_t axis = n.i("axis", 0);
+        std::vector<std::int64_t> sizes = ints_in_or_attr(in, 1, n, "split");
+        if (sizes.empty()) {  // поровну на число выходов
+            std::int64_t parts = (std::int64_t)n.outputs.size();
+            std::int64_t dim = x.dim((int)axis);
+            for (std::int64_t k = 0; k < parts; ++k)
+                sizes.push_back(dim / parts + (k == parts - 1 ? dim % parts : 0));
+        }
+        return split(x, axis, sizes);
+    });
+
+    // --- slice ---
+    register_op("Slice", [](auto& in, const Node& n) {
+        const Tensor& x = need(in, 0, "data");
+        auto starts = ints_in_or_attr(in, 1, n, "starts");
+        auto ends   = ints_in_or_attr(in, 2, n, "ends");
+        auto axes   = ints_in_or_attr(in, 3, n, "axes");
+        auto steps  = ints_in_or_attr(in, 4, n, "steps");
+        return one(slice(x, starts, ends, axes, steps));
+    });
+
+    // --- gather / shape / (un)squeeze ---
+    register_op("Gather", [](auto& in, const Node& n) {
+        return one(gather(need(in, 0, "data"), need(in, 1, "indices"), n.i("axis", 0)));
+    });
+    register_op("Shape", [](auto& in, const Node&) {
+        return one(shape_of(need(in, 0, "X")));
+    });
+    register_op("Unsqueeze", [](auto& in, const Node& n) {
+        return one(unsqueeze(need(in, 0, "X"), ints_in_or_attr(in, 1, n, "axes")));
+    });
+    register_op("Squeeze", [](auto& in, const Node& n) {
+        return one(squeeze(need(in, 0, "X"), ints_in_or_attr(in, 1, n, "axes")));
+    });
+
+    // --- редукции (axes из входа или атрибута, keepdims по умолчанию 1) ---
+    struct RedReg {
+        static Kernel make(int kind) {
+            return [kind](const std::vector<const Tensor*>& in, const Node& n) {
+                auto axes = ints_in_or_attr(in, 1, n, "axes");
+                bool keep = n.i("keepdims", 1) != 0;
+                return one(reduce(need(in, 0, "X"), axes, keep, kind));
+            };
+        }
+    };
+    register_op("ReduceSum",  RedReg::make(0));
+    register_op("ReduceMean", RedReg::make(1));
+    register_op("ReduceMax",  RedReg::make(2));
+    register_op("ReduceMin",  RedReg::make(3));
+
+    // --- «прозрачные» операции, частые в shape-подграфах экспортов ---
+    register_op("Identity", [](auto& in, const Node&) {
+        return one(need(in, 0, "X"));
+    });
+    register_op("Cast", [](auto& in, const Node& n) {
+        // Движок считает всё во float32. Cast к целому типу усекаем к нулю
+        // (ONNX-семантика float->int), к вещественному — проброс как есть.
+        // ONNX DataType: 6=int32,7=int64,9=bool,12=uint32,13=uint64,5=int16,
+        // 3=int8,2=uint8.
+        const Tensor& x = need(in, 0, "X");
+        std::int64_t to = n.i("to", 1);
+        bool to_int = (to == 2 || to == 3 || to == 5 || to == 6 ||
+                       to == 7 || to == 9 || to == 12 || to == 13);
+        if (!to_int) return one(x);
+        Tensor o(x.shape);
+        for (std::size_t i = 0; i < x.data.size(); ++i)
+            o.data[i] = std::trunc(x.data[i]);
+        return one(std::move(o));
     });
 }
 

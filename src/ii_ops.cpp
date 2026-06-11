@@ -545,4 +545,237 @@ Tensor upsample_nearest(const Tensor& x, std::int64_t sh, std::int64_t sw) {
     return out;
 }
 
+// ---- доп. поэлементные ------------------------------------------------------
+Tensor exp_(const Tensor& x)       { return map1(x, [](float v){ return std::exp(v); }); }
+Tensor sqrt_(const Tensor& x)      { return map1(x, [](float v){ return std::sqrt(v); }); }
+Tensor abs_(const Tensor& x)       { return map1(x, [](float v){ return std::fabs(v); }); }
+Tensor neg(const Tensor& x)        { return map1(x, [](float v){ return -v; }); }
+Tensor reciprocal(const Tensor& x) { return map1(x, [](float v){ return 1.0f / v; }); }
+Tensor pow_(const Tensor& a, const Tensor& b) {
+    return ewise(a, b, [](float x, float y){ return std::pow(x, y); });
+}
+Tensor min_(const Tensor& a, const Tensor& b) {
+    return ewise(a, b, [](float x, float y){ return std::min(x, y); });
+}
+Tensor max_(const Tensor& a, const Tensor& b) {
+    return ewise(a, b, [](float x, float y){ return std::max(x, y); });
+}
+
+// ---- resize (nearest, per-axis scales) -------------------------------------
+Tensor resize_nearest(const Tensor& x, const std::vector<float>& scales) {
+    int nd = x.ndim();
+    if ((int)scales.size() != nd)
+        throw std::runtime_error("resize_nearest: len(scales) != ndim");
+    Shape os(nd);
+    for (int i = 0; i < nd; ++i) {
+        os[i] = (std::int64_t)std::floor(x.shape[i] * scales[i]);
+        if (os[i] < 1) os[i] = 1;
+    }
+    auto in_str = row_major_strides(x.shape);
+    auto out_str = row_major_strides(os);
+    Tensor out(os);
+    std::int64_t total = out.numel();
+    for (std::int64_t lin = 0; lin < total; ++lin) {
+        std::int64_t rem = lin, src = 0;
+        for (int d = 0; d < nd; ++d) {
+            std::int64_t oc = (rem / out_str[d]) % os[d];
+            std::int64_t ic = (std::int64_t)std::floor(oc / scales[d]);
+            if (ic < 0) ic = 0;
+            if (ic >= x.shape[d]) ic = x.shape[d] - 1;
+            src += ic * in_str[d];
+        }
+        out.data[static_cast<std::size_t>(lin)] = x.data[static_cast<std::size_t>(src)];
+    }
+    return out;
+}
+
+// ---- split -----------------------------------------------------------------
+std::vector<Tensor> split(const Tensor& x, std::int64_t axis,
+                          const std::vector<std::int64_t>& sizes) {
+    int ax = norm_axis(axis, x.ndim());
+    std::int64_t sum = 0;
+    for (auto s : sizes) sum += s;
+    if (sum != x.shape[ax])
+        throw std::runtime_error("split: сумма частей != размеру оси");
+    std::int64_t inner = 1;
+    for (int d = ax + 1; d < x.ndim(); ++d) inner *= x.shape[d];
+    std::int64_t outer = 1;
+    for (int d = 0; d < ax; ++d) outer *= x.shape[d];
+    std::int64_t axdim = x.shape[ax];
+
+    std::vector<Tensor> outs;
+    std::int64_t off = 0;
+    for (std::int64_t part : sizes) {
+        Shape os = x.shape;
+        os[ax] = part;
+        Tensor o(os);
+        for (std::int64_t ot = 0; ot < outer; ++ot) {
+            const float* src = x.data.data() + (ot * axdim + off) * inner;
+            float* dst = o.data.data() + ot * part * inner;
+            std::copy_n(src, part * inner, dst);
+        }
+        outs.push_back(std::move(o));
+        off += part;
+    }
+    return outs;
+}
+
+// ---- slice -----------------------------------------------------------------
+Tensor slice(const Tensor& x,
+             const std::vector<std::int64_t>& starts,
+             const std::vector<std::int64_t>& ends,
+             const std::vector<std::int64_t>& axes,
+             const std::vector<std::int64_t>& steps) {
+    int nd = x.ndim();
+    std::vector<std::int64_t> st(nd, 0), cnt(nd), stp(nd, 1);
+    for (int i = 0; i < nd; ++i) cnt[i] = x.shape[i];  // по умолчанию весь диапазон
+
+    std::size_t m = starts.size();
+    for (std::size_t k = 0; k < m; ++k) {
+        int ax = axes.empty() ? (int)k : norm_axis(axes[k], nd);
+        std::int64_t dim = x.shape[ax];
+        std::int64_t step = steps.empty() ? 1 : steps[k];
+        if (step == 0) throw std::runtime_error("slice: нулевой шаг");
+        std::int64_t s = starts[k], e = ends[k];
+        if (s < 0) s += dim;
+        if (e < 0) e += dim;
+        std::int64_t count;
+        if (step > 0) {
+            s = std::min(std::max(s, (std::int64_t)0), dim);
+            e = std::min(std::max(e, (std::int64_t)0), dim);
+            count = (e > s) ? (e - s + step - 1) / step : 0;
+        } else {
+            s = std::min(std::max(s, (std::int64_t)0), dim - 1);
+            e = std::min(std::max(e, (std::int64_t)-1), dim - 1);
+            count = (s > e) ? (s - e + (-step) - 1) / (-step) : 0;
+        }
+        st[ax] = s;
+        stp[ax] = step;
+        cnt[ax] = count;
+    }
+
+    Shape os(nd);
+    for (int i = 0; i < nd; ++i) os[i] = cnt[i];
+    auto in_str = row_major_strides(x.shape);
+    auto out_str = row_major_strides(os);
+    Tensor out(os);
+    std::int64_t total = out.numel();
+    for (std::int64_t lin = 0; lin < total; ++lin) {
+        std::int64_t rem = lin, src = 0;
+        for (int d = 0; d < nd; ++d) {
+            std::int64_t oc = (rem / out_str[d]) % (os[d] == 0 ? 1 : os[d]);
+            src += (st[d] + oc * stp[d]) * in_str[d];
+        }
+        out.data[static_cast<std::size_t>(lin)] = x.data[static_cast<std::size_t>(src)];
+    }
+    return out;
+}
+
+// ---- gather ----------------------------------------------------------------
+Tensor gather(const Tensor& x, const Tensor& indices, std::int64_t axis) {
+    int ax = norm_axis(axis, x.ndim());
+    std::int64_t axdim = x.shape[ax];
+    std::int64_t inner = 1;
+    for (int d = ax + 1; d < x.ndim(); ++d) inner *= x.shape[d];
+    std::int64_t outer = 1;
+    for (int d = 0; d < ax; ++d) outer *= x.shape[d];
+    std::int64_t idxn = indices.numel();
+
+    Shape os;
+    for (int d = 0; d < ax; ++d) os.push_back(x.shape[d]);
+    for (auto d : indices.shape) os.push_back(d);
+    for (int d = ax + 1; d < x.ndim(); ++d) os.push_back(x.shape[d]);
+    Tensor out(os);
+
+    for (std::int64_t o = 0; o < outer; ++o)
+        for (std::int64_t k = 0; k < idxn; ++k) {
+            std::int64_t iv = (std::int64_t)std::llround(indices.data[(std::size_t)k]);
+            if (iv < 0) iv += axdim;
+            if (iv < 0 || iv >= axdim)
+                throw std::runtime_error("gather: индекс вне диапазона");
+            const float* src = x.data.data() + (o * axdim + iv) * inner;
+            float* dst = out.data.data() + (o * idxn + k) * inner;
+            std::copy_n(src, inner, dst);
+        }
+    return out;
+}
+
+// ---- unsqueeze / squeeze ---------------------------------------------------
+Tensor unsqueeze(const Tensor& x, std::vector<std::int64_t> axes) {
+    int out_nd = x.ndim() + (int)axes.size();
+    for (auto& a : axes) if (a < 0) a += out_nd;
+    std::vector<char> is_new(out_nd, 0);
+    for (auto a : axes) {
+        if (a < 0 || a >= out_nd) throw std::runtime_error("unsqueeze: ось вне диапазона");
+        is_new[(std::size_t)a] = 1;
+    }
+    Shape os(out_nd);
+    int si = 0;
+    for (int i = 0; i < out_nd; ++i) os[i] = is_new[i] ? 1 : x.shape[si++];
+    return Tensor(os, x.data);
+}
+
+Tensor squeeze(const Tensor& x, std::vector<std::int64_t> axes) {
+    int nd = x.ndim();
+    std::vector<char> drop(nd, 0);
+    if (axes.empty()) {
+        for (int i = 0; i < nd; ++i) if (x.shape[i] == 1) drop[i] = 1;
+    } else {
+        for (auto a : axes) { int ax = norm_axis(a, nd); drop[(std::size_t)ax] = 1; }
+    }
+    Shape os;
+    for (int i = 0; i < nd; ++i) if (!drop[i]) os.push_back(x.shape[i]);
+    return Tensor(os, x.data);
+}
+
+Tensor shape_of(const Tensor& x) {
+    Shape os{(std::int64_t)x.ndim()};
+    Tensor out(os);
+    for (int i = 0; i < x.ndim(); ++i) out.data[(std::size_t)i] = (float)x.shape[i];
+    return out;
+}
+
+// ---- редукции --------------------------------------------------------------
+Tensor reduce(const Tensor& x, std::vector<std::int64_t> axes,
+              bool keepdims, int kind) {
+    int nd = x.ndim();
+    std::vector<char> red(nd, 0);
+    if (axes.empty()) { for (int i = 0; i < nd; ++i) red[i] = 1; }
+    else { for (auto a : axes) red[(std::size_t)norm_axis(a, nd)] = 1; }
+
+    // Компактная форма выхода (без редуцируемых осей) + её шаги.
+    Shape compact;
+    std::vector<int> pos(nd, -1);
+    for (int i = 0; i < nd; ++i) if (!red[i]) { pos[i] = (int)compact.size(); compact.push_back(x.shape[i]); }
+    auto out_str = row_major_strides(compact);
+
+    std::int64_t out_n = numel(compact);
+    float init = (kind == 2) ? -INFINITY : (kind == 3 ? INFINITY : 0.0f);
+    std::vector<float> acc((std::size_t)out_n, init);
+
+    auto in_str = row_major_strides(x.shape);
+    std::int64_t total = x.numel();
+    std::int64_t red_count = total / (out_n == 0 ? 1 : out_n);
+    for (std::int64_t lin = 0; lin < total; ++lin) {
+        std::int64_t rem = lin, off = 0;
+        for (int d = 0; d < nd; ++d) {
+            std::int64_t c = (rem / in_str[d]) % x.shape[d];
+            if (!red[d]) off += c * out_str[pos[d]];
+        }
+        float v = x.data[static_cast<std::size_t>(lin)];
+        float& a = acc[static_cast<std::size_t>(off)];
+        switch (kind) {
+            case 0: case 1: a += v; break;
+            case 2: a = std::max(a, v); break;
+            case 3: a = std::min(a, v); break;
+        }
+    }
+    if (kind == 1) for (auto& a : acc) a /= (float)red_count;  // mean
+
+    Shape os;
+    if (keepdims) { os.resize(nd); for (int i = 0; i < nd; ++i) os[i] = red[i] ? 1 : x.shape[i]; }
+    else          os = compact;
+    return Tensor(os, std::move(acc));
+}
+
 }  // namespace ii

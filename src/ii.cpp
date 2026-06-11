@@ -504,14 +504,17 @@ int main(int argc, char** argv) {
     // Для чисто рандомного --compare-random разрешаем любой shape
     // (например [1,9,9,1]) — buffer трактуется плоско.
     const auto& s = in_info[0].shape;
-    const int  in_c  = image_input_channels(s);
-    const bool nhwc_img = in_c > 0;
+    ImageLayout in_layout = ImageLayout::None;
     int in_h = 0, in_w = 0;
-    if (nhwc_img) { in_h = s[1]; in_w = s[2]; }
-    if (has_image && !nhwc_img) {
+    const int  in_c     = image_input_info(s, in_layout, in_h, in_w);
+    const bool is_img   = in_c > 0;
+    // nhwc_img оставляем как «именно NHWC» — этого требует letterbox-под-ref
+    // в compare-режиме (ниже). Для самих image/camera-путей достаточно is_img.
+    const bool nhwc_img = in_layout == ImageLayout::NHWC;
+    if (has_image && !is_img) {
         std::fprintf(stderr,
-            "Для путей с изображением поддерживается только NHWC [1,H,W,1|3]. "
-            "Получено shape=%s.\n", shape_to_str(s).c_str());
+            "Для путей с изображением нужен NHWC [1,H,W,1|3] или NCHW "
+            "[1,1|3,H,W]. Получено shape=%s.\n", shape_to_str(s).c_str());
         return 3;
     }
 
@@ -538,6 +541,14 @@ int main(int argc, char** argv) {
     // вспомогательной интерпретации random-буфера как RGB-кадра in_w x in_h,
     // см. ниже). Для C=1 делает RGB → luma; для C=3 — отдаёт буфер напрямую.
     auto fill_model_from_rgb = [&]() -> bool {
+        // NCHW (типичный ONNX) — channel-planar заливка; NHWC — плоская.
+        if (in_layout == ImageLayout::NCHW) {
+            if (in_c == 1) {
+                rgb_to_gray(input_rgb.data(), (size_t)in_w * in_h, input_gray);
+                return fill_input_nchw(input_gray, in_info[0], in_t, 1, in_h, in_w);
+            }
+            return fill_input_nchw(input_rgb, in_info[0], in_t, in_c, in_h, in_w);
+        }
         if (in_c == 1) {
             rgb_to_gray(input_rgb.data(), (size_t)in_w * in_h, input_gray);
             return fill_input(input_gray, in_info[0], in_t);
@@ -546,10 +557,11 @@ int main(int argc, char** argv) {
     };
     if (has_camera) {
         // Для камеры ждём первый кадр уже в основном цикле — здесь лишь
-        // проверяем, что вход модели совместим (NHWC [1,H,W,1|3]).
-        if (!nhwc_img) {
+        // проверяем, что вход модели совместим (NHWC/NCHW картинка).
+        if (!is_img) {
             std::fprintf(stderr,
-                "Для --camera нужен вход NHWC [1,H,W,1|3], получено %s.\n",
+                "Для --camera нужен вход-картинка NHWC [1,H,W,1|3] или "
+                "NCHW [1,1|3,H,W], получено %s.\n",
                 shape_to_str(s).c_str());
             return 4;
         }

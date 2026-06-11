@@ -35,6 +35,27 @@ int image_input_channels(const std::vector<int>& s) {
     return 0;
 }
 
+int image_input_info(const std::vector<int>& s, ImageLayout& layout,
+                     int& h, int& w) {
+    layout = ImageLayout::None;
+    h = 0;
+    w = 0;
+    if (s.size() != 4 || s[0] != 1) return 0;
+    if (s[3] == 1 || s[3] == 3) {            // NHWC [1,H,W,C]
+        layout = ImageLayout::NHWC;
+        h = s[1];
+        w = s[2];
+        return s[3];
+    }
+    if (s[1] == 1 || s[1] == 3) {            // NCHW [1,C,H,W] (ONNX)
+        layout = ImageLayout::NCHW;
+        h = s[2];
+        w = s[3];
+        return s[1];
+    }
+    return 0;
+}
+
 void print_tensor(const char* prefix, const TensorInfo& t) {
     std::printf("%s %-32s shape=[", prefix, t.name.c_str());
     for (std::size_t i = 0; i < t.shape.size(); ++i)

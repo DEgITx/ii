@@ -39,6 +39,17 @@ inline bool is_image_input(const std::vector<int>& s) {
     return image_input_channels(s) > 0;
 }
 
+// Раскладка «картиночного» входа: NHWC (типично для TFLite) или NCHW
+// (типично для ONNX). None — вход не похож на изображение.
+enum class ImageLayout { None, NHWC, NCHW };
+
+// Распознать картиночный вход и его геометрию независимо от раскладки.
+// Возвращает число каналов (1|3) или 0; при ненулевом результате
+// заполняет layout/h/w. NHWC [1,H,W,1|3] предпочитается (обратная
+// совместимость), иначе NCHW [1,1|3,H,W].
+int image_input_info(const std::vector<int>& s, ImageLayout& layout,
+                     int& h, int& w);
+
 // Печать строки-сводки по тензору: имя/shape/dtype (+ quant, если есть).
 void print_tensor(const char* prefix, const TensorInfo& t);
 

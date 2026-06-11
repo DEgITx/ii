@@ -109,4 +109,47 @@ Tensor transpose(const Tensor& x, const std::vector<std::int64_t>& perm);
 // целочисленные масштабы sh,sw (типовой upsample в детекторах).
 Tensor upsample_nearest(const Tensor& x, std::int64_t sh, std::int64_t sw);
 
+// ---- Доп. поэлементные (для YOLOv8-голов и трансформеров) ------------------
+Tensor exp_(const Tensor& x);
+Tensor sqrt_(const Tensor& x);
+Tensor abs_(const Tensor& x);
+Tensor neg(const Tensor& x);
+Tensor reciprocal(const Tensor& x);
+Tensor pow_(const Tensor& a, const Tensor& b);   // поэлементно, с broadcast
+Tensor min_(const Tensor& a, const Tensor& b);
+Tensor max_(const Tensor& a, const Tensor& b);
+
+// ---- Выборка / форма (shape-подграфы экспортов) ---------------------------
+// Resize ближайшим соседом по per-axis масштабам (len == ndim). Режим
+// координат «asymmetric» + nearest=floor — то, что даёт upsample в neck'е.
+Tensor resize_nearest(const Tensor& x, const std::vector<float>& scales);
+
+// Разбиение по оси на части заданных размеров (сумма == size по оси).
+std::vector<Tensor> split(const Tensor& x, std::int64_t axis,
+                          const std::vector<std::int64_t>& sizes);
+
+// Срез по ONNX-семантике Slice: starts/ends/axes/steps (axes/steps могут
+// быть пустыми — тогда все оси, шаг 1). Поддержаны отрицательные индексы и
+// отрицательный шаг.
+Tensor slice(const Tensor& x,
+             const std::vector<std::int64_t>& starts,
+             const std::vector<std::int64_t>& ends,
+             const std::vector<std::int64_t>& axes,
+             const std::vector<std::int64_t>& steps);
+
+// Выборка по индексам вдоль оси (ONNX Gather).
+Tensor gather(const Tensor& x, const Tensor& indices, std::int64_t axis);
+
+// Вставка/удаление осей размера 1.
+Tensor unsqueeze(const Tensor& x, std::vector<std::int64_t> axes);
+Tensor squeeze(const Tensor& x, std::vector<std::int64_t> axes);  // пусто == все 1
+
+// Форма тензора как 1-D float-тензор (ONNX Shape).
+Tensor shape_of(const Tensor& x);
+
+// Редукции по осям с keepdims. kind: 0=sum, 1=mean, 2=max, 3=min.
+// Пустой axes == по всем осям.
+Tensor reduce(const Tensor& x, std::vector<std::int64_t> axes,
+              bool keepdims, int kind);
+
 }  // namespace ii

@@ -281,3 +281,83 @@ TEST(Upsample, NearestX2) {
     EXPECT_EQ(y.shape, (Shape{1, 1, 4, 4}));
     expect_data(y, {1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4});
 }
+
+// ---- доп. поэлементные -----------------------------------------------------
+
+TEST(MoreElementwise, UnaryAndBinary) {
+    Tensor x(Shape{2}, std::vector<float>{4, 9});
+    expect_data(ii::sqrt_(x), {2, 3});
+    expect_data(ii::exp_(Tensor(Shape{2}, std::vector<float>{0, 1})), {1.0f, std::exp(1.0f)});
+    expect_data(ii::abs_(Tensor(Shape{2}, std::vector<float>{-2, 3})), {2, 3});
+    expect_data(ii::neg(Tensor(Shape{2}, std::vector<float>{1, -2})), {-1, 2});
+    expect_data(ii::reciprocal(Tensor(Shape{2}, std::vector<float>{2, 4})), {0.5f, 0.25f});
+
+    Tensor a(Shape{2}, std::vector<float>{2, 3}), b(Shape{2}, std::vector<float>{3, 2});
+    expect_data(ii::pow_(a, b), {8, 9});
+    expect_data(ii::min_(Tensor(Shape{2}, std::vector<float>{1, 5}),
+                         Tensor(Shape{2}, std::vector<float>{3, 2})), {1, 2});
+    expect_data(ii::max_(Tensor(Shape{2}, std::vector<float>{1, 5}),
+                         Tensor(Shape{2}, std::vector<float>{3, 2})), {3, 5});
+}
+
+// ---- resize / split / slice / gather / shape / reduce ----------------------
+
+TEST(Resize, NearestScales) {
+    Tensor x(Shape{1, 1, 2, 2}, std::vector<float>{1, 2, 3, 4});
+    Tensor y = ii::resize_nearest(x, {1, 1, 2, 2});
+    EXPECT_EQ(y.shape, (Shape{1, 1, 4, 4}));
+    expect_data(y, {1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4});
+}
+
+TEST(Split, AlongAxis) {
+    Tensor x(Shape{2, 4}, std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8});
+    auto parts = ii::split(x, 1, {2, 2});
+    ASSERT_EQ(parts.size(), 2u);
+    EXPECT_EQ(parts[0].shape, (Shape{2, 2}));
+    expect_data(parts[0], {1, 2, 5, 6});
+    expect_data(parts[1], {3, 4, 7, 8});
+}
+
+TEST(Slice, PositiveAndNegativeStep) {
+    Tensor x(Shape{2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor y = ii::slice(x, {1}, {3}, {1}, {});  // столбцы 1..2
+    EXPECT_EQ(y.shape, (Shape{2, 2}));
+    expect_data(y, {2, 3, 5, 6});
+
+    Tensor v(Shape{5}, std::vector<float>{0, 1, 2, 3, 4});
+    Tensor r = ii::slice(v, {4}, {-6}, {0}, {-1});  // реверс
+    EXPECT_EQ(r.shape, (Shape{5}));
+    expect_data(r, {4, 3, 2, 1, 0});
+}
+
+TEST(Gather, Axis0) {
+    Tensor x(Shape{3, 2}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor idx(Shape{2}, std::vector<float>{2, 0});
+    Tensor y = ii::gather(x, idx, 0);
+    EXPECT_EQ(y.shape, (Shape{2, 2}));
+    expect_data(y, {5, 6, 1, 2});
+}
+
+TEST(ShapeUnsqueezeSqueeze, Basics) {
+    Tensor x(Shape{2, 3, 4});
+    expect_data(ii::shape_of(x), {2, 3, 4});
+
+    Tensor v(Shape{3}, std::vector<float>{1, 2, 3});
+    EXPECT_EQ(ii::unsqueeze(v, {0}).shape, (Shape{1, 3}));
+    EXPECT_EQ(ii::unsqueeze(v, {1}).shape, (Shape{3, 1}));
+    Tensor w(Shape{1, 3, 1}, std::vector<float>{1, 2, 3});
+    EXPECT_EQ(ii::squeeze(w, {}).shape, (Shape{3}));
+    EXPECT_EQ(ii::squeeze(w, {0}).shape, (Shape{3, 1}));
+}
+
+TEST(Reduce, MeanSumMaxAlongAxis) {
+    Tensor x(Shape{2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    expect_data(ii::reduce(x, {1}, false, 0), {6, 15});       // sum
+    expect_data(ii::reduce(x, {1}, false, 1), {2, 5});        // mean
+    expect_data(ii::reduce(x, {1}, false, 2), {3, 6});        // max
+    EXPECT_EQ(ii::reduce(x, {1}, true, 0).shape, (Shape{2, 1}));
+    // редукция по всем осям -> скаляр.
+    Tensor all = ii::reduce(x, {}, false, 0);
+    EXPECT_TRUE(all.shape.empty());
+    expect_data(all, {21});
+}
