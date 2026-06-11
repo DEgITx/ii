@@ -181,6 +181,35 @@ platform features can be turned on and off independently:
 - **`parallel.*` / `stats.*` / `sysmon.*` / `csv_export.*`** — thread pool,
   FPS statistics, resource monitoring and CSV export.
 
+## Use as a library
+
+`ii` is not only a CLI — the inference core is designed to be **embedded in
+other applications**. The `inf::Engine` interface (`inference.h`) is fully
+self-contained: it pulls in no backend SDK headers, so a host program can depend
+on just that one narrow abstraction and link whichever backend(s) it built.
+
+```cpp
+#include "inference.h"
+
+auto eng = inf::make_engine("tflite");      // or "tensorrt" / "directml"
+inf::Engine::Options opts;
+opts.delegate_path = "";                     // "" = CPU
+opts.num_threads   = 4;
+eng->load("model.tflite", opts);
+
+std::memcpy(eng->input_data(0), rgb, eng->inputs()[0].bytes);
+eng->invoke();
+const void* out = eng->output_data(0);       // read with outputs()[0] desc
+```
+
+Supporting pieces are equally decoupled and reusable on their own:
+`preprocess.*` (letterbox), `yolo.*` (decode + NMS), `image_proc.*` / `tile.*`
+(image-to-image decode and tiling), and `tensor_utils.*` (quantize / dequantize).
+Because backends register behind `make_engine()`, you can drop in the whole
+runner or just its inference layer without dragging in dependencies you don't
+use. There is no installed library target today — embed by adding the relevant
+sources (and the backend's `INF_HAS_*` define) to your own build.
+
 ## License
 
 Released under the [MIT License](LICENSE).
