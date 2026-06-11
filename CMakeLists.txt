@@ -77,19 +77,27 @@ option(USE_DIRECTML  "Сборка с бэкендом DirectML/Windows ML (тр
 option(USE_NEUTRON_DELEGATE
     "Подключить опциональный модуль внешнего NPU-делегата (Linux)"            OFF)
 
+# Исходники лежат в подкаталоге src/ (CMake теперь в корне репозитория);
+# все файлы добавляются относительно этого каталога.
+set(II_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 # ---- Бинарь (без бэкендов; они подключаются ниже опционально) ------------
 add_executable(ii
-    ii.cpp
-    cli.cpp
-    preprocess.cpp
-    tensor_utils.cpp
-    yolo_render.cpp
-    inference.cpp
-    delegate.cpp
-    image_proc.cpp
-    tile.cpp
-    parallel.cpp
-    yolo.cpp)
+    ${II_SRC_DIR}/ii.cpp
+    ${II_SRC_DIR}/cli.cpp
+    ${II_SRC_DIR}/preprocess.cpp
+    ${II_SRC_DIR}/tensor_utils.cpp
+    ${II_SRC_DIR}/yolo_render.cpp
+    ${II_SRC_DIR}/inference.cpp
+    ${II_SRC_DIR}/delegate.cpp
+    ${II_SRC_DIR}/image_proc.cpp
+    ${II_SRC_DIR}/tile.cpp
+    ${II_SRC_DIR}/parallel.cpp
+    ${II_SRC_DIR}/yolo.cpp)
+
+# Заголовки лежат рядом с исходниками — добавляем src/ в пути включения,
+# чтобы #include "inference.h" и пр. находились при сборке из корня.
+target_include_directories(ii PRIVATE ${II_SRC_DIR})
 
 # ---- Платформо-зависимые флаги компилятора и линкер-флаги ----------------
 if(MSVC)
@@ -159,7 +167,7 @@ if(USE_TFLITE)
     message(STATUS "TFLite include: ${TFLITE_INCLUDE_DIR}")
     message(STATUS "TFLite lib:     ${TFLITE_LIB}")
 
-    target_sources(ii PRIVATE inference_tflite.cpp)
+    target_sources(ii PRIVATE ${II_SRC_DIR}/inference_tflite.cpp)
     target_include_directories(ii PRIVATE ${TFLITE_INCLUDE_DIR})
     target_link_libraries(ii PRIVATE ${TFLITE_LIB})
     target_compile_definitions(ii PRIVATE INF_HAS_TFLITE=1)
@@ -169,7 +177,7 @@ endif()
 # Платформенно-специфичная мелочь: дефолтный путь к .so-плагину делегата.
 # Отделён от ядра, чтобы раннер не был привязан ни к одному ускорителю.
 if(USE_NEUTRON_DELEGATE)
-    target_sources(ii PRIVATE delegate_neutron.cpp)
+    target_sources(ii PRIVATE ${II_SRC_DIR}/delegate_neutron.cpp)
     target_compile_definitions(ii PRIVATE INF_HAS_DELEGATE_MODULE=1)
     message(STATUS "Delegate module: внешний NPU-делегат (ON)")
 endif()
@@ -232,7 +240,7 @@ if(USE_TENSORRT)
                        "отключена, доступны только .engine/.plan/.trt")
     endif()
 
-    target_sources(ii PRIVATE inference_tensorrt.cpp)
+    target_sources(ii PRIVATE ${II_SRC_DIR}/inference_tensorrt.cpp)
     target_include_directories(ii PRIVATE ${TRT_INCLUDE_DIR})
     target_link_libraries(ii PRIVATE ${TRT_NVINFER_LIB})
     if(CUDAToolkit_FOUND)
@@ -283,7 +291,7 @@ if(USE_DIRECTML)
     message(STATUS "ONNX Runtime include: ${ORT_INCLUDE_DIR}")
     message(STATUS "ONNX Runtime lib:     ${ORT_LIB}")
 
-    target_sources(ii PRIVATE inference_directml.cpp)
+    target_sources(ii PRIVATE ${II_SRC_DIR}/inference_directml.cpp)
     target_include_directories(ii PRIVATE ${ORT_INCLUDE_DIR})
     target_link_libraries(ii PRIVATE ${ORT_LIB})
     target_compile_definitions(ii PRIVATE INF_HAS_DIRECTML=1)
@@ -315,10 +323,10 @@ endif()
 
 # ---- Backend для камеры (V4L2) -------------------------------------------
 if(USE_CAMERA)
-    target_sources(ii PRIVATE camera_v4l2.cpp)
+    target_sources(ii PRIVATE ${II_SRC_DIR}/camera_v4l2.cpp)
     target_compile_definitions(ii PRIVATE NPU_HAS_CAMERA=1)
 else()
-    target_sources(ii PRIVATE camera_stub.cpp)
+    target_sources(ii PRIVATE ${II_SRC_DIR}/camera_stub.cpp)
 endif()
 
 # ---- Backend для отображения (Wayland/EGL/GLES2) -------------------------
@@ -357,13 +365,13 @@ if(USE_DISPLAY)
         VERBATIM)
 
     target_sources(ii PRIVATE
-        display_wayland.cpp
+        ${II_SRC_DIR}/display_wayland.cpp
         ${XDG_SHELL_HEADER}
         ${XDG_SHELL_SOURCE})
     target_include_directories(ii PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
     target_link_libraries(ii PRIVATE PkgConfig::WAYLAND)
 else()
-    target_sources(ii PRIVATE display_stub.cpp)
+    target_sources(ii PRIVATE ${II_SRC_DIR}/display_stub.cpp)
 endif()
 
 # ---- Финальный summary ---------------------------------------------------

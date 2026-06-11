@@ -64,7 +64,7 @@ Requires CMake ≥ 3.16 and a C++20 compiler. [stb](https://github.com/nothings/
 ### Linux
 
 ```sh
-cmake -S src -B build -DTFLITE_ROOT=/usr
+cmake -S . -B build -DTFLITE_ROOT=/usr
 cmake --build build -j
 ```
 
@@ -72,7 +72,7 @@ If TensorFlow Lite is installed in a non-standard location, point the build at
 it explicitly:
 
 ```sh
-cmake -S src -B build \
+cmake -S . -B build \
     -DTFLITE_INCLUDE_DIR=/opt/tflite/include \
     -DTFLITE_LIB=/opt/tflite/lib/libtensorflowlite.so
 ```
@@ -80,13 +80,13 @@ cmake -S src -B build \
 Without an on-screen display or camera (e.g. a headless host):
 
 ```sh
-cmake -S src -B build -DUSE_DISPLAY=OFF -DUSE_CAMERA=OFF
+cmake -S . -B build -DUSE_DISPLAY=OFF -DUSE_CAMERA=OFF
 ```
 
 ### Windows (MSVC, e.g. via vcpkg)
 
 ```sh
-cmake -S src -B build -DTFLITE_ROOT=C:/path/to/tflite-prebuilt
+cmake -S . -B build -DTFLITE_ROOT=C:/path/to/tflite-prebuilt
 cmake --build build --config Release -j
 ```
 
