@@ -19,19 +19,25 @@ FetchContent_MakeAvailable(googletest)
 #                         компилируется в no-op fallback);
 #   * tensor_utils.cpp  — numel/shape/dequantize;
 #   * yolo.cpp          — decode/NMS/scale;
-#   * preprocess.cpp    — letterbox/rgb_to_gray (тянет stb — заголовки ниже).
+#   * preprocess.cpp    — letterbox/rgb_to_gray (тянет stb — заголовки ниже);
+#   * image_proc.cpp    — декод выходного тензора в RGB (тянет stb_image_write);
+#   * tile.cpp          — планирование сетки/extract/canvas (зависит от image_proc).
 set(II_TEST_LIB_SOURCES
     ${II_SRC_DIR}/inference.cpp
     ${II_SRC_DIR}/tensor_utils.cpp
     ${II_SRC_DIR}/yolo.cpp
-    ${II_SRC_DIR}/preprocess.cpp)
+    ${II_SRC_DIR}/preprocess.cpp
+    ${II_SRC_DIR}/image_proc.cpp
+    ${II_SRC_DIR}/tile.cpp)
 
 add_executable(ii_tests
     ${II_TEST_LIB_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_inference.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_tensor_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_yolo.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_preprocess.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_preprocess.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_image_proc.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_tile.cpp)
 
 # Заголовки раннера + stb (для preprocess.cpp). stb_SOURCE_DIR заполнен
 # в корневом CMakeLists через FetchContent (tests подключается после).
