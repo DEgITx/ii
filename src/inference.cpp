@@ -58,6 +58,9 @@ std::unique_ptr<Engine> make_tensorrt_engine();
 #if defined(INF_HAS_DIRECTML)
 std::unique_ptr<Engine> make_directml_engine();
 #endif
+#if defined(INF_HAS_II)
+std::unique_ptr<Engine> make_ii_engine();
+#endif
 
 namespace {
 std::string to_lower(std::string s) {
@@ -70,7 +73,29 @@ std::string to_lower(std::string s) {
 std::unique_ptr<Engine> make_engine(const std::string& backend) {
     const std::string name = to_lower(backend);
 
-    if (name.empty() || name == "tflite" || name == "tensorflow-lite") {
+    // Дефолтный бэкенд (пустое имя): TFLite, если собран, иначе встроенный
+    // `ii` (он доступен всегда). Так бинарь без backend-SDK остаётся
+    // работоспособным «из коробки».
+    if (name.empty()) {
+#if defined(INF_HAS_TFLITE)
+        return make_tflite_engine();
+#elif defined(INF_HAS_II)
+        return make_ii_engine();
+#else
+        std::fprintf(stderr, "Не собран ни один бэкенд инференса.\n");
+        return nullptr;
+#endif
+    }
+    if (name == "ii") {
+#if defined(INF_HAS_II)
+        return make_ii_engine();
+#else
+        std::fprintf(stderr,
+            "Бэкенд 'ii' не собран (USE_II_ENGINE=OFF).\n");
+        return nullptr;
+#endif
+    }
+    if (name == "tflite" || name == "tensorflow-lite") {
 #if defined(INF_HAS_TFLITE)
         return make_tflite_engine();
 #else
@@ -105,6 +130,9 @@ std::unique_ptr<Engine> make_engine(const std::string& backend) {
 
 std::vector<std::string> available_backends() {
     std::vector<std::string> out;
+#if defined(INF_HAS_II)
+    out.emplace_back("ii");
+#endif
 #if defined(INF_HAS_TFLITE)
     out.emplace_back("tflite");
 #endif

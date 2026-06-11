@@ -70,6 +70,12 @@ option(USE_TFLITE    "Сборка с бэкендом TensorFlow Lite"         
 option(USE_TENSORRT  "Сборка с бэкендом NVIDIA TensorRT (требует CUDA+nvinfer)" OFF)
 option(USE_DIRECTML  "Сборка с бэкендом DirectML/Windows ML (требует ORT)"      OFF)
 
+# Встроенный движок `ii` — backend-нейтральная реализация inf::Engine на
+# чистом C++20 без единого SDK. Доступен на любой платформе, поэтому ON по
+# умолчанию: служит эталоном корректности для тяжёлых бэкендов и площадкой
+# для новых слоёв (вплоть до трансформеров). Грузит ONNX (TFLite — позже).
+option(USE_II_ENGINE "Сборка со встроенным движком инференса ii (pure C++)"    ON)
+
 # Опциональный модуль внешнего NPU-делегата TFLite (см. delegate_neutron.cpp).
 # Подставляет платформенный дефолтный путь к .so-плагину делегата на Linux.
 # По умолчанию OFF — ядро раннера не зависит ни от какого конкретного
@@ -84,6 +90,16 @@ option(BUILD_TESTS "Сборка юнит-тестов на GoogleTest" OFF)
 # Исходники лежат в подкаталоге src/ (CMake теперь в корне репозитория);
 # все файлы добавляются относительно этого каталога.
 set(II_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+# Исходники встроенного движка `ii` (без inf::Engine-моста — он добавляется
+# к бинарю отдельно). Вынесены в переменную, чтобы тот же набор могли
+# собрать юнит-тесты (tests/CMakeLists.txt).
+set(II_ENGINE_SOURCES
+    ${II_SRC_DIR}/ii_tensor.cpp
+    ${II_SRC_DIR}/ii_ops.cpp
+    ${II_SRC_DIR}/ii_graph.cpp
+    ${II_SRC_DIR}/ii_kernels.cpp
+    ${II_SRC_DIR}/ii_onnx.cpp)
 
 # ---- Бинарь (без бэкендов; они подключаются ниже опционально) ------------
 add_executable(ii
@@ -175,6 +191,18 @@ if(USE_TFLITE)
     target_include_directories(ii PRIVATE ${TFLITE_INCLUDE_DIR})
     target_link_libraries(ii PRIVATE ${TFLITE_LIB})
     target_compile_definitions(ii PRIVATE INF_HAS_TFLITE=1)
+endif()
+
+# ---- Бэкенд: встроенный движок ii (pure C++, всегда доступен) -------------
+# Никаких внешних зависимостей: компилируем ядро движка + мост inf::Engine
+# прямо в бинарь. INF_HAS_II включает фабричную ветку make_ii_engine() в
+# inference.cpp.
+if(USE_II_ENGINE)
+    target_sources(ii PRIVATE
+        ${II_ENGINE_SOURCES}
+        ${II_SRC_DIR}/inference_ii.cpp)
+    target_compile_definitions(ii PRIVATE INF_HAS_II=1)
+    message(STATUS "ii engine: встроенный pure-C++ бэкенд (ON)")
 endif()
 
 # ---- Опциональный модуль внешнего NPU-делегата ---------------------------
@@ -390,6 +418,7 @@ endif()
 message(STATUS "ii build summary:")
 message(STATUS "  platform : ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR}")
 message(STATUS "  compiler : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "  ii engine: ${USE_II_ENGINE}")
 message(STATUS "  TFLite   : ${USE_TFLITE}")
 message(STATUS "  TensorRT : ${USE_TENSORRT}")
 message(STATUS "  DirectML : ${USE_DIRECTML}")

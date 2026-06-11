@@ -30,14 +30,20 @@ set(II_TEST_LIB_SOURCES
     ${II_SRC_DIR}/image_proc.cpp
     ${II_SRC_DIR}/tile.cpp)
 
+# Встроенный движок `ii` — backend-нейтральный, без SDK, поэтому его ядро
+# (математика + граф) тестируется на любом dev-host. II_ENGINE_SOURCES
+# задаётся в корневом CMakeLists.
 add_executable(ii_tests
     ${II_TEST_LIB_SOURCES}
+    ${II_ENGINE_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_inference.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_tensor_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_yolo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_preprocess.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_image_proc.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_tile.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_tile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_graph.cpp)
 
 # Заголовки раннера + stb (для preprocess.cpp). stb_SOURCE_DIR заполнен
 # в корневом CMakeLists через FetchContent (tests подключается после).
