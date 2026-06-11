@@ -1,0 +1,9 @@
+# Каталоги сборки CMake.
+/build/
+/build-*/
+/cmake-build-*/
+
+# Кэш/артефакты IDE и инструментов.
+/.vs/
+/.cache/
+compile_commands.json

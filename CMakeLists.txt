@@ -77,6 +77,10 @@ option(USE_DIRECTML  "Сборка с бэкендом DirectML/Windows ML (тр
 option(USE_NEUTRON_DELEGATE
     "Подключить опциональный модуль внешнего NPU-делегата (Linux)"            OFF)
 
+# Юнит-тесты (GoogleTest, подтягивается через FetchContent). По умолчанию
+# OFF — тестируются только бэкенд-независимые модули, backend SDK не нужен.
+option(BUILD_TESTS "Сборка юнит-тестов на GoogleTest" OFF)
+
 # Исходники лежат в подкаталоге src/ (CMake теперь в корне репозитория);
 # все файлы добавляются относительно этого каталога.
 set(II_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -374,6 +378,14 @@ else()
     target_sources(ii PRIVATE ${II_SRC_DIR}/display_stub.cpp)
 endif()
 
+# ---- Юнит-тесты (опционально) --------------------------------------------
+# Подключается после FetchContent(stb), т.к. tests используют ${stb_SOURCE_DIR}
+# для сборки preprocess.cpp.
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 # ---- Финальный summary ---------------------------------------------------
 message(STATUS "ii build summary:")
 message(STATUS "  platform : ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_PROCESSOR}")
@@ -384,3 +396,4 @@ message(STATUS "  DirectML : ${USE_DIRECTML}")
 message(STATUS "  DelegMod : ${USE_NEUTRON_DELEGATE}")
 message(STATUS "  Display  : ${USE_DISPLAY}")
 message(STATUS "  Camera   : ${USE_CAMERA}")
+message(STATUS "  Tests    : ${BUILD_TESTS}")
