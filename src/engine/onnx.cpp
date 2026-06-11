@@ -13,7 +13,7 @@
 // Раскладка тензоров в файле — row-major, как и в движке. Хост-порядок
 // байт считаем little-endian (x86/ARM).
 
-#include "ii_loader.h"
+#include "engine/loader.h"
 
 #include <cstdint>
 #include <cstring>
@@ -22,35 +22,14 @@
 #include <unordered_set>
 #include <vector>
 
+#include "half.h"  // inf::half_to_float — единая реализация на весь проект
+
 namespace ii {
 
 namespace {
 
-// IEEE binary16 -> binary32 (без зависимости от __fp16/F16C). Дубликат
-// логики inf::half_to_float — намеренно, чтобы движок не тянул inference.h.
-float half_to_float(std::uint16_t h) {
-    std::uint32_t sign = (std::uint32_t)(h >> 15) & 1u;
-    std::uint32_t exp  = (std::uint32_t)(h >> 10) & 0x1Fu;
-    std::uint32_t mant = (std::uint32_t)h & 0x3FFu;
-    std::uint32_t bits;
-    if (exp == 0) {
-        if (mant == 0) {
-            bits = sign << 31;
-        } else {
-            int e = -1;
-            do { ++e; mant <<= 1; } while ((mant & 0x400u) == 0);
-            mant &= 0x3FFu;
-            bits = (sign << 31) | ((127u - 15u - (std::uint32_t)e) << 23) | (mant << 13);
-        }
-    } else if (exp == 31) {
-        bits = (sign << 31) | (0xFFu << 23) | (mant << 13);
-    } else {
-        bits = (sign << 31) | ((exp + 127u - 15u) << 23) | (mant << 13);
-    }
-    float out;
-    std::memcpy(&out, &bits, sizeof(out));
-    return out;
-}
+// float16 -> float32 берём из общего half.h (раньше дублировалось здесь).
+using inf::half_to_float;
 
 // ---- минимальный protobuf-ридер -------------------------------------------
 // Wire types: 0=varint, 1=fixed64, 2=length-delimited, 5=fixed32.
@@ -216,10 +195,12 @@ Tensor to_tensor(const RawTensor& rt) {
                 for (std::int64_t i = 0; i < n; ++i) { std::uint16_t v; std::memcpy(&v, d + i * 2, 2);
                     out.data[i] = half_to_float(v); } break;
             case DT_INT8:  need(1);
-                for (std::int64_t i = 0; i < n; ++i) out.data[i] = (float)(std::int8_t)d[i]; break;
+                for (std::int64_t i = 0; i < n; ++i) out.data[i] = (float)(std::int8_t)d[i];
+                break;
             case DT_UINT8:
             case DT_BOOL:  need(1);
-                for (std::int64_t i = 0; i < n; ++i) out.data[i] = (float)d[i]; break;
+                for (std::int64_t i = 0; i < n; ++i) out.data[i] = (float)d[i];
+                break;
             default:
                 throw std::runtime_error("ONNX: неподдержанный data_type в raw_data: " +
                                          std::to_string(rt.data_type));

@@ -1,7 +1,7 @@
 // Реализация inf::Engine поверх встроенного движка `ii`.
 //
 // Это мост между backend-нейтральным контрактом раннера (inference.h) и
-// собственным графовым движком (ii_graph.* / ii_ops.*). Зависимостей от
+// собственным графовым движком (engine/graph.* / engine/ops.*). Зависимостей от
 // SDK здесь нет — бэкенд `ii` собирается всегда и на любой платформе, что
 // делает его эталоном корректности для TFLite/TensorRT/DirectML и площадкой
 // разработки новых слоёв.
@@ -20,8 +20,8 @@
 #include <memory>
 #include <unordered_map>
 
-#include "ii_graph.h"
-#include "ii_loader.h"
+#include "engine/graph.h"
+#include "engine/loader.h"
 
 namespace inf {
 

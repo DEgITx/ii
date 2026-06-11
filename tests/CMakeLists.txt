@@ -36,17 +36,17 @@ set(II_TEST_LIB_SOURCES
 add_executable(ii_tests
     ${II_TEST_LIB_SOURCES}
     ${II_ENGINE_SOURCES}
-    ${II_SRC_DIR}/inference_ii.cpp
+    ${II_SRC_DIR}/engine/backend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_inference.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_tensor_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_yolo.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_preprocess.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_image_proc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_tile.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_graph.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_onnx.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_ii_bridge.cpp)
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_engine_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_engine_graph.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_engine_onnx.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_nchw_bridge.cpp)
 
 # Заголовки раннера + stb (для preprocess.cpp). stb_SOURCE_DIR заполнен
 # в корневом CMakeLists через FetchContent (tests подключается после).

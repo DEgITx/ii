@@ -1,4 +1,4 @@
-// Тесты графа/исполнителя движка `ii` (ii_graph.* + ii_kernels.*).
+// Тесты графа/исполнителя движка `ii` (engine/graph.* + engine/kernels.*).
 //
 // Графы собираются вручную (без загрузчика ONNX — он тестируется отдельно),
 // чтобы проверить именно механику: топологический прогон, диспетч по
@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "ii_graph.h"
-#include "ii_ops.h"
-#include "ii_tensor.h"
+#include "engine/graph.h"
+#include "engine/ops.h"
+#include "engine/tensor.h"
 
 using ii::Attribute;
 using ii::Executor;

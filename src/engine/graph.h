@@ -7,8 +7,8 @@
 // зарегистрировать ядро через register_op(...) — трогать исполнитель,
 // загрузчик ONNX и остальной движок не нужно.
 //
-// Загрузчики моделей (ONNX — ii_onnx.cpp; TFLite — позже) наполняют Graph;
-// мост к inf::Engine (inference_ii.cpp) гоняет его через Executor.
+// Загрузчики моделей (ONNX — engine/onnx.cpp; TFLite — позже) наполняют
+// Graph; мост к inf::Engine (engine/backend.cpp) гоняет его через Executor.
 
 #pragma once
 
@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ii_tensor.h"
+#include "engine/tensor.h"
 
 namespace ii {
 
@@ -81,7 +81,7 @@ using Kernel = std::function<std::vector<Tensor>(
     const std::vector<const Tensor*>&, const Node&)>;
 
 // Глобальный реестр ядер: тип операции -> ядро. Заполняется встроенными
-// ядрами (ii_kernels.cpp) и может дополняться пользователем движка.
+// ядрами (engine/kernels.cpp) и может дополняться пользователем движка.
 class OpRegistry {
 public:
     static OpRegistry& instance();
@@ -98,7 +98,7 @@ inline void register_op(const std::string& op_type, Kernel k) {
     OpRegistry::instance().add(op_type, std::move(k));
 }
 
-// Гарантирует, что встроенные ядра (ii_kernels.cpp) зарегистрированы.
+// Гарантирует, что встроенные ядра (engine/kernels.cpp) зарегистрированы.
 // Вызывается исполнителем; идемпотентна и потокобезопасна на первом вызове.
 void ensure_builtin_kernels();
 

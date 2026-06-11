@@ -1,7 +1,7 @@
 // Реестр ядер + исполнитель графа движка `ii`. Сами ядра (привязка
-// ONNX-типов к ii_ops.*) живут в ii_kernels.cpp; здесь — механизм.
+// ONNX-типов к engine/ops.*) живут в engine/kernels.cpp; здесь — механизм.
 
-#include "ii_graph.h"
+#include "engine/graph.h"
 
 #include <cstdio>
 

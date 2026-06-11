@@ -12,7 +12,7 @@
 // как в ONNX/NumPy.
 //
 // Заголовок не тянет ничего из inference.h — типы `ii` самостоятельны;
-// мост к inf::Engine живёт отдельно в inference_ii.cpp.
+// мост к inf::Engine живёт отдельно в engine/backend.cpp.
 
 #pragma once
 

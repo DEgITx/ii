@@ -1,4 +1,4 @@
-// Юнит-тесты математических ядер движка `ii` (ii_ops.*).
+// Юнит-тесты математических ядер движка `ii` (engine/ops.*).
 //
 // Это основной щит корректности эталонного движка: значения сверяются с
 // посчитанными вручную, а не «сами с собой». Покрыты broadcasting,
@@ -10,8 +10,8 @@
 #include <cmath>
 #include <vector>
 
-#include "ii_ops.h"
-#include "ii_tensor.h"
+#include "engine/ops.h"
+#include "engine/tensor.h"
 
 using ii::Shape;
 using ii::Tensor;

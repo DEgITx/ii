@@ -37,6 +37,8 @@
 #include <string>
 #include <vector>
 
+#include "half.h"  // inf::half_to_float — единая реализация на весь проект
+
 namespace inf {
 
 // Платформенно-нейтральные типы данных тензора. Покрывают весь набор,
@@ -59,33 +61,8 @@ enum class DType {
 const char* dtype_name(DType t);
 std::size_t dtype_size(DType t);
 
-// IEEE 754 binary16 -> binary32. Без зависимости от __fp16 / F16C —
-// работает на любом ARMv8 / x86-64 / MSVC. Вынесена в заголовок,
-// чтобы инлайнилась в горячих циклах деквантования.
-inline float half_to_float(std::uint16_t h) {
-    const std::uint32_t sign = (std::uint32_t)(h >> 15) & 0x1u;
-    const std::uint32_t exp  = (std::uint32_t)(h >> 10) & 0x1Fu;
-    std::uint32_t       mant = (std::uint32_t)h & 0x3FFu;
-    std::uint32_t bits;
-    if (exp == 0) {
-        if (mant == 0) {
-            bits = sign << 31;
-        } else {
-            int e = -1;
-            do { ++e; mant <<= 1; } while ((mant & 0x400u) == 0);
-            mant &= 0x3FFu;
-            bits = (sign << 31) | ((127u - 15u - (std::uint32_t)e) << 23)
-                 | (mant << 13);
-        }
-    } else if (exp == 31) {
-        bits = (sign << 31) | (0xFFu << 23) | (mant << 13);
-    } else {
-        bits = (sign << 31) | ((exp + 127u - 15u) << 23) | (mant << 13);
-    }
-    float out;
-    std::memcpy(&out, &bits, sizeof(out));
-    return out;
-}
+// half_to_float теперь живёт в half.h (подключён выше) — одна реализация
+// на весь проект. Имя и пространство имён (inf::half_to_float) сохранены.
 
 // Срез информации о тензоре в backend-нейтральном виде.
 // scale == 0 означает «не квантован» (или per-channel — в этом случае

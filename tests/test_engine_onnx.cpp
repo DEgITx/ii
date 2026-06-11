@@ -1,4 +1,4 @@
-// Тесты загрузчика ONNX движка `ii` (ii_onnx.cpp).
+// Тесты загрузчика ONNX движка `ii` (engine/onnx.cpp).
 //
 // Модели собираются прямо в тесте — кодируем минимальный protobuf
 // ModelProto байтами, без внешних файлов и зависимостей. Так проверяется
@@ -13,12 +13,12 @@
 #include <string>
 #include <vector>
 
-#include "ii_graph.h"
-#include "ii_loader.h"
-#include "ii_tensor.h"
+#include "engine/graph.h"
+#include "engine/loader.h"
+#include "engine/tensor.h"
 #include "inference.h"
 
-namespace inf { std::unique_ptr<Engine> make_ii_engine(); }  // из inference_ii.cpp
+namespace inf { std::unique_ptr<Engine> make_ii_engine(); }  // из engine/backend.cpp
 
 namespace {
 

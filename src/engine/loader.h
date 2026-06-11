@@ -2,7 +2,7 @@
 //
 // Загрузчик наполняет ii::Graph (ноды + веса-константы + имена и формы
 // входов/выходов) из файла модели. Форматы:
-//   * ONNX  — ii_onnx.cpp  (основной);
+//   * ONNX  — engine/onnx.cpp  (основной);
 //   * TFLite — позже        (второстепенный, flatbuffer).
 // Парсеры самостоятельны (свой минимальный protobuf/flatbuffer-ридер),
 // чтобы движок оставался zero-dependency и собирался на любой платформе.
@@ -11,7 +11,7 @@
 
 #include <string>
 
-#include "ii_graph.h"
+#include "engine/graph.h"
 
 namespace ii {
 

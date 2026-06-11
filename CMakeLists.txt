@@ -95,11 +95,11 @@ set(II_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # к бинарю отдельно). Вынесены в переменную, чтобы тот же набор могли
 # собрать юнит-тесты (tests/CMakeLists.txt).
 set(II_ENGINE_SOURCES
-    ${II_SRC_DIR}/ii_tensor.cpp
-    ${II_SRC_DIR}/ii_ops.cpp
-    ${II_SRC_DIR}/ii_graph.cpp
-    ${II_SRC_DIR}/ii_kernels.cpp
-    ${II_SRC_DIR}/ii_onnx.cpp)
+    ${II_SRC_DIR}/engine/tensor.cpp
+    ${II_SRC_DIR}/engine/ops.cpp
+    ${II_SRC_DIR}/engine/graph.cpp
+    ${II_SRC_DIR}/engine/kernels.cpp
+    ${II_SRC_DIR}/engine/onnx.cpp)
 
 # ---- Бинарь (без бэкендов; они подключаются ниже опционально) ------------
 add_executable(ii
@@ -200,7 +200,7 @@ endif()
 if(USE_II_ENGINE)
     target_sources(ii PRIVATE
         ${II_ENGINE_SOURCES}
-        ${II_SRC_DIR}/inference_ii.cpp)
+        ${II_SRC_DIR}/engine/backend.cpp)
     target_compile_definitions(ii PRIVATE INF_HAS_II=1)
     message(STATUS "ii engine: встроенный pure-C++ бэкенд (ON)")
 endif()
