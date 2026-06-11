@@ -22,7 +22,7 @@ void print_usage(const char* prog) {
         "Usage: %s <model.tflite> [image] [options]\n"
         "  image не обязателен в режиме --random-input.\n"
         "Options:\n"
-        "  --backend <name>    бэкенд инференса (доступны: %s; def tflite)\n"
+        "  --backend <name>    бэкенд инференса (доступны: %s; def: авто)\n"
         "  --delegate <path>   путь к делегату/плагину (по умолчанию %s)\n"
         "  --no-delegate       запустить на CPU (без делегата)\n"
         "  --benchmark         прогрев + замер скорости\n"

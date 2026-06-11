@@ -19,4 +19,10 @@ namespace ii {
 // в err. Граф остаётся пригодным к ii::Executor.
 bool load_onnx(const std::string& path, Graph& g, std::string& err);
 
+// Разобрать ONNX-модель прямо из буфера в памяти (сериализованный
+// ModelProto). Тот же результат, что у load_onnx, но без файловой
+// системы — удобно для юнит-тестов и встраивания.
+bool parse_onnx(const void* data, std::size_t size, Graph& g,
+                std::string& err);
+
 }  // namespace ii

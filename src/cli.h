@@ -14,9 +14,10 @@ namespace iirun {
 struct Args {
     std::string model;
     std::string image;
-    // Имя бэкенда инференса: "tflite" (дефолт) или "tensorrt" / "directml".
-    // См. inf::make_engine.
-    std::string backend = "tflite";
+    // Имя бэкенда инференса: "ii" / "tflite" / "tensorrt" / "directml".
+    // Пустая строка (дефолт) -> авто: TFLite, если собран, иначе встроенный
+    // движок `ii`. См. inf::make_engine.
+    std::string backend;
     std::string delegate = inf::default_delegate_path();
     bool no_delegate = false;
     bool benchmark = false;
