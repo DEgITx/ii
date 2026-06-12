@@ -122,11 +122,12 @@ target_include_directories(ii PRIVATE ${II_SRC_DIR})
 # ---- Платформо-зависимые флаги компилятора и линкер-флаги ----------------
 if(MSVC)
     # /W4 = -Wall -Wextra эквивалент; /utf-8 нужен из-за русских комментариев
-    # и литералов в исходниках. /O2 — релизная оптимизация по-умолчанию,
-    # CMake её и так подставит в Release; добавляем явно для других конфигов.
+    # и литералов в исходниках. /O2 — релизная оптимизация; добавляем её только
+    # для не-Debug конфигов: в Debug CMake подставляет /RTC1 (runtime checks),
+    # а /O2 с /RTC1 несовместимы (cl: command line error D8016).
     # NOMINMAX отключает конфликтующие макросы из <windows.h> (min/max),
     # а _CRT_SECURE_NO_WARNINGS — глушит шум по std::fopen/strncpy.
-    target_compile_options(ii PRIVATE /W4 /utf-8 /O2)
+    target_compile_options(ii PRIVATE /W4 /utf-8 $<$<NOT:$<CONFIG:Debug>>:/O2>)
     target_compile_definitions(ii PRIVATE
         NOMINMAX
         _CRT_SECURE_NO_WARNINGS
