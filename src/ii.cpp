@@ -71,6 +71,8 @@
 #include <csignal>
 #ifndef _WIN32
 #include <signal.h>   // pthread_sigmask
+#else
+#include <windows.h>  // SetConsoleOutputCP — вывод UTF-8 в консоль Windows
 #endif
 
 namespace {
@@ -110,6 +112,15 @@ inline bool safe_invoke(inf::Engine& e) {
 using namespace iirun;
 
 int main(int argc, char** argv) {
+#ifdef _WIN32
+    // Исходники (и весь вывод — сообщения, --help, заголовок окна) в UTF-8,
+    // а консоль Windows по умолчанию сидит на OEM-кодовой странице (866/1251),
+    // из-за чего кириллица превращается в мусор. Переключаем ввод/вывод
+    // консоли на UTF-8. Требует шрифта с кириллицей (Consolas/Windows Terminal
+    // подходят); на пайп/файл влияния не оказывает.
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
     Args args;
     if (!parse_args(argc, argv, args)) return 1;
 
