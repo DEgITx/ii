@@ -50,14 +50,19 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # ---- Опции по умолчанию ---------------------------------------------------
-# Display (Wayland/EGL/GLES2) и Camera (V4L2) — Linux-only зависимости.
-# На остальных платформах форсим OFF, чтобы ii собрался со стабами и
-# make_display()/make_camera() корректно вернули nullptr.
+# Display и Camera — платформо-зависимые. Дисплей доступен на Linux
+# (Wayland/EGL/GLES2) и на Windows (Win32/Direct3D 11), поэтому там ON.
+# Камера (V4L2) — пока только Linux; на остальных платформах OFF и сборка
+# идёт со стабами, чтобы make_display()/make_camera() корректно вернули
+# nullptr там, где бэкенда нет.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    option(USE_DISPLAY "Сборка с Wayland/EGL/GLES2 backend'ом для отображения" ON)
+    option(USE_DISPLAY "Сборка с backend'ом для отображения (Wayland на Linux)" ON)
     option(USE_CAMERA  "Сборка с V4L2 backend'ом для захвата с камеры"          ON)
+elseif(WIN32)
+    option(USE_DISPLAY "Сборка с backend'ом для отображения (Direct3D 11 на Windows)" ON)
+    option(USE_CAMERA  "Сборка с V4L2 backend'ом для захвата с камеры"          OFF)
 else()
-    option(USE_DISPLAY "Сборка с Wayland/EGL/GLES2 backend'ом для отображения" OFF)
+    option(USE_DISPLAY "Сборка с backend'ом для отображения"                    OFF)
     option(USE_CAMERA  "Сборка с V4L2 backend'ом для захвата с камеры"          OFF)
 endif()
 
@@ -362,8 +367,17 @@ else()
     target_sources(ii PRIVATE ${II_SRC_DIR}/camera_stub.cpp)
 endif()
 
-# ---- Backend для отображения (Wayland/EGL/GLES2) -------------------------
-if(USE_DISPLAY)
+# ---- Backend для отображения ---------------------------------------------
+# Linux -> Wayland/EGL/GLES2 (display_wayland.cpp);
+# Windows -> Win32/Direct3D 11 (display_d3d11.cpp);
+# прочее / USE_DISPLAY=OFF -> заглушка (make_display() возвращает nullptr).
+if(USE_DISPLAY AND WIN32)
+    target_sources(ii PRIVATE ${II_SRC_DIR}/display_d3d11.cpp)
+    # d3dcompiler — компиляция HLSL-шейдеров в рантайме (D3DCompile);
+    # d3d11/dxgi — само устройство и swapchain. Все три есть в любом
+    # Windows SDK, дополнительных путей не требуют.
+    target_link_libraries(ii PRIVATE d3d11 dxgi d3dcompiler)
+elseif(USE_DISPLAY)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(WAYLAND REQUIRED IMPORTED_TARGET
         wayland-client wayland-egl egl glesv2)
