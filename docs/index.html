@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Primary Meta Tags -->
+    <title>ii — Run Neural Networks Anywhere, Simply | Backend-Agnostic C++20 Inference Engine</title>
+    <meta name="title" content="ii — Run Neural Networks Anywhere, Simply | Backend-Agnostic C++20 Inference Engine">
+    <meta name="description" content="ii is a small, fast C++20 neural-network inference engine and CLI runner. One interface, many backends — a built-in pure-C++ engine (no SDK), TensorFlow Lite, TensorRT and DirectML. ONNX out of the box, YOLOv8 detection, super-resolution, live camera. Embeddable, deterministic, runs on CPU, GPU and NPU across Linux, Windows and macOS.">
+    <meta name="keywords" content="neural network inference, inference engine, C++20, ONNX runtime, ONNX, edge AI, embedded AI, TensorFlow Lite, TensorRT, DirectML, YOLOv8, object detection, super resolution, quantization, INT8, NPU, GPU inference, CPU inference, on-device AI, machine learning library, computer vision, ii engine, iirun">
+    <meta name="author" content="DEgITx">
+    <link rel="canonical" href="https://iirun.dev/">
+    <meta name="robots" content="index, follow">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://iirun.dev/">
+    <meta property="og:title" content="ii — Run Neural Networks Anywhere, Simply">
+    <meta property="og:description" content="A small, fast C++20 inference engine and CLI runner. One interface, many backends — built-in pure-C++ engine (no SDK), TFLite, TensorRT, DirectML. ONNX out of the box; CPU, GPU and NPU; Linux, Windows, macOS.">
+    <meta property="og:image" content="https://iirun.dev/og-image.svg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="ii — backend-agnostic C++20 neural-network inference engine">
+    <meta property="og:site_name" content="ii">
+    <meta property="og:locale" content="en_US">
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:url" content="https://iirun.dev/">
+    <meta name="twitter:title" content="ii — Run Neural Networks Anywhere, Simply">
+    <meta name="twitter:description" content="A small, fast C++20 inference engine and CLI runner. One interface, many backends — built-in pure-C++ engine (no SDK), TFLite, TensorRT, DirectML. ONNX out of the box.">
+    <meta name="twitter:image" content="https://iirun.dev/og-image.svg">
+    <meta name="twitter:image:alt" content="ii — backend-agnostic C++20 neural-network inference engine">
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="mask-icon" href="/favicon.svg" color="#6366F1">
+    <link rel="manifest" href="/site.webmanifest">
+    <meta name="theme-color" content="#0b0f1a">
+    <meta name="msapplication-TileColor" content="#6366F1">
+
+    <!-- Fonts & icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+
+    <!-- Structured data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareSourceCode",
+      "name": "ii",
+      "alternateName": "ii inference engine",
+      "description": "A small, fast, backend-agnostic C++20 neural-network inference engine and command-line runner. Built-in pure-C++ engine with no SDK, plus TensorFlow Lite, TensorRT and DirectML backends behind one interface.",
+      "url": "https://iirun.dev/",
+      "codeRepository": "https://github.com/DEgITx/ii",
+      "programmingLanguage": "C++",
+      "runtimePlatform": "C++20",
+      "operatingSystem": "Linux, Windows, macOS",
+      "license": "https://opensource.org/licenses/MIT",
+      "author": { "@type": "Person", "name": "DEgITx" },
+      "keywords": "neural network, inference engine, ONNX, C++20, TensorFlow Lite, TensorRT, DirectML, YOLOv8, edge AI, embedded"
+    }
+    </script>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-container">
+            <a class="nav-logo" href="#top" aria-label="ii home">
+                <img src="logo.svg" alt="ii logo" class="logo-img" width="36" height="36">
+                <span class="logo-text">ii</span>
+                <span class="logo-sub">inference engine</span>
+            </a>
+            <ul class="nav-menu" id="navMenu">
+                <li><a href="#features" class="nav-link">Features</a></li>
+                <li><a href="#backends" class="nav-link">Backends</a></li>
+                <li><a href="#engine" class="nav-link">Engine</a></li>
+                <li><a href="#quickstart" class="nav-link">Quick Start</a></li>
+                <li><a href="#download" class="nav-link">Download</a></li>
+                <li><a href="#library" class="nav-link">Library</a></li>
+                <li><a href="https://github.com/DEgITx/ii" class="nav-link github-link" target="_blank" rel="noopener">
+                    <i class="fab fa-github"></i> GitHub
+                </a></li>
+            </ul>
+            <button class="hamburger" id="hamburger" aria-label="Toggle menu" aria-expanded="false">
+                <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+            </button>
+        </div>
+    </nav>
+
+    <!-- Hero -->
+    <header class="hero" id="top">
+        <canvas class="hero-canvas" id="neural"></canvas>
+        <div class="hero-glow"></div>
+        <div class="hero-content">
+            <div class="hero-badge">
+                <span class="dot"></span> Pure C++20 · MIT licensed · zero SDK to start
+            </div>
+            <h1 class="hero-title">
+                Run neural networks<br>
+                <span class="gradient-text">anywhere, simply.</span>
+            </h1>
+            <p class="hero-description">
+                <strong>ii</strong> is a small, fast inference engine and command-line runner.
+                Point it at a model and an image — it preprocesses, runs inference, and gives you
+                the result. One narrow interface drives a built-in pure-C++ engine and every major
+                accelerator, so the same models run the same way on a laptop, a workstation GPU,
+                or a tiny embedded board.
+            </p>
+            <div class="hero-actions">
+                <a href="#quickstart" class="btn btn-primary">
+                    <i class="fas fa-bolt"></i> Get started
+                </a>
+                <a href="https://github.com/DEgITx/ii" class="btn btn-ghost" target="_blank" rel="noopener">
+                    <i class="fab fa-github"></i> View on GitHub
+                </a>
+            </div>
+            <div class="hero-code">
+                <div class="code-head">
+                    <span class="dots"><i></i><i></i><i></i></span>
+                    <span class="code-file">terminal</span>
+                    <button class="copy-btn" data-copy="hero-snippet" aria-label="Copy"><i class="far fa-copy"></i></button>
+                </div>
+                <pre id="hero-snippet"><code><span class="c-cmt"># build — built-in engine, no SDK required</span>
+<span class="c-prompt">$</span> cmake -S . -B build &amp;&amp; cmake --build build -j
+
+<span class="c-cmt"># run an ONNX model on an image, out of the box</span>
+<span class="c-prompt">$</span> ./ii model.onnx image.jpg</code></pre>
+            </div>
+        </div>
+    </header>
+
+    <!-- Trust / highlights bar -->
+    <section class="highlights" aria-label="Highlights">
+        <div class="container highlights-grid">
+            <div class="hl"><div class="hl-num">0</div><div class="hl-label">external deps to start</div></div>
+            <div class="hl"><div class="hl-num">1</div><div class="hl-label">interface, many backends</div></div>
+            <div class="hl"><div class="hl-num">4</div><div class="hl-label">interchangeable backends</div></div>
+            <div class="hl"><div class="hl-num gradient-text">CPU·GPU·NPU</div><div class="hl-label">same binary, your choice</div></div>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section class="section" id="features">
+        <div class="container">
+            <div class="section-head">
+                <span class="eyebrow">Why ii</span>
+                <h2 class="section-title">Everything you need to ship a model</h2>
+                <p class="section-sub">A complete, no-fuss path from a model file to a result — detection,
+                    image-to-image, live video, benchmarking — identical across every backend.</p>
+            </div>
+            <div class="feature-grid">
+                <article class="card">
+                    <div class="card-icon"><i class="fas fa-layer-group"></i></div>
+                    <h3>One interface, many backends</h3>
+                    <p>TensorFlow Lite, TensorRT, ONNX Runtime / DirectML and a built-in pure-C++ engine all
+                       sit behind a single <code>ii::Engine</code>. Pick what you build, choose at runtime with
+                       <code>--backend</code>.</p>
+                </article>
+                <article class="card">
+                    <div class="card-icon"><i class="fas fa-feather-pointed"></i></div>
+                    <h3>No SDK to get started</h3>
+                    <p>The built-in engine has zero external dependencies — it compiles on any platform with just
+                       a C++20 compiler and runs ONNX models out of the box. Build and infer in one
+                       <code>cmake</code> invocation.</p>
+                </article>
+                <article class="card">
+                    <div class="card-icon"><i class="fas fa-object-group"></i></div>
+                    <h3>Object detection</h3>
+                    <p>Built-in YOLOv8 decoding and NMS with boxes drawn over the frame. COCO-80 labels by
+                       default, or supply your own class list with <code>--classes</code>.</p>
+                </article>
+                <article class="card">
+                    <div class="card-icon"><i class="fas fa-wand-magic-sparkles"></i></div>
+                    <h3>Image-to-image models</h3>
+                    <p>Super-resolution, low-light enhancement and denoising. Show the result on screen or save it
+                       to PNG, with optional tiling and seam feathering for small-input models.</p>
+                </article>
+                <article class="card">
+                    <div class="card-icon"><i class="fas fa-video"></i></div>
+                    <h3>Live video</h3>
+                    <p>Camera capture (V4L2 on Linux, Media Foundation on Windows) with on-the-fly inference and a
+                       zero-copy on-screen window plus an FPS / jitter overlay.</p>
+                </article>
+                <article class="card">
+                    <div class="card-icon"><i class="fas fa-gauge-high"></i></div>
+                    <h3>Benchmark &amp; compare</h3>
+                    <p>Warmup + timed runs, CPU-vs-delegate comparison, and cross-model comparison — float32 vs
+                       INT8, or one backend against another — with CSV telemetry export.</p>
+                </article>
+                <article class="card">
+                    <div class="card-icon"><i class="fas fa-sliders"></i></div>
+                    <h3>Quantization-aware</h3>
+                    <p>INT8, UInt8, Float16 and Float32 tensors. The scale and zero-point are read directly from
+                       the model, so quantized graphs just work.</p>
+                </article>
+                <article class="card">
+                    <div class="card-icon"><i class="fas fa-puzzle-piece"></i></div>
+                    <h3>Embeddable</h3>
+                    <p>Everything but the CLI compiles into one static library, <code>ii_core</code>. Link it and
+                       depend on the narrow <code>ii::Engine</code> interface — no backend SDK headers leak in.</p>
+                </article>
+                <article class="card">
+                    <div class="card-icon"><i class="fas fa-microchip"></i></div>
+                    <h3>Runs everywhere</h3>
+                    <p>The same binary covers CPU, GPU and NPU; the same source builds on Linux, Windows and
+                       macOS. Start with nothing, scale up to vendor acceleration with one flag.</p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- Backends -->
+    <section class="section section-alt" id="backends">
+        <div class="container">
+            <div class="section-head">
+                <span class="eyebrow">Backends</span>
+                <h2 class="section-title">Choose at build time, dispatch at runtime</h2>
+                <p class="section-sub">A single binary can carry any combination of backends. Only the built-in
+                    engine is on by default — it needs no SDK, so the project builds and runs out of the box.</p>
+            </div>
+            <div class="backend-grid">
+                <article class="backend-card featured">
+                    <div class="backend-top">
+                        <span class="backend-name">ii <span class="tag">built-in</span></span>
+                        <span class="badge-on">Default · ON</span>
+                    </div>
+                    <p class="backend-desc">Self-contained pure-C++20 graph executor. <strong>No SDK.</strong>
+                        Loads ONNX directly, builds on every platform — ideal for embedded.</p>
+                    <ul class="backend-meta">
+                        <li><i class="fas fa-file-code"></i> <code>.onnx</code></li>
+                        <li><i class="fas fa-toggle-on"></i> <code>USE_II_ENGINE</code></li>
+                        <li><i class="fas fa-ban"></i> no external SDK</li>
+                    </ul>
+                </article>
+                <article class="backend-card">
+                    <div class="backend-top">
+                        <span class="backend-name">TensorFlow Lite</span>
+                        <span class="badge-off">opt-in</span>
+                    </div>
+                    <p class="backend-desc">CPU plus an optional NPU/GPU delegate selected with
+                        <code>--delegate</code>. Quantized <code>.tflite</code> models.</p>
+                    <ul class="backend-meta">
+                        <li><i class="fas fa-file-code"></i> <code>.tflite</code></li>
+                        <li><i class="fas fa-toggle-off"></i> <code>USE_TFLITE</code></li>
+                        <li><i class="fas fa-plug"></i> delegate support</li>
+                    </ul>
+                </article>
+                <article class="backend-card">
+                    <div class="backend-top">
+                        <span class="backend-name">NVIDIA TensorRT</span>
+                        <span class="badge-off">opt-in</span>
+                    </div>
+                    <p class="backend-desc">Maximum throughput on NVIDIA GPUs. Requires TensorRT 10+ and the CUDA
+                        runtime.</p>
+                    <ul class="backend-meta">
+                        <li><i class="fas fa-file-code"></i> <code>.engine</code> / <code>.onnx</code></li>
+                        <li><i class="fas fa-toggle-off"></i> <code>USE_TENSORRT</code></li>
+                        <li><i class="fas fa-bolt"></i> CUDA acceleration</li>
+                    </ul>
+                </article>
+                <article class="backend-card">
+                    <div class="backend-top">
+                        <span class="backend-name">ONNX Runtime / DirectML</span>
+                        <span class="badge-off">opt-in</span>
+                    </div>
+                    <p class="backend-desc">DirectML execution provider on Windows — any D3D12 GPU, iGPU or NPU;
+                        CPU EP elsewhere.</p>
+                    <ul class="backend-meta">
+                        <li><i class="fas fa-file-code"></i> <code>.onnx</code></li>
+                        <li><i class="fas fa-toggle-off"></i> <code>USE_DIRECTML</code></li>
+                        <li><i class="fab fa-windows"></i> GPU / iGPU / NPU</li>
+                    </ul>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- Built-in engine spotlight -->
+    <section class="section" id="engine">
+        <div class="container engine-wrap">
+            <div class="engine-text">
+                <span class="eyebrow">The built-in ii engine</span>
+                <h2 class="section-title">A dependency-free engine that doubles as a correctness oracle</h2>
+                <p class="section-sub">A self-contained graph executor in plain C++20 — no TensorFlow, no ONNX
+                    Runtime, no CUDA. It loads ONNX directly and supports a broad op set: Conv, Gemm/MatMul,
+                    the common activations, pooling, normalization, resize, concat/slice/gather/reshape and
+                    reductions.</p>
+                <ul class="check-list">
+                    <li><i class="fas fa-check"></i> <strong>Bit-identical to serial.</strong> Heavy kernels fan
+                        out across cores by splitting the output — never a reduction axis — so results never drift.</li>
+                    <li><i class="fas fa-check"></i> <strong>Allocation-free parallelism.</strong> A reused,
+                        lazy worker pool runs each kernel as one synchronized wave — no per-call heap, queue or future.</li>
+                    <li><i class="fas fa-check"></i> <strong>Cost-based &amp; model-agnostic.</strong> Tiny tensors
+                        run serially, large ones fan out — same logic for CNNs, transformers and super-resolution.</li>
+                    <li><i class="fas fa-check"></i> <strong>A reference oracle.</strong> Deterministic outputs make
+                        it the baseline to validate quantized models and heavier backends against.</li>
+                </ul>
+            </div>
+            <div class="engine-code">
+                <div class="code-head">
+                    <span class="dots"><i></i><i></i><i></i></span>
+                    <span class="code-file">parallel_for — bit-identical to serial</span>
+                </div>
+                <pre><code><span class="c-cmt">// split the OUTPUT space across cores; the</span>
+<span class="c-cmt">// reduction stays whole, so results match serial</span>
+<span class="c-kw">ii</span>::parallel_for(out.size(), grain, [&amp;](<span class="c-kw">size_t</span> i) {
+    <span class="c-kw">float</span> acc = 0.f;
+    <span class="c-kw">for</span> (<span class="c-kw">size_t</span> k = 0; k &lt; K; ++k)
+        acc += a[i * K + k] * w[k];
+    out[i] = acc;            <span class="c-cmt">// each i written once</span>
+});</code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick start -->
+    <section class="section section-alt" id="quickstart">
+        <div class="container">
+            <div class="section-head">
+                <span class="eyebrow">Quick start</span>
+                <h2 class="section-title">From clone to inference in minutes</h2>
+                <p class="section-sub">Requires CMake ≥ 3.16 and a C++20 compiler. stb is fetched automatically.
+                    With default options you get a working binary immediately — no SDK to install.</p>
+            </div>
+            <div class="tabs" id="qsTabs">
+                <div class="tab-bar" role="tablist">
+                    <button class="tab active" data-tab="t-build">Build</button>
+                    <button class="tab" data-tab="t-detect">Detection</button>
+                    <button class="tab" data-tab="t-sr">Super-res</button>
+                    <button class="tab" data-tab="t-cam">Camera</button>
+                    <button class="tab" data-tab="t-bench">Benchmark</button>
+                </div>
+
+                <div class="tab-panel active" id="t-build">
+                    <div class="code-block">
+                        <button class="copy-btn" data-copy="cb-build" aria-label="Copy"><i class="far fa-copy"></i></button>
+                        <pre id="cb-build"><code><span class="c-cmt"># Linux / macOS / Windows — built-in engine, no SDK</span>
+<span class="c-prompt">$</span> cmake -S . -B build
+<span class="c-prompt">$</span> cmake --build build -j
+
+<span class="c-cmt"># Run an ONNX model on the built-in engine</span>
+<span class="c-prompt">$</span> ./ii model.onnx image.jpg
+
+<span class="c-cmt"># Add a vendor backend when you have the SDK</span>
+<span class="c-prompt">$</span> cmake -S . -B build -DUSE_TFLITE=ON -DTFLITE_ROOT=/usr</code></pre>
+                    </div>
+                </div>
+
+                <div class="tab-panel" id="t-detect">
+                    <div class="code-block">
+                        <button class="copy-btn" data-copy="cb-detect" aria-label="Copy"><i class="far fa-copy"></i></button>
+                        <pre id="cb-detect"><code><span class="c-cmt"># Draw YOLOv8 boxes in a window</span>
+<span class="c-prompt">$</span> ./ii yolov8m.onnx image.jpg --yolo --display \
+       --conf 0.4 --iou 0.5
+
+<span class="c-cmt"># Custom labels instead of COCO-80</span>
+<span class="c-prompt">$</span> ./ii yolov8m.onnx image.jpg --yolo --classes my.names</code></pre>
+                    </div>
+                </div>
+
+                <div class="tab-panel" id="t-sr">
+                    <div class="code-block">
+                        <button class="copy-btn" data-copy="cb-sr" aria-label="Copy"><i class="far fa-copy"></i></button>
+                        <pre id="cb-sr"><code><span class="c-cmt"># Super-resolution / enhance — show or save output</span>
+<span class="c-prompt">$</span> ./ii fsrcnn.onnx image.jpg --display --show-output
+<span class="c-prompt">$</span> ./ii fsrcnn.onnx image.jpg --save-output out.png
+
+<span class="c-cmt"># Tiling / sliding window for small-input models</span>
+<span class="c-prompt">$</span> ./ii fsrcnn.onnx image.jpg --tile --save-output out.png</code></pre>
+                    </div>
+                </div>
+
+                <div class="tab-panel" id="t-cam">
+                    <div class="code-block">
+                        <button class="copy-btn" data-copy="cb-cam" aria-label="Copy"><i class="far fa-copy"></i></button>
+                        <pre id="cb-cam"><code><span class="c-cmt"># Live camera detection with FPS overlay</span>
+<span class="c-prompt">$</span> ./ii yolov8m.onnx --camera --display --yolo --stats
+
+<span class="c-cmt"># Pick a device (/dev/videoN on Linux, index on Windows)</span>
+<span class="c-prompt">$</span> ./ii yolov8m.onnx --camera /dev/video0 --display --yolo</code></pre>
+                    </div>
+                </div>
+
+                <div class="tab-panel" id="t-bench">
+                    <div class="code-block">
+                        <button class="copy-btn" data-copy="cb-bench" aria-label="Copy"><i class="far fa-copy"></i></button>
+                        <pre id="cb-bench"><code><span class="c-cmt"># Warmup + timed runs (image or random input)</span>
+<span class="c-prompt">$</span> ./ii model.onnx image.jpg --benchmark --runs 100
+<span class="c-prompt">$</span> ./ii model.onnx --random-input --benchmark --runs 100
+
+<span class="c-cmt"># Cross-check INT8 against a float32 reference</span>
+<span class="c-prompt">$</span> ./ii model_int8.onnx --random-input \
+       --compare model_fp32.onnx --random-runs 50</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Download -->
+    <section class="section" id="download">
+        <div class="container">
+            <div class="section-head">
+                <span class="eyebrow">Download</span>
+                <h2 class="section-title">Grab a prebuilt binary</h2>
+                <p class="section-sub">Self-contained <code>ii</code> executables with the built-in engine — no SDK,
+                    no toolchain. Pick your platform and run. <span id="dl-version" class="dl-version"></span></p>
+            </div>
+            <div class="download-grid">
+                <a class="download-card" id="dl-linux" href="https://github.com/DEgITx/ii/releases/latest" target="_blank" rel="noopener" data-os="linux">
+                    <div class="dl-icon"><i class="fab fa-linux"></i></div>
+                    <div class="dl-body">
+                        <h3>Linux</h3>
+                        <span class="dl-meta" data-meta>x86-64 · .zip</span>
+                    </div>
+                    <span class="dl-cta"><i class="fas fa-download"></i></span>
+                </a>
+                <a class="download-card" id="dl-windows" href="https://github.com/DEgITx/ii/releases/latest" target="_blank" rel="noopener" data-os="windows">
+                    <div class="dl-icon"><i class="fab fa-windows"></i></div>
+                    <div class="dl-body">
+                        <h3>Windows</h3>
+                        <span class="dl-meta" data-meta>x86-64 · .zip</span>
+                    </div>
+                    <span class="dl-cta"><i class="fas fa-download"></i></span>
+                </a>
+                <a class="download-card" id="dl-macos" href="https://github.com/DEgITx/ii/releases/latest" target="_blank" rel="noopener" data-os="macos">
+                    <div class="dl-icon"><i class="fab fa-apple"></i></div>
+                    <div class="dl-body">
+                        <h3>macOS</h3>
+                        <span class="dl-meta" data-meta>Universal · .zip</span>
+                    </div>
+                    <span class="dl-cta"><i class="fas fa-download"></i></span>
+                </a>
+            </div>
+            <p class="download-foot">
+                <a href="https://github.com/DEgITx/ii/releases" target="_blank" rel="noopener">
+                    <i class="fas fa-tag"></i> All releases &amp; changelog
+                </a>
+                <span class="sep">·</span>
+                <a href="#quickstart"><i class="fas fa-hammer"></i> Or build from source</a>
+            </p>
+        </div>
+    </section>
+
+    <!-- Library -->
+    <section class="section section-alt" id="library">
+        <div class="container engine-wrap reverse">
+            <div class="engine-text">
+                <span class="eyebrow">Use as a library</span>
+                <h2 class="section-title">Drop the engine into your own application</h2>
+                <p class="section-sub">Everything except the CLI compiles into one static library,
+                    <code>ii_core</code>. A host program depends on just the narrow <code>ii::Engine</code>
+                    interface — it pulls in no backend SDK headers — and links whichever backends it built.</p>
+                <ul class="check-list">
+                    <li><i class="fas fa-check"></i> One <code>ii::Engine</code> = one loaded model; load and invoke are sequential.</li>
+                    <li><i class="fas fa-check"></i> <code>input_data()</code> / <code>output_data()</code> point directly into backend memory — zero copy.</li>
+                    <li><i class="fas fa-check"></i> Reusable helpers: preprocess, YOLO decode + NMS, image-to-image, tiling, parallelism.</li>
+                    <li><i class="fas fa-check"></i> Link via <code>add_subdirectory()</code> — the <code>src/</code> include path propagates.</li>
+                </ul>
+            </div>
+            <div class="engine-code">
+                <div class="code-head">
+                    <span class="dots"><i></i><i></i><i></i></span>
+                    <span class="code-file">main.cpp</span>
+                    <button class="copy-btn" data-copy="lib-snippet" aria-label="Copy"><i class="far fa-copy"></i></button>
+                </div>
+                <pre id="lib-snippet"><code><span class="c-pre">#include</span> <span class="c-str">"inference.h"</span>
+
+<span class="c-kw">auto</span> eng = ii::make_engine(<span class="c-str">"ii"</span>);   <span class="c-cmt">// or "tflite"/"tensorrt"/"directml"</span>
+ii::Engine::Options opts;
+opts.delegate_path = <span class="c-str">""</span>;             <span class="c-cmt">// "" = CPU</span>
+opts.num_threads   = <span class="c-num">4</span>;
+eng-&gt;load(<span class="c-str">"model.onnx"</span>, opts);
+
+std::memcpy(eng-&gt;input_data(<span class="c-num">0</span>), rgb, eng-&gt;inputs()[<span class="c-num">0</span>].bytes);
+eng-&gt;invoke();
+<span class="c-kw">const void</span>* out = eng-&gt;output_data(<span class="c-num">0</span>); <span class="c-cmt">// read with outputs()[0] desc</span></code></pre>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta">
+        <div class="container cta-inner">
+            <h2>Start running models with zero setup.</h2>
+            <p>Clone, configure, build — and infer ONNX out of the box. Add a vendor backend whenever you need it.</p>
+            <div class="hero-actions center">
+                <a href="https://github.com/DEgITx/ii" class="btn btn-primary" target="_blank" rel="noopener">
+                    <i class="fab fa-github"></i> Get ii on GitHub
+                </a>
+                <a href="https://github.com/DEgITx/ii#quick-start" class="btn btn-ghost" target="_blank" rel="noopener">
+                    <i class="fas fa-book"></i> Read the docs
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container footer-grid">
+            <div class="footer-brand">
+                <div class="nav-logo">
+                    <img src="logo.svg" alt="ii logo" class="logo-img" width="32" height="32">
+                    <span class="logo-text">ii</span>
+                </div>
+                <p>A small, fast, backend-agnostic C++20 neural-network inference engine and CLI runner.
+                   Run neural networks anywhere, simply.</p>
+            </div>
+            <div class="footer-col">
+                <h4>Project</h4>
+                <a href="#features">Features</a>
+                <a href="#backends">Backends</a>
+                <a href="#engine">Built-in engine</a>
+                <a href="#library">Use as a library</a>
+            </div>
+            <div class="footer-col">
+                <h4>Resources</h4>
+                <a href="https://github.com/DEgITx/ii" target="_blank" rel="noopener">GitHub repository</a>
+                <a href="https://github.com/DEgITx/ii#readme" target="_blank" rel="noopener">README</a>
+                <a href="https://github.com/DEgITx/ii/issues" target="_blank" rel="noopener">Issues</a>
+                <a href="https://github.com/DEgITx/ii/blob/master/LICENSE" target="_blank" rel="noopener">MIT License</a>
+            </div>
+        </div>
+        <div class="container footer-bottom">
+            <span>© <span id="year"></span> ii · Released under the MIT License</span>
+            <a href="https://github.com/DEgITx/ii" target="_blank" rel="noopener" aria-label="GitHub"><i class="fab fa-github"></i></a>
+        </div>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DE2C8"/>
+      <stop offset="0.5" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+    <radialGradient id="bg" cx="78%" cy="22%" r="80%">
+      <stop offset="0" stop-color="#131a2c"/>
+      <stop offset="1" stop-color="#080b13"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+
+  <!-- faint neural mesh on the right -->
+  <g stroke="url(#g)" stroke-width="1.2" opacity="0.18" fill="none">
+    <path d="M860 120 L1010 200 L900 320 L1060 380 L940 500"/>
+    <path d="M1010 200 L1060 380"/>
+    <path d="M860 120 L900 320"/>
+    <path d="M900 320 L940 500"/>
+    <path d="M1010 200 L1120 120"/>
+    <path d="M1060 380 L1150 470"/>
+  </g>
+  <g fill="url(#g)" opacity="0.85">
+    <circle cx="860" cy="120" r="7"/><circle cx="1010" cy="200" r="9"/>
+    <circle cx="900" cy="320" r="8"/><circle cx="1060" cy="380" r="10"/>
+    <circle cx="940" cy="500" r="7"/><circle cx="1120" cy="120" r="6"/>
+    <circle cx="1150" cy="470" r="6"/>
+  </g>
+
+  <!-- mark -->
+  <g transform="translate(96,150) scale(2.1)">
+    <line x1="25" y1="18" x2="39" y2="18" stroke="url(#g)" stroke-width="2.2" opacity="0.5"/>
+    <circle cx="25" cy="18" r="4.6" fill="url(#g)"/>
+    <rect x="22.2" y="27" width="5.6" height="20" rx="2.8" fill="url(#g)"/>
+    <circle cx="39" cy="18" r="4.6" fill="url(#g)"/>
+    <rect x="36.2" y="27" width="5.6" height="20" rx="2.8" fill="url(#g)"/>
+  </g>
+
+  <text x="96" y="380" font-family="Inter, Segoe UI, sans-serif" font-size="92" font-weight="800" fill="#f8fafc">ii</text>
+  <text x="200" y="380" font-family="Inter, Segoe UI, sans-serif" font-size="40" font-weight="600" fill="#94a3b8">inference engine</text>
+
+  <text x="96" y="452" font-family="Inter, Segoe UI, sans-serif" font-size="48" font-weight="700" fill="#e2e8f0">Run neural networks anywhere, simply.</text>
+  <text x="96" y="512" font-family="Inter, Segoe UI, sans-serif" font-size="30" font-weight="400" fill="#8b97ad">One C++20 interface · many backends · zero SDK to start</text>
+
+  <g font-family="Inter, Segoe UI, sans-serif" font-size="24" font-weight="600">
+    <rect x="96" y="548" width="150" height="46" rx="23" fill="none" stroke="url(#g)" stroke-width="1.5"/>
+    <text x="171" y="578" fill="#cbd5e1" text-anchor="middle">C++20</text>
+    <rect x="262" y="548" width="160" height="46" rx="23" fill="none" stroke="url(#g)" stroke-width="1.5"/>
+    <text x="342" y="578" fill="#cbd5e1" text-anchor="middle">No SDK</text>
+    <rect x="438" y="548" width="220" height="46" rx="23" fill="none" stroke="url(#g)" stroke-width="1.5"/>
+    <text x="548" y="578" fill="#cbd5e1" text-anchor="middle">CPU · GPU · NPU</text>
+  </g>
+</svg>

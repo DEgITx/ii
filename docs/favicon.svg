@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DE2C8"/>
+      <stop offset="0.5" stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#0b0f1a"/>
+  <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="15.25" fill="none" stroke="url(#g)" stroke-width="1.5" opacity="0.6"/>
+  <!-- synapse between the two neuron columns -->
+  <line x1="25" y1="18" x2="39" y2="18" stroke="url(#g)" stroke-width="2" opacity="0.45"/>
+  <!-- left "i" -->
+  <circle cx="25" cy="18" r="4.2" fill="url(#g)"/>
+  <rect x="22.4" y="27" width="5.2" height="20" rx="2.6" fill="url(#g)"/>
+  <!-- right "i" -->
+  <circle cx="39" cy="18" r="4.2" fill="url(#g)"/>
+  <rect x="36.4" y="27" width="5.2" height="20" rx="2.6" fill="url(#g)"/>
+</svg>
