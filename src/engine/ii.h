@@ -15,4 +15,4 @@
 #include "engine/ops.h"      // математические ядра (conv/matmul/softmax/...)
 #include "engine/graph.h"    // Graph, Node, OpRegistry, Executor, register_op
 #include "engine/loader.h"   // load_onnx / parse_onnx
-#include "parallel.h"        // parallel_for / set_num_threads / ThreadPool
+#include "parallel.h"        // parallel_for / set_num_threads / num_threads

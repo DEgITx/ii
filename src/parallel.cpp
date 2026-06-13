@@ -1,111 +1,139 @@
-// Реализация parallel.h.
+// Реализация parallel.h: «волновой» пул потоков под parallel_for.
 //
-// Здесь живут два независимых пула под две разные модели параллелизма:
-//   * WorkerPool (анонимный) — «волновой» пул для parallel_for(count, grain):
-//     за раз исполняется одна волна одинаковых задач (rank 0..chunks-1), без
-//     очереди и без packaged_task — вызывающий сам считает кусок 0 и ждёт,
-//     пока рабочие добьют остальные. Дешевле future на каждый кусок и точно
-//     соответствует тому, как движок вызывает parallel_for (одна волна на
-//     ядро графа). Бит-в-бит детерминирован.
-//   * ThreadPool (публичный) — обычный FIFO-пул с submit()/future для
-//     крупнозернистых / разнородных задач.
+// ── Почему «волна», а не очередь задач ─────────────────────────────────────
+//
+// Привычный пул задач кладёт каждую под-задачу в очередь как std::function,
+// оборачивает в packaged_task + future и будит рабочих, которые тянут задачи
+// динамически. Это удобно для разнородной работы, но дорого: куча-аллокация на
+// КАЖДУЮ под-задачу. Движок зовёт parallel_for тысячи раз за инференс, поэтому
+// такая модель тут неприемлема.
+//
+// Волновой пул устроен как заранее собранная бригада фиксированного размера:
+//
+//   1. Рабочие потоки создаются ОДИН раз и спят на условной переменной.
+//   2. parallel_for, решив дробить на N кусков, заполняет общее поле «текущая
+//      работа», увеличивает номер волны (wave_seq_) и будит бригаду.
+//   3. Каждый рабочий и сам вызывающий берут СВОЙ номер куска (chunk_index) и
+//      считают свой кусок. Вызывающий поток — это chunk 0 (он не простаивает).
+//   4. Вызывающий ждёт, пока рабочие добьют свои куски, и возвращается.
+//
+// Куски однородны и нарезаны заранее (см. parallel.h), очередь и future не
+// нужны — за всю волну ноль куча-аллокаций. Один parallel_for = одна волна.
 
 #include "parallel.h"
 
 #include <algorithm>
+#include <condition_variable>
 #include <exception>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 namespace ii {
 
-// ===========================================================================
-// 1. Волновой пул для parallel_for(count, min_grain, body)
-// ===========================================================================
-
 namespace {
 
-// Помечаем поток как «уже внутри параллельного региона». Рабочие потоки
-// помечены навсегда (они не должны запускать вложенные волны — это привело
-// бы к дедлоку на занятом пуле), вызывающий — только на время своей волны.
-thread_local bool t_in_parallel = false;
+// Поток помечается «уже внутри параллельной волны», чтобы вложенный
+// parallel_for не дробил повторно. Рабочие потоки помечены навсегда (запуск
+// вложенной волны на занятом пуле привёл бы к дедлоку), вызывающий — только на
+// время своей волны (снимается в run_chunks по выходе).
+thread_local bool t_inside_wave = false;
 
-// Пул фиксированного размера. dispatch() раздаёт rank'и: rank 0 — вызывающий
-// поток, rank 1..workers — рабочие. За одну волну работают ранги [0, n_ranks).
-class WorkerPool {
+// Пул фиксированного размера. Исполнители делятся по «номеру куска»
+// (chunk_index): 0 — вызывающий поток, 1..workers — рабочие потоки. За одну
+// волну работают исполнители с индексами [0, chunk_count).
+class WavePool {
 public:
-    explicit WorkerPool(int workers) {
-        workers_.reserve(workers);
-        for (int i = 0; i < workers; ++i)
-            workers_.emplace_back([this, rank = i + 1] { worker_loop(rank); });
+    // worker_count — число фоновых рабочих (вызывающий поток считается отдельно
+    // и получает chunk_index 0).
+    explicit WavePool(int worker_count) {
+        workers_.reserve(worker_count);
+        for (int i = 0; i < worker_count; ++i)
+            workers_.emplace_back([this, chunk_index = i + 1] {
+                worker_loop(chunk_index);
+            });
     }
 
-    ~WorkerPool() {
+    ~WavePool() {
         {
             std::lock_guard<std::mutex> lk(mtx_);
-            stop_ = true;
-            ++epoch_;
+            stopping_ = true;
+            ++wave_seq_;          // разбудить рабочих «пустой» волной на выход
         }
-        wake_.notify_all();
-        for (auto& t : workers_)
+        wake_workers_.notify_all();
+        for (std::thread& t : workers_)
             if (t.joinable()) t.join();
     }
 
-    // Число исполнителей = рабочие + вызывающий.
-    int size() const { return static_cast<int>(workers_.size()) + 1; }
+    // Число исполнителей = рабочие + вызывающий. Это потолок числа кусков.
+    int executor_count() const {
+        return static_cast<int>(workers_.size()) + 1;
+    }
 
-    // Запустить job(rank) для rank в [0, n_ranks) и дождаться завершения.
-    // n_ranks гарантированно в диапазоне [2, size()].
-    void dispatch(int n_ranks, const std::function<void(int)>& job) {
+    // Запустить run_chunk(chunk_index) для индексов [0, chunk_count) и дождаться
+    // завершения. chunk_count гарантированно в диапазоне [2, executor_count()].
+    void run_wave(int chunk_count,
+                  const std::function<void(int chunk_index)>& run_chunk) {
         {
             std::lock_guard<std::mutex> lk(mtx_);
-            job_     = &job;
-            n_ranks_ = n_ranks;
-            running_ = n_ranks - 1;   // рабочие, занятые этой волной (ранги 1..)
-            ++epoch_;
+            current_work_     = &run_chunk;
+            chunk_count_      = chunk_count;
+            workers_pending_  = chunk_count - 1;  // рабочие с индексами 1..
+            ++wave_seq_;
         }
-        wake_.notify_all();
+        wake_workers_.notify_all();
 
-        job(0);                       // вызывающий — rank 0
+        run_chunk(0);             // вызывающий поток — chunk 0
 
         std::unique_lock<std::mutex> lk(mtx_);
-        done_.wait(lk, [this] { return running_ == 0; });
+        wave_done_.wait(lk, [this] { return workers_pending_ == 0; });
     }
 
 private:
-    void worker_loop(int rank) {
-        t_in_parallel = true;         // рабочие никогда не дробят вложенно
-        unsigned seen = 0;
+    void worker_loop(int chunk_index) {
+        t_inside_wave = true;     // рабочие никогда не дробят вложенно
+        unsigned last_seen_wave = 0;
         for (;;) {
-            const std::function<void(int)>* job = nullptr;
+            const std::function<void(int)>* work = nullptr;
             {
                 std::unique_lock<std::mutex> lk(mtx_);
-                wake_.wait(lk, [this, &seen] { return epoch_ != seen; });
-                seen = epoch_;
-                if (stop_) return;
-                if (rank >= n_ranks_) continue;   // эта волна меньше — мы не нужны
-                job = job_;
+                wake_workers_.wait(lk, [this, last_seen_wave] {
+                    return wave_seq_ != last_seen_wave;
+                });
+                last_seen_wave = wave_seq_;
+                if (stopping_) return;
+                if (chunk_index >= chunk_count_)
+                    continue;     // эта волна мельче — наш кусок не нужен
+                work = current_work_;
             }
-            (*job)(rank);
-            {
-                std::lock_guard<std::mutex> lk(mtx_);
-                if (--running_ == 0) done_.notify_one();
-            }
+
+            (*work)(chunk_index);
+
+            std::lock_guard<std::mutex> lk(mtx_);
+            if (--workers_pending_ == 0)
+                wave_done_.notify_one();
         }
     }
 
-    std::vector<std::thread>          workers_;
-    std::mutex                        mtx_;
-    std::condition_variable           wake_;    // будит рабочих на новую волну
-    std::condition_variable           done_;    // будит вызывающего по завершении
-    const std::function<void(int)>*   job_     = nullptr;
-    int                               n_ranks_ = 0;
-    int                               running_ = 0;     // рабочих осталось в волне
-    unsigned                          epoch_   = 0;     // номер волны
-    bool                              stop_    = false;
+    std::vector<std::thread> workers_;
+    std::mutex               mtx_;
+    std::condition_variable  wake_workers_;  // будит бригаду на новую волну
+    std::condition_variable  wave_done_;     // будит вызывающего по завершении
+
+    // Состояние текущей волны (под mtx_):
+    const std::function<void(int)>* current_work_ = nullptr;  // тело куска
+    int      chunk_count_     = 0;   // сколько кусков в этой волне (вкл. chunk 0)
+    int      workers_pending_ = 0;   // сколько рабочих ещё не добили свой кусок
+    unsigned wave_seq_        = 0;   // монотонный номер волны (детектор пробуждения)
+    bool     stopping_        = false;
 };
 
-std::mutex                  g_mtx;          // защищает конфиг и ленивый пул
-int                         g_threads = 0;  // 0 = авто (число ядер)
-std::unique_ptr<WorkerPool> g_pool;         // null => последовательный режим
+// ── Глобальная конфигурация и ленивый пул ──────────────────────────────────
+
+std::mutex                g_config_mtx;        // защищает желаемый размер и пул
+int                       g_requested_threads = 0;  // 0 = авто (число ядер)
+std::unique_ptr<WavePool> g_pool;              // null => последовательный режим
 
 // Разрешить желаемое число потоков в фактическое (>= 1).
 int resolve_threads(int requested) {
@@ -115,180 +143,74 @@ int resolve_threads(int requested) {
     return hw == 0 ? 1 : static_cast<int>(hw);
 }
 
-// Текущий пул под размер g_threads; null, если потоков <= 1 (тогда всё
-// считается последовательно). Создаётся лениво и переиспользуется.
-WorkerPool* active_pool() {
-    std::lock_guard<std::mutex> lk(g_mtx);
-    int threads = resolve_threads(g_threads);
+// Пул под текущий g_requested_threads; null, если потоков <= 1 (тогда всё
+// считается последовательно). Создаётся лениво и переиспользуется между волнами.
+WavePool* active_pool() {
+    std::lock_guard<std::mutex> lk(g_config_mtx);
+    const int threads = resolve_threads(g_requested_threads);
     if (threads <= 1) {
         g_pool.reset();
         return nullptr;
     }
-    if (!g_pool || g_pool->size() != threads)
-        g_pool = std::make_unique<WorkerPool>(threads - 1);  // +1 вызывающий
+    if (!g_pool || g_pool->executor_count() != threads)
+        g_pool = std::make_unique<WavePool>(threads - 1);  // -1 на вызывающего
     return g_pool.get();
 }
 
 }  // namespace
 
 void set_num_threads(int threads) {
-    std::lock_guard<std::mutex> lk(g_mtx);
-    g_threads = threads;
+    std::lock_guard<std::mutex> lk(g_config_mtx);
+    g_requested_threads = threads;
     g_pool.reset();   // пересоздастся нужного размера при следующем active_pool()
 }
 
 int num_threads() {
-    std::lock_guard<std::mutex> lk(g_mtx);
-    return resolve_threads(g_threads);
+    std::lock_guard<std::mutex> lk(g_config_mtx);
+    return resolve_threads(g_requested_threads);
 }
 
 namespace detail {
 
 int plan_chunks(std::int64_t count, std::int64_t min_grain) {
-    if (count <= 0 || t_in_parallel) return 1;
+    if (count <= 0 || t_inside_wave) return 1;
     if (min_grain < 1) min_grain = 1;
 
-    WorkerPool* pool = active_pool();
+    WavePool* pool = active_pool();
     if (!pool) return 1;                       // последовательный режим
 
-    std::int64_t by_grain = count / min_grain; // сколько кусков допускает грейн
+    const std::int64_t by_grain = count / min_grain;  // макс. кусков по грейну
     if (by_grain < 2) return 1;                // работы меньше двух кусков
-    std::int64_t chunks = std::min<std::int64_t>(by_grain, pool->size());
+    const std::int64_t chunks =
+        std::min<std::int64_t>(by_grain, pool->executor_count());
     return static_cast<int>(chunks);
 }
 
-void run_on_pool(int chunks, const std::function<void(int)>& job) {
-    WorkerPool* pool = active_pool();
+void run_chunks(int chunk_count,
+                const std::function<void(int chunk_index)>& run_chunk) {
+    WavePool* pool = active_pool();
     if (!pool) {                  // подстраховка: пул исчез между plan и run
-        for (int r = 0; r < chunks; ++r) job(r);
+        for (int c = 0; c < chunk_count; ++c) run_chunk(c);
         return;
     }
 
-    t_in_parallel = true;         // запрет вложенного дробления на этом потоке
-    std::exception_ptr err;
-    std::mutex          err_mtx;
-    auto guarded = [&](int rank) {
+    t_inside_wave = true;         // запрет вложенного дробления на этом потоке
+    std::exception_ptr first_error;
+    std::mutex          error_mtx;
+    auto guarded = [&](int chunk_index) {
         try {
-            job(rank);
+            run_chunk(chunk_index);
         } catch (...) {
-            std::lock_guard<std::mutex> lk(err_mtx);
-            if (!err) err = std::current_exception();
+            std::lock_guard<std::mutex> lk(error_mtx);
+            if (!first_error) first_error = std::current_exception();
         }
     };
-    pool->dispatch(chunks, guarded);
-    t_in_parallel = false;
+    pool->run_wave(chunk_count, guarded);
+    t_inside_wave = false;
 
-    if (err) std::rethrow_exception(err);
+    if (first_error) std::rethrow_exception(first_error);
 }
 
 }  // namespace detail
-
-// ===========================================================================
-// 2. Обобщённый FIFO-пул с futures (ThreadPool)
-// ===========================================================================
-
-ThreadPool::ThreadPool(unsigned num_threads) {
-    if (num_threads == 0) {
-        num_threads = std::thread::hardware_concurrency();
-        if (num_threads == 0) num_threads = 1;  // fallback, если ОС не знает
-    }
-    workers_.reserve(num_threads);
-    for (unsigned i = 0; i < num_threads; ++i)
-        workers_.emplace_back([this] { worker_loop(); });
-}
-
-ThreadPool::~ThreadPool() {
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        stop_ = true;
-    }
-    cv_.notify_all();
-    for (auto& t : workers_)
-        if (t.joinable()) t.join();
-}
-
-void ThreadPool::worker_loop() {
-    for (;;) {
-        std::function<void()> task;
-        {
-            std::unique_lock<std::mutex> lk(mtx_);
-            cv_.wait(lk, [this] { return stop_ || !tasks_.empty(); });
-            if (stop_ && tasks_.empty()) return;
-            task = std::move(tasks_.front());
-            tasks_.pop();
-        }
-        task();  // вне мьютекса — иначе очередь стоит, пока чанк считается
-    }
-}
-
-void ThreadPool::parallel_for(
-    std::size_t begin, std::size_t end,
-    const std::function<void(std::size_t, std::size_t)>& body,
-    std::size_t grain) {
-    if (begin >= end) return;
-    const std::size_t n = end - begin;
-
-    // Сколько чанков нарезать. По умолчанию — по одному на «исполнителя»
-    // (рабочие потоки + сам вызывающий). При заданном grain — столько,
-    // чтобы каждый чанк был не меньше grain.
-    const std::size_t executors = size() + 1;
-    std::size_t chunks = (grain == 0)
-                             ? executors
-                             : (n + grain - 1) / grain;
-    if (chunks < 1) chunks = 1;
-    if (chunks > n) chunks = n;  // не дробим мельче одного элемента
-
-    // Один чанк (или пустой пул) — просто выполняем на месте, без
-    // futures и блокировок.
-    if (chunks == 1 || workers_.empty()) {
-        body(begin, end);
-        return;
-    }
-
-    // Раскладка границ чанков: первые (n % chunks) чанков на 1 элемент
-    // длиннее — равномернее некуда.
-    const std::size_t base = n / chunks;
-    const std::size_t rem  = n % chunks;
-
-    std::vector<std::pair<std::size_t, std::size_t>> ranges(chunks);
-    {
-        std::size_t lo = begin;
-        for (std::size_t i = 0; i < chunks; ++i) {
-            std::size_t len = base + (i < rem ? 1 : 0);
-            ranges[i] = {lo, lo + len};
-            lo += len;
-        }
-    }
-
-    // Чанки [1..chunks) уходят в пул; чанк 0 выполняет вызывающий поток
-    // (пока рабочие разбирают остальное). Затем дожидаемся всех и
-    // прокидываем первое исключение, если было.
-    std::vector<std::future<void>> futs;
-    futs.reserve(chunks - 1);
-    for (std::size_t i = 1; i < chunks; ++i) {
-        const auto r = ranges[i];
-        futs.push_back(submit([&body, r] { body(r.first, r.second); }));
-    }
-
-    std::exception_ptr err;
-    try {
-        body(ranges[0].first, ranges[0].second);
-    } catch (...) {
-        err = std::current_exception();
-    }
-    for (auto& f : futs) {
-        try {
-            f.get();
-        } catch (...) {
-            if (!err) err = std::current_exception();
-        }
-    }
-    if (err) std::rethrow_exception(err);
-}
-
-ThreadPool& default_pool() {
-    static ThreadPool pool;  // hardware_concurrency; thread-safe init (C++11)
-    return pool;
-}
 
 }  // namespace ii

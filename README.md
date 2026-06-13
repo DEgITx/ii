@@ -181,10 +181,12 @@ that backends and platform features can be turned on and off independently:
   elsewhere).
 - **`camera.*` / `frame_source.*`** — abstract video source (V4L2 backend on
   Linux, a stub elsewhere) feeding a unified inference loop.
-- **`parallel.*`** — the project-wide parallelism module: a bit-identical
-  intra-op `parallel_for(count, min_grain, body)` (used by the engine's hot
-  kernels and reusable for tiling / decode / preprocessing) plus a generic
-  `ThreadPool` with `submit()`/futures for coarse-grained work.
+- **`parallel.*`** — the project-wide parallelism module: one primitive,
+  `parallel_for(count, min_grain, body)`, that splits a range across cores. Used
+  by the engine's hot kernels and reusable for tiling / decode / preprocessing.
+  It is bit-identical to serial (deterministic), allocation-free per call (a
+  reused "wave" thread pool, not a per-task queue), and collapses to a direct
+  inline call on a single core.
 - **`stats.*` / `sysmon.*` / `csv_export.*`** — FPS statistics, resource
   monitoring and CSV export.
 
@@ -212,7 +214,7 @@ const void* out = eng->output_data(0);       // read with outputs()[0] desc
 
 Supporting pieces are equally decoupled and reusable on their own:
 `preprocess.*` (letterbox), `yolo.*` (decode + NMS), `image_proc.*` / `tile.*`
-(image-to-image decode and tiling), `parallel.*` (intra-op + task parallelism),
+(image-to-image decode and tiling), `parallel.*` (intra-op data parallelism),
 and `tensor_utils.*` (quantize / dequantize). Because backends register behind
 `make_engine()`, you can drop in the whole runner or just its inference layer
 without dragging in dependencies you don't use. To embed, link the `ii_core`
