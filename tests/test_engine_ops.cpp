@@ -60,6 +60,18 @@ TEST(Ewise, SubDiv) {
     expect_data(ii::div(a, b), {10, 10, 10});
 }
 
+TEST(Ewise, SameShapeFastPath) {
+    // Совпадающие многомерные формы идут по быстрому пути (без broadcasting):
+    // проверяем все четыре операции поэлементно и сохранение формы.
+    Tensor a(Shape{2, 1, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor b(Shape{2, 1, 3}, std::vector<float>{10, 20, 30, 40, 50, 60});
+    EXPECT_EQ(ii::add(a, b).shape, (Shape{2, 1, 3}));
+    expect_data(ii::add(a, b), {11, 22, 33, 44, 55, 66});
+    expect_data(ii::sub(b, a), {9, 18, 27, 36, 45, 54});
+    expect_data(ii::mul(a, b), {10, 40, 90, 160, 250, 360});
+    expect_data(ii::div(b, a), {10, 10, 10, 10, 10, 10});
+}
+
 // ---- активации -------------------------------------------------------------
 
 TEST(Activations, ReluSigmoidSilu) {

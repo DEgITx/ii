@@ -1,6 +1,5 @@
 // Реализация математических ядер движка `ii`. См. engine/ops.h по составу и
-// соглашениям. Приоритет — корректность и читаемость: это эталон, по
-// которому проверяются «настоящие» бэкенды, а не их замена по скорости.
+// соглашениям.
 
 #include "engine/ops.h"
 
@@ -36,6 +35,18 @@ std::vector<std::int64_t> bcast_strides(const Shape& s, int n) {
 
 template <class F>
 Tensor ewise(const Tensor& a, const Tensor& b, F f) {
+    // Быстрый путь: формы совпадают — broadcasting не нужен, индексы входов
+    // равны линейному, без разложения координат на каждый элемент. Это самый
+    // частый случай (Add/Mul остаточных связей одинаковой формы).
+    if (a.shape == b.shape) {
+        Tensor out(a.shape);
+        const float* pa = a.data.data();
+        const float* pb = b.data.data();
+        std::size_t total = a.data.size();
+        for (std::size_t i = 0; i < total; ++i) out.data[i] = f(pa[i], pb[i]);
+        return out;
+    }
+
     Shape os = broadcast_shape(a.shape, b.shape);
     int n = static_cast<int>(os.size());
     auto sa = bcast_strides(a.shape, n);
@@ -199,7 +210,7 @@ Tensor layer_norm(const Tensor& x, const Tensor& weight, const Tensor& bias,
 namespace {
 
 // Одно 2-D умножение (M,K)x(K,N)->(M,N), аккумуляция в out по плоским
-// смещениям. Никаких блокировок — эталон, важна понятность.
+// смещениям.
 void matmul_2d(const float* A, const float* B, float* C,
                std::int64_t M, std::int64_t K, std::int64_t N) {
     for (std::int64_t i = 0; i < M; ++i) {
