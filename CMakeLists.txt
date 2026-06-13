@@ -102,6 +102,7 @@ set(II_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set(II_ENGINE_SOURCES
     ${II_SRC_DIR}/engine/tensor.cpp
     ${II_SRC_DIR}/engine/ops.cpp
+    ${II_SRC_DIR}/engine/parallel.cpp
     ${II_SRC_DIR}/engine/graph.cpp
     ${II_SRC_DIR}/engine/kernels.cpp
     ${II_SRC_DIR}/engine/onnx.cpp)

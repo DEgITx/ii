@@ -7,9 +7,26 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "engine/parallel.h"
+
 namespace ii {
 
 namespace {
+
+// Целевой минимум скалярной работы на один параллельный кусок. Ниже этого
+// порога распараллеливание не окупает накладные расходы потоков, и
+// parallel_for выполняет всё на месте (см. engine/parallel.h). Из него
+// выводится грейн каждого ядра: grain = kMinWorkPerChunk / (работа на элемент).
+constexpr std::int64_t kMinWorkPerChunk = 1 << 15;
+
+// Грейн (число «единиц выхода» на кусок) под заданную стоимость одной единицы.
+// Для дешёвых поэлементных операций (cost==1) грейн большой, для тяжёлых строк
+// свёртки/матумножения (cost огромный) — единица, т.е. дробим максимально.
+inline std::int64_t grain_for(std::int64_t work_per_unit) {
+    std::int64_t w = work_per_unit < 1 ? 1 : work_per_unit;
+    std::int64_t g = kMinWorkPerChunk / w;
+    return g < 1 ? 1 : g;
+}
 
 // Дополнить форму s слева единицами до длины n (выравнивание справа, как
 // в broadcasting NumPy/ONNX).
@@ -42,8 +59,11 @@ Tensor ewise(const Tensor& a, const Tensor& b, F f) {
         Tensor out(a.shape);
         const float* pa = a.data.data();
         const float* pb = b.data.data();
-        std::size_t total = a.data.size();
-        for (std::size_t i = 0; i < total; ++i) out.data[i] = f(pa[i], pb[i]);
+        float* po = out.data.data();
+        std::int64_t total = static_cast<std::int64_t>(a.data.size());
+        parallel_for(total, grain_for(1), [&](std::int64_t lo, std::int64_t hi) {
+            for (std::int64_t i = lo; i < hi; ++i) po[i] = f(pa[i], pb[i]);
+        });
         return out;
     }
 
@@ -53,25 +73,33 @@ Tensor ewise(const Tensor& a, const Tensor& b, F f) {
     auto sb = bcast_strides(b.shape, n);
     Tensor out(os);
     std::int64_t total = out.numel();
-    for (std::int64_t lin = 0; lin < total; ++lin) {
-        std::int64_t rem = lin, ia = 0, ib = 0;
-        for (int d = n - 1; d >= 0; --d) {
-            std::int64_t c = rem % os[d];
-            rem /= os[d];
-            ia += c * sa[d];
-            ib += c * sb[d];
+    // Разворот координат на каждый элемент дороже — учитываем это в грейне.
+    parallel_for(total, grain_for(n), [&](std::int64_t lo, std::int64_t hi) {
+        for (std::int64_t lin = lo; lin < hi; ++lin) {
+            std::int64_t rem = lin, ia = 0, ib = 0;
+            for (int d = n - 1; d >= 0; --d) {
+                std::int64_t c = rem % os[d];
+                rem /= os[d];
+                ia += c * sa[d];
+                ib += c * sb[d];
+            }
+            out.data[static_cast<std::size_t>(lin)] =
+                f(a.data[static_cast<std::size_t>(ia)],
+                  b.data[static_cast<std::size_t>(ib)]);
         }
-        out.data[static_cast<std::size_t>(lin)] =
-            f(a.data[static_cast<std::size_t>(ia)],
-              b.data[static_cast<std::size_t>(ib)]);
-    }
+    });
     return out;
 }
 
 template <class F>
 Tensor map1(const Tensor& x, F f) {
     Tensor out(x.shape);
-    for (std::size_t i = 0; i < x.data.size(); ++i) out.data[i] = f(x.data[i]);
+    const float* px = x.data.data();
+    float* po = out.data.data();
+    std::int64_t total = static_cast<std::int64_t>(x.data.size());
+    parallel_for(total, grain_for(1), [&](std::int64_t lo, std::int64_t hi) {
+        for (std::int64_t i = lo; i < hi; ++i) po[i] = f(px[i]);
+    });
     return out;
 }
 
@@ -151,8 +179,12 @@ Tensor softmax(const Tensor& x, std::int64_t axis) {
     for (int i = 0; i < ax; ++i) outer *= x.shape[i];
 
     Tensor out(x.shape);
-    for (std::int64_t o = 0; o < outer; ++o) {
-        for (std::int64_t in = 0; in < inner; ++in) {
+    // Срезы (o, in) независимы — распараллеливаем по их плоскому индексу.
+    // Каждый срез делает ~3*A работы (max, exp+сумма, деление).
+    std::int64_t slices = outer * inner;
+    parallel_for(slices, grain_for(3 * A), [&](std::int64_t s0, std::int64_t s1) {
+        for (std::int64_t s = s0; s < s1; ++s) {
+            std::int64_t o = s / inner, in = s % inner;
             std::int64_t base = (o * A) * inner + in;
             float m = -INFINITY;
             for (std::int64_t k = 0; k < A; ++k)
@@ -166,7 +198,7 @@ Tensor softmax(const Tensor& x, std::int64_t axis) {
             for (std::int64_t k = 0; k < A; ++k)
                 out.data[static_cast<std::size_t>(base + k * inner)] /= sum;
         }
-    }
+    });
     return out;
 }
 
@@ -183,48 +215,33 @@ Tensor layer_norm(const Tensor& x, const Tensor& weight, const Tensor& bias,
         throw std::runtime_error("layer_norm: размер bias != нормируемого хвоста");
 
     Tensor out(x.shape);
-    for (std::int64_t o = 0; o < outer; ++o) {
-        std::int64_t base = o * norm;
-        float mean = 0.0f;
-        for (std::int64_t i = 0; i < norm; ++i)
-            mean += x.data[static_cast<std::size_t>(base + i)];
-        mean /= static_cast<float>(norm);
-        float var = 0.0f;
-        for (std::int64_t i = 0; i < norm; ++i) {
-            float d = x.data[static_cast<std::size_t>(base + i)] - mean;
-            var += d * d;
+    // Строки (по нормируемому хвосту) независимы. Каждая делает ~3*norm работы.
+    parallel_for(outer, grain_for(3 * norm), [&](std::int64_t o0, std::int64_t o1) {
+        for (std::int64_t o = o0; o < o1; ++o) {
+            std::int64_t base = o * norm;
+            float mean = 0.0f;
+            for (std::int64_t i = 0; i < norm; ++i)
+                mean += x.data[static_cast<std::size_t>(base + i)];
+            mean /= static_cast<float>(norm);
+            float var = 0.0f;
+            for (std::int64_t i = 0; i < norm; ++i) {
+                float d = x.data[static_cast<std::size_t>(base + i)] - mean;
+                var += d * d;
+            }
+            var /= static_cast<float>(norm);
+            float inv = 1.0f / std::sqrt(var + eps);
+            for (std::int64_t i = 0; i < norm; ++i) {
+                float v = (x.data[static_cast<std::size_t>(base + i)] - mean) * inv;
+                v *= weight.data[static_cast<std::size_t>(i)];
+                if (has_bias) v += bias.data[static_cast<std::size_t>(i)];
+                out.data[static_cast<std::size_t>(base + i)] = v;
+            }
         }
-        var /= static_cast<float>(norm);
-        float inv = 1.0f / std::sqrt(var + eps);
-        for (std::int64_t i = 0; i < norm; ++i) {
-            float v = (x.data[static_cast<std::size_t>(base + i)] - mean) * inv;
-            v *= weight.data[static_cast<std::size_t>(i)];
-            if (has_bias) v += bias.data[static_cast<std::size_t>(i)];
-            out.data[static_cast<std::size_t>(base + i)] = v;
-        }
-    }
+    });
     return out;
 }
 
 // ---- матумножение -----------------------------------------------------------
-namespace {
-
-// Одно 2-D умножение (M,K)x(K,N)->(M,N), аккумуляция в out по плоским
-// смещениям.
-void matmul_2d(const float* A, const float* B, float* C,
-               std::int64_t M, std::int64_t K, std::int64_t N) {
-    for (std::int64_t i = 0; i < M; ++i) {
-        for (std::int64_t k = 0; k < K; ++k) {
-            float a = A[i * K + k];
-            const float* brow = B + k * N;
-            float* crow = C + i * N;
-            for (std::int64_t j = 0; j < N; ++j) crow[j] += a * brow[j];
-        }
-    }
-}
-
-}  // namespace
-
 Tensor matmul(const Tensor& a, const Tensor& b) {
     // 1-D промоутинг по семантике NumPy/ONNX.
     bool a1d = a.ndim() == 1, b1d = b.ndim() == 1;
@@ -251,21 +268,35 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
     Shape os = batch;
     os.push_back(M);
     os.push_back(N);
-    Tensor out(os);  // нули — matmul_2d аккумулирует
+    Tensor out(os, 0.0f);  // нули — строку аккумулируем по k
 
-    for (std::int64_t bi = 0; bi < nbatch; ++bi) {
-        std::int64_t rem = bi, ia = 0, ib = 0;
-        for (int d = nb - 1; d >= 0; --d) {
-            std::int64_t c = rem % batch[d];
-            rem /= batch[d];
-            ia += c * sa[d];
-            ib += c * sb[d];
+    // Параллелим по плоскому индексу строки выхода (batch x M): каждая строка
+    // независима и пишет свои N значений. Порядок аккумуляции (i,k,j) сохранён,
+    // поэтому результат совпадает с последовательным побитово.
+    const float* Adat = a.data.data();
+    const float* Bdat = b.data.data();
+    float*       Cdat = out.data.data();
+    std::int64_t rows = nbatch * M;
+    parallel_for(rows, grain_for(K * N), [&](std::int64_t r0, std::int64_t r1) {
+        for (std::int64_t r = r0; r < r1; ++r) {
+            std::int64_t bi = r / M, i = r % M;
+            std::int64_t rem = bi, ia = 0, ib = 0;
+            for (int d = nb - 1; d >= 0; --d) {
+                std::int64_t c = rem % batch[d];
+                rem /= batch[d];
+                ia += c * sa[d];
+                ib += c * sb[d];
+            }
+            const float* Arow = Adat + (ia * M + i) * K;
+            const float* Bp   = Bdat + ib * K * N;
+            float*       Crow = Cdat + r * N;     // r == bi*M + i
+            for (std::int64_t k = 0; k < K; ++k) {
+                float av = Arow[k];
+                const float* Brow = Bp + k * N;
+                for (std::int64_t j = 0; j < N; ++j) Crow[j] += av * Brow[j];
+            }
         }
-        const float* Ap = a.data.data() + ia * M * K;
-        const float* Bp = b.data.data() + ib * K * N;
-        float*       Cp = out.data.data() + bi * M * N;
-        matmul_2d(Ap, Bp, Cp, M, K, N);
-    }
+    });
 
     // Снять оси, добавленные при промоутинге 1-D входов.
     if (b1d) os.erase(os.end() - 1);                 // убрать N
@@ -285,19 +316,22 @@ Tensor gemm(const Tensor& a, const Tensor& b, const Tensor& c,
     if (K != Kb) throw std::runtime_error("gemm: несовпадение K");
 
     Tensor out(Shape{M, N}, 0.0f);
-    for (std::int64_t i = 0; i < M; ++i) {
-        for (std::int64_t j = 0; j < N; ++j) {
-            float acc = 0.0f;
-            for (std::int64_t k = 0; k < K; ++k) {
-                float av = trans_a ? a.data[static_cast<std::size_t>(k * a.shape[1] + i)]
-                                   : a.data[static_cast<std::size_t>(i * a.shape[1] + k)];
-                float bv = trans_b ? b.data[static_cast<std::size_t>(j * b.shape[1] + k)]
-                                   : b.data[static_cast<std::size_t>(k * b.shape[1] + j)];
-                acc += av * bv;
+    // Строки выхода независимы — параллелим по i.
+    parallel_for(M, grain_for(K * N), [&](std::int64_t i0, std::int64_t i1) {
+        for (std::int64_t i = i0; i < i1; ++i) {
+            for (std::int64_t j = 0; j < N; ++j) {
+                float acc = 0.0f;
+                for (std::int64_t k = 0; k < K; ++k) {
+                    float av = trans_a ? a.data[static_cast<std::size_t>(k * a.shape[1] + i)]
+                                       : a.data[static_cast<std::size_t>(i * a.shape[1] + k)];
+                    float bv = trans_b ? b.data[static_cast<std::size_t>(j * b.shape[1] + k)]
+                                       : b.data[static_cast<std::size_t>(k * b.shape[1] + j)];
+                    acc += av * bv;
+                }
+                out.data[static_cast<std::size_t>(i * N + j)] = alpha * acc;
             }
-            out.data[static_cast<std::size_t>(i * N + j)] = alpha * acc;
         }
-    }
+    });
     if (!c.empty()) {
         Tensor bc = mul_scalar(c, beta);
         out = add(out, bc);  // broadcast C к (M,N)
@@ -331,38 +365,44 @@ Tensor conv2d(const Tensor& x, const Tensor& w, const Tensor& bias,
     std::int64_t Mg = M / g;  // фильтров на группу
     Tensor out(Shape{Nn, M, OH, OW}, 0.0f);
 
-    for (std::int64_t n = 0; n < Nn; ++n) {
-        for (std::int64_t gi = 0; gi < g; ++gi) {
-            for (std::int64_t mo = 0; mo < Mg; ++mo) {
-                std::int64_t m = gi * Mg + mo;
-                float b = bias.empty() ? 0.0f
-                                       : bias.data[static_cast<std::size_t>(m)];
-                for (std::int64_t oy = 0; oy < OH; ++oy) {
-                    for (std::int64_t ox = 0; ox < OW; ++ox) {
-                        float acc = b;
-                        for (std::int64_t ci = 0; ci < Cg; ++ci) {
-                            std::int64_t c = gi * Cg + ci;
-                            for (std::int64_t ky = 0; ky < kH; ++ky) {
-                                std::int64_t iy = oy * sH + ky * dH - pT;
-                                if (iy < 0 || iy >= H) continue;
-                                for (std::int64_t kx = 0; kx < kW; ++kx) {
-                                    std::int64_t ix = ox * sW + kx * dW - pL;
-                                    if (ix < 0 || ix >= W) continue;
-                                    float xv = x.data[static_cast<std::size_t>(
-                                        ((n * C + c) * H + iy) * W + ix)];
-                                    float wv = w.data[static_cast<std::size_t>(
-                                        ((m * Cg + ci) * kH + ky) * kW + kx)];
-                                    acc += xv * wv;
-                                }
-                            }
+    // Параллелим по плоскому индексу строки выхода (n, m, oy): строк
+    // Nn*M*OH — для любой сети их с запасом хватает на все ядра, а каждая
+    // строка пишет свой непрерывный ряд из OW значений независимо от прочих.
+    std::int64_t rows = Nn * M * OH;
+    std::int64_t work_per_row = OW * Cg * kH * kW;
+    parallel_for(rows, grain_for(work_per_row), [&](std::int64_t r0, std::int64_t r1) {
+        for (std::int64_t r = r0; r < r1; ++r) {
+            std::int64_t oy  = r % OH;
+            std::int64_t tmp = r / OH;
+            std::int64_t m   = tmp % M;
+            std::int64_t n   = tmp / M;
+            std::int64_t gi  = m / Mg;                  // группа этого фильтра
+            std::int64_t cbase = gi * Cg;               // первый канал группы
+            float b = bias.empty() ? 0.0f : bias.data[static_cast<std::size_t>(m)];
+
+            for (std::int64_t ox = 0; ox < OW; ++ox) {
+                float acc = b;
+                for (std::int64_t ci = 0; ci < Cg; ++ci) {
+                    std::int64_t c = cbase + ci;
+                    for (std::int64_t ky = 0; ky < kH; ++ky) {
+                        std::int64_t iy = oy * sH + ky * dH - pT;
+                        if (iy < 0 || iy >= H) continue;
+                        for (std::int64_t kx = 0; kx < kW; ++kx) {
+                            std::int64_t ix = ox * sW + kx * dW - pL;
+                            if (ix < 0 || ix >= W) continue;
+                            float xv = x.data[static_cast<std::size_t>(
+                                ((n * C + c) * H + iy) * W + ix)];
+                            float wv = w.data[static_cast<std::size_t>(
+                                ((m * Cg + ci) * kH + ky) * kW + kx)];
+                            acc += xv * wv;
                         }
-                        out.data[static_cast<std::size_t>(
-                            ((n * M + m) * OH + oy) * OW + ox)] = acc;
                     }
                 }
+                out.data[static_cast<std::size_t>(
+                    ((n * M + m) * OH + oy) * OW + ox)] = acc;
             }
         }
-    }
+    });
     return out;
 }
 
@@ -381,10 +421,15 @@ Tensor pool2d(const Tensor& x, const PoolParams& p, Init init, Acc acc, Fin fin)
     if (OH <= 0 || OW <= 0) throw std::runtime_error("pool2d: непозитивный выход");
 
     Tensor out(Shape{Nn, C, OH, OW});
-    for (std::int64_t n = 0; n < Nn; ++n)
-      for (std::int64_t c = 0; c < C; ++c)
-        for (std::int64_t oy = 0; oy < OH; ++oy)
-          for (std::int64_t ox = 0; ox < OW; ++ox) {
+    // Строки выхода (n, c, oy) независимы.
+    std::int64_t rows = Nn * C * OH;
+    parallel_for(rows, grain_for(OW * kH * kW), [&](std::int64_t r0, std::int64_t r1) {
+      for (std::int64_t r = r0; r < r1; ++r) {
+        std::int64_t oy  = r % OH;
+        std::int64_t tmp = r / OH;
+        std::int64_t c   = tmp % C;
+        std::int64_t n   = tmp / C;
+        for (std::int64_t ox = 0; ox < OW; ++ox) {
             float a = init();
             std::int64_t cnt = 0;
             for (std::int64_t ky = 0; ky < kH; ++ky) {
@@ -404,7 +449,9 @@ Tensor pool2d(const Tensor& x, const PoolParams& p, Init init, Acc acc, Fin fin)
             }
             out.data[static_cast<std::size_t>(((n * C + c) * OH + oy) * OW + ox)] =
                 fin(a, cnt);
-          }
+        }
+      }
+    });
     return out;
 }
 
@@ -431,15 +478,16 @@ Tensor global_average_pool(const Tensor& x) {
     std::int64_t Nn = x.shape[0], C = x.shape[1], H = x.shape[2], W = x.shape[3];
     Tensor out(Shape{Nn, C, 1, 1});
     std::int64_t hw = H * W;
-    for (std::int64_t n = 0; n < Nn; ++n)
-        for (std::int64_t c = 0; c < C; ++c) {
+    // Каждый канал (n, c) сводится независимо; параллелим по ним.
+    parallel_for(Nn * C, grain_for(hw), [&](std::int64_t k0, std::int64_t k1) {
+        for (std::int64_t k = k0; k < k1; ++k) {
             float s = 0.0f;
-            std::int64_t base = (n * C + c) * hw;
+            std::int64_t base = k * hw;
             for (std::int64_t i = 0; i < hw; ++i)
                 s += x.data[static_cast<std::size_t>(base + i)];
-            out.data[static_cast<std::size_t>(n * C + c)] =
-                s / static_cast<float>(hw);
+            out.data[static_cast<std::size_t>(k)] = s / static_cast<float>(hw);
         }
+    });
     return out;
 }
 
@@ -468,16 +516,19 @@ Tensor concat(const std::vector<const Tensor*>& xs, std::int64_t axis) {
     std::int64_t outer = 1;
     for (int d = 0; d < ax; ++d) outer *= os[d];
 
-    for (std::int64_t o = 0; o < outer; ++o) {
-        std::int64_t off = 0;
-        for (const Tensor* t : xs) {
-            std::int64_t blk = t->shape[ax] * inner;
-            std::int64_t src = o * blk;
-            std::int64_t dst = o * (sum * inner) + off;
-            std::copy_n(t->data.begin() + src, blk, out.data.begin() + dst);
-            off += blk;
+    // Блоки по внешней оси (o) пишут непересекающиеся участки выхода.
+    parallel_for(outer, grain_for(sum * inner), [&](std::int64_t o0, std::int64_t o1) {
+        for (std::int64_t o = o0; o < o1; ++o) {
+            std::int64_t off = 0;
+            for (const Tensor* t : xs) {
+                std::int64_t blk = t->shape[ax] * inner;
+                std::int64_t src = o * blk;
+                std::int64_t dst = o * (sum * inner) + off;
+                std::copy_n(t->data.begin() + src, blk, out.data.begin() + dst);
+                off += blk;
+            }
         }
-    }
+    });
     return out;
 }
 
@@ -527,16 +578,18 @@ Tensor transpose(const Tensor& x, const std::vector<std::int64_t>& perm) {
     auto out_strides = row_major_strides(os);
     Tensor out(os);
     std::int64_t total = out.numel();
-    for (std::int64_t lin = 0; lin < total; ++lin) {
-        // координаты в выходе -> исходное смещение через perm
-        std::int64_t rem = lin, src = 0;
-        for (int d = 0; d < nd; ++d) {
-            std::int64_t c = (rem / out_strides[d]) % os[d];
-            src += c * in_strides[static_cast<std::size_t>(p[d])];
+    parallel_for(total, grain_for(nd), [&](std::int64_t lo, std::int64_t hi) {
+        for (std::int64_t lin = lo; lin < hi; ++lin) {
+            // координаты в выходе -> исходное смещение через perm
+            std::int64_t rem = lin, src = 0;
+            for (int d = 0; d < nd; ++d) {
+                std::int64_t c = (rem / out_strides[d]) % os[d];
+                src += c * in_strides[static_cast<std::size_t>(p[d])];
+            }
+            out.data[static_cast<std::size_t>(lin)] =
+                x.data[static_cast<std::size_t>(src)];
         }
-        out.data[static_cast<std::size_t>(lin)] =
-            x.data[static_cast<std::size_t>(src)];
-    }
+    });
     return out;
 }
 
@@ -545,14 +598,22 @@ Tensor upsample_nearest(const Tensor& x, std::int64_t sh, std::int64_t sw) {
     std::int64_t Nn = x.shape[0], C = x.shape[1], H = x.shape[2], W = x.shape[3];
     std::int64_t OH = H * sh, OW = W * sw;
     Tensor out(Shape{Nn, C, OH, OW});
-    for (std::int64_t n = 0; n < Nn; ++n)
-      for (std::int64_t c = 0; c < C; ++c)
-        for (std::int64_t oy = 0; oy < OH; ++oy)
-          for (std::int64_t ox = 0; ox < OW; ++ox) {
-            std::int64_t iy = oy / sh, ix = ox / sw;
+    // Строки выхода (n, c, oy) независимы.
+    std::int64_t rows = Nn * C * OH;
+    parallel_for(rows, grain_for(OW), [&](std::int64_t r0, std::int64_t r1) {
+      for (std::int64_t r = r0; r < r1; ++r) {
+        std::int64_t oy  = r % OH;
+        std::int64_t tmp = r / OH;
+        std::int64_t c   = tmp % C;
+        std::int64_t n   = tmp / C;
+        std::int64_t iy  = oy / sh;
+        for (std::int64_t ox = 0; ox < OW; ++ox) {
+            std::int64_t ix = ox / sw;
             out.data[static_cast<std::size_t>(((n * C + c) * OH + oy) * OW + ox)] =
                 x.data[static_cast<std::size_t>(((n * C + c) * H + iy) * W + ix)];
-          }
+        }
+      }
+    });
     return out;
 }
 
@@ -627,15 +688,17 @@ Tensor resize(const Tensor& x, const std::vector<float>& scales,
     std::int64_t total = out.numel();
 
     if (mode == ResizeMode::Nearest) {
-        for (std::int64_t lin = 0; lin < total; ++lin) {
-            std::int64_t rem = lin, src = 0;
-            for (int d = 0; d < nd; ++d) {
-                std::int64_t oc = (rem / out_str[d]) % os[d];
-                float c = resize_src_coord(oc, scales[d], os[d], x.shape[d], coord);
-                src += clampi(resize_round(c, nearest), 0, x.shape[d] - 1) * in_str[d];
+        parallel_for(total, grain_for(nd), [&](std::int64_t lo, std::int64_t hi) {
+            for (std::int64_t lin = lo; lin < hi; ++lin) {
+                std::int64_t rem = lin, src = 0;
+                for (int d = 0; d < nd; ++d) {
+                    std::int64_t oc = (rem / out_str[d]) % os[d];
+                    float c = resize_src_coord(oc, scales[d], os[d], x.shape[d], coord);
+                    src += clampi(resize_round(c, nearest), 0, x.shape[d] - 1) * in_str[d];
+                }
+                out.data[static_cast<std::size_t>(lin)] = x.data[static_cast<std::size_t>(src)];
             }
-            out.data[static_cast<std::size_t>(lin)] = x.data[static_cast<std::size_t>(src)];
-        }
+        });
         return out;
     }
 
@@ -659,26 +722,30 @@ Tensor resize(const Tensor& x, const std::vector<float>& scales,
         }
     }
 
-    std::vector<std::int64_t> oc(nd);
     std::int64_t corners = (std::int64_t)1 << nd;
-    for (std::int64_t lin = 0; lin < total; ++lin) {
-        std::int64_t rem = lin;
-        for (int d = 0; d < nd; ++d) oc[d] = (rem / out_str[d]) % os[d];
-        float acc = 0.0f;
-        for (std::int64_t mask = 0; mask < corners; ++mask) {
-            float wgt = 1.0f;
-            std::int64_t src = 0;
-            for (int d = 0; d < nd; ++d) {
-                std::size_t k = (std::size_t)oc[d];
-                bool use_hi = (mask >> d) & 1;
-                wgt *= use_hi ? (1.0f - wlo[d][k]) : wlo[d][k];
-                if (wgt == 0.0f) break;             // вырожденный угол — пропуск
-                src += (use_hi ? hi[d][k] : lo[d][k]) * in_str[d];
+    // Каждый выходной элемент независим. Буфер координат oc — свой на кусок
+    // (а не общий), иначе потоки затирали бы его друг у друга.
+    parallel_for(total, grain_for(corners * nd), [&](std::int64_t lin0, std::int64_t lin1) {
+        std::vector<std::int64_t> oc(nd);
+        for (std::int64_t lin = lin0; lin < lin1; ++lin) {
+            std::int64_t rem = lin;
+            for (int d = 0; d < nd; ++d) oc[d] = (rem / out_str[d]) % os[d];
+            float acc = 0.0f;
+            for (std::int64_t mask = 0; mask < corners; ++mask) {
+                float wgt = 1.0f;
+                std::int64_t src = 0;
+                for (int d = 0; d < nd; ++d) {
+                    std::size_t k = (std::size_t)oc[d];
+                    bool use_hi = (mask >> d) & 1;
+                    wgt *= use_hi ? (1.0f - wlo[d][k]) : wlo[d][k];
+                    if (wgt == 0.0f) break;             // вырожденный угол — пропуск
+                    src += (use_hi ? hi[d][k] : lo[d][k]) * in_str[d];
+                }
+                if (wgt != 0.0f) acc += wgt * x.data[static_cast<std::size_t>(src)];
             }
-            if (wgt != 0.0f) acc += wgt * x.data[static_cast<std::size_t>(src)];
+            out.data[static_cast<std::size_t>(lin)] = acc;
         }
-        out.data[static_cast<std::size_t>(lin)] = acc;
-    }
+    });
     return out;
 }
 

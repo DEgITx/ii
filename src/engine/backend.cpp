@@ -25,6 +25,7 @@
 
 #include "engine/graph.h"
 #include "engine/loader.h"
+#include "engine/parallel.h"
 
 namespace inf {
 
@@ -40,7 +41,12 @@ std::vector<int> to_int_shape(const ii::Shape& s) {
 
 class IiEngine final : public Engine {
 public:
-    bool load(const std::string& model_path, const Options& /*opts*/) override {
+    bool load(const std::string& model_path, const Options& opts) override {
+        // Число потоков для параллельных ядер движка. 0 -> по числу ядер,
+        // 1 -> строго последовательно (см. engine/parallel.h). Берём из
+        // Options::num_threads, как и прочие бэкенды интерпретируют --threads.
+        ii::set_num_threads(opts.num_threads);
+
         std::string err;
         if (!ii::load_onnx(model_path, graph_, err)) {
             std::fprintf(stderr, "%s\n", err.c_str());
