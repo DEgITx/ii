@@ -195,6 +195,123 @@ TEST(Executor, MissingValueFails) {
     EXPECT_FALSE(ex.run(in));
 }
 
+// Conv с auto_pad=SAME_UPPER, шаг 1: выход совпадает по H,W со входом, а
+// паддинг считается из формы автоматически (без явного атрибута pads).
+TEST(Executor, ConvAutoPadSame) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"y"};
+    g.initializers["w"] =
+        Tensor(Shape{1, 1, 3, 3}, std::vector<float>(9, 1.0f));  // ядро-сумматор
+
+    Node conv = mk("Conv", {"x", "w"}, {"y"});
+    conv.attrs["auto_pad"] = Attribute{{}, {}, "SAME_UPPER"};
+    conv.attrs["strides"] = Attribute{{1, 1}, {}, ""};
+    g.nodes.push_back(conv);
+
+    Executor ex(g);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{1, 1, 3, 3}, std::vector<float>(9, 1.0f));
+    ASSERT_TRUE(ex.run(in));
+    const Tensor* y = ex.output(0);
+    ASSERT_NE(y, nullptr);
+    EXPECT_EQ(y->shape, (Shape{1, 1, 3, 3}));  // SAME сохраняет размер
+    // Сумма единиц в окне 3x3 с паддингом 1: углы 4, рёбра 6, центр 9.
+    EXPECT_EQ(y->data, (std::vector<float>{4, 6, 4, 6, 9, 6, 4, 6, 4}));
+}
+
+// Conv с auto_pad=VALID эквивалентен нулевому паддингу (выход сжимается).
+TEST(Executor, ConvAutoPadValid) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"y"};
+    g.initializers["w"] = Tensor(Shape{1, 1, 3, 3}, std::vector<float>(9, 1.0f));
+    Node conv = mk("Conv", {"x", "w"}, {"y"});
+    conv.attrs["auto_pad"] = Attribute{{}, {}, "VALID"};
+    g.nodes.push_back(conv);
+    Executor ex(g);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{1, 1, 3, 3}, std::vector<float>(9, 1.0f));
+    ASSERT_TRUE(ex.run(in));
+    EXPECT_EQ(ex.output(0)->shape, (Shape{1, 1, 1, 1}));
+    EXPECT_EQ(ex.output(0)->data, (std::vector<float>{9}));
+}
+
+// MaxPool с auto_pad=SAME_UPPER, шаг 2: выход = ceil(in/2).
+TEST(Executor, MaxPoolAutoPadSame) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"y"};
+    Node pool = mk("MaxPool", {"x"}, {"y"});
+    pool.attrs["kernel_shape"] = Attribute{{2, 2}, {}, ""};
+    pool.attrs["strides"] = Attribute{{2, 2}, {}, ""};
+    pool.attrs["auto_pad"] = Attribute{{}, {}, "SAME_UPPER"};
+    g.nodes.push_back(pool);
+    Executor ex(g);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{1, 1, 3, 3},
+                     std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8, 9});
+    ASSERT_TRUE(ex.run(in));
+    const Tensor* y = ex.output(0);
+    ASSERT_NE(y, nullptr);
+    EXPECT_EQ(y->shape, (Shape{1, 1, 2, 2}));  // ceil(3/2)=2
+    // окна: max(1,2,4,5)=5; правый столбец (3,6)=6; нижняя строка (7,8)=8; (9)=9.
+    EXPECT_EQ(y->data, (std::vector<float>{5, 6, 8, 9}));
+}
+
+// Resize линейный с coordinate_transformation_mode=align_corners на уровне ноды.
+TEST(Executor, ResizeLinearNode) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"y"};
+    g.initializers["scales"] = Tensor(Shape{4}, std::vector<float>{1, 1, 2, 2});
+    Node rz = mk("Resize", {"x", "", "scales"}, {"y"});
+    rz.attrs["mode"] = Attribute{{}, {}, "linear"};
+    rz.attrs["coordinate_transformation_mode"] =
+        Attribute{{}, {}, "align_corners"};
+    g.nodes.push_back(rz);
+    Executor ex(g);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{1, 1, 2, 2}, std::vector<float>{1, 2, 3, 4});
+    ASSERT_TRUE(ex.run(in));
+    const Tensor* y = ex.output(0);
+    ASSERT_NE(y, nullptr);
+    EXPECT_EQ(y->shape, (Shape{1, 1, 4, 4}));
+    EXPECT_NEAR(y->data[0], 1.0f, 1e-4f);
+    EXPECT_NEAR(y->data[15], 4.0f, 1e-4f);
+    EXPECT_NEAR(y->data[5], 2.0f, 1e-4f);
+}
+
+// Неизвестный mode у Resize -> понятная ошибка (run возвращает false).
+TEST(Executor, ResizeUnsupportedModeFails) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"y"};
+    g.initializers["scales"] = Tensor(Shape{4}, std::vector<float>{1, 1, 2, 2});
+    Node rz = mk("Resize", {"x", "", "scales"}, {"y"});
+    rz.attrs["mode"] = Attribute{{}, {}, "cubic"};  // не поддержан
+    g.nodes.push_back(rz);
+    Executor ex(g);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{1, 1, 2, 2}, std::vector<float>{1, 2, 3, 4});
+    EXPECT_FALSE(ex.run(in));
+}
+
+// Неизвестный auto_pad -> понятная ошибка.
+TEST(Executor, ConvUnsupportedAutoPadFails) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"y"};
+    g.initializers["w"] = Tensor(Shape{1, 1, 1, 1}, std::vector<float>{1});
+    Node conv = mk("Conv", {"x", "w"}, {"y"});
+    conv.attrs["auto_pad"] = Attribute{{}, {}, "WHATEVER"};
+    g.nodes.push_back(conv);
+    Executor ex(g);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{1, 1, 2, 2}, std::vector<float>{1, 2, 3, 4});
+    EXPECT_FALSE(ex.run(in));
+}
+
 // Реестр ядер расширяем извне: регистрируем свой слой и используем его.
 TEST(Registry, CustomKernel) {
     ii::register_op("Doubler", [](auto& in, const Node&) {

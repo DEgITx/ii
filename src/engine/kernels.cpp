@@ -6,9 +6,11 @@
 // Покрыты обе ветки: CNN-детекторы (Conv/Pool/Concat/Upsample — YOLOv8) и
 // строительные блоки трансформеров (MatMul/Gemm/Softmax/LayerNorm/Gelu).
 
+#include <array>
 #include <cmath>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "engine/graph.h"
@@ -33,31 +35,98 @@ const Tensor* opt(const std::vector<const Tensor*>& in, std::size_t i) {
 
 const Tensor kEmpty;  // пустой тензор для «нет bias/нет C»
 
+// Паддинг ONNX auto_pad=SAME_* по одной пространственной оси: {begin, end}.
+// Гарантирует out = ceil(in / stride); лишний пиксель при нечётной сумме идёт
+// в конец (SAME_UPPER) или в начало (SAME_LOWER).
+std::array<std::int64_t, 2> same_pad(std::int64_t in, std::int64_t k,
+                                     std::int64_t stride, std::int64_t dilation,
+                                     bool upper) {
+    std::int64_t eff = dilation * (k - 1) + 1;          // эффективный размер окна
+    std::int64_t out = (in + stride - 1) / stride;       // ceil(in/stride)
+    std::int64_t total = (out - 1) * stride + eff - in;
+    if (total < 0) total = 0;
+    std::int64_t half = total / 2;
+    return upper ? std::array<std::int64_t, 2>{half, total - half}
+                 : std::array<std::int64_t, 2>{total - half, half};
+}
+
+// Разложить auto_pad/pads в [top,left,bottom,right]. spatial — {H,W} входа,
+// win — {kH,kW} окна (для Conv — из весов, для пулинга — из kernel_shape).
+// stride/dilation нужны только для SAME. Если auto_pad нет/NOTSET — берём pads.
+std::array<std::int64_t, 4> resolve_pads(
+    const Node& n, std::array<std::int64_t, 2> spatial,
+    std::array<std::int64_t, 2> win, std::array<std::int64_t, 2> stride,
+    std::array<std::int64_t, 2> dilation, bool have_spatial) {
+    std::string ap = n.str("auto_pad", "NOTSET");
+    if (!ap.empty() && ap != "NOTSET") {
+        if (ap == "VALID") return {0, 0, 0, 0};
+        if ((ap == "SAME_UPPER" || ap == "SAME_LOWER") && have_spatial) {
+            bool up = (ap == "SAME_UPPER");
+            auto h = same_pad(spatial[0], win[0], stride[0], dilation[0], up);
+            auto w = same_pad(spatial[1], win[1], stride[1], dilation[1], up);
+            return {h[0], w[0], h[1], w[1]};  // top,left,bottom,right
+        }
+        throw std::runtime_error("неподдержанный auto_pad='" + ap + "'");
+    }
+    auto pad = n.ints("pads");  // [top,left,bottom,right]
+    if (pad.size() == 4) return {pad[0], pad[1], pad[2], pad[3]};
+    return {0, 0, 0, 0};
+}
+
 // Развернуть ONNX-атрибуты в Conv2DParams (по умолчанию — без паддинга,
-// шаг/дилатация 1, одна группа).
-Conv2DParams conv_params(const Node& n) {
+// шаг/дилатация 1, одна группа). x/w нужны для auto_pad=SAME_*.
+Conv2DParams conv_params(const Node& n, const Tensor& x, const Tensor& w) {
     Conv2DParams p;
     auto s = n.ints("strides");
     if (s.size() == 2) { p.stride = {s[0], s[1]}; }
     auto d = n.ints("dilations");
     if (d.size() == 2) { p.dilation = {d[0], d[1]}; }
-    auto pad = n.ints("pads");  // [top,left,bottom,right]
-    if (pad.size() == 4) { p.pad = {pad[0], pad[1], pad[2], pad[3]}; }
     p.groups = n.i("group", 1);
+    bool ok = x.ndim() == 4 && w.ndim() == 4;
+    p.pad = resolve_pads(
+        n, {ok ? x.shape[2] : 0, ok ? x.shape[3] : 0},
+        {ok ? w.shape[2] : 0, ok ? w.shape[3] : 0}, p.stride, p.dilation, ok);
     return p;
 }
 
-PoolParams pool_params(const Node& n) {
+PoolParams pool_params(const Node& n, const Tensor& x) {
     PoolParams p;
     auto k = n.ints("kernel_shape");
     if (k.size() == 2) { p.kernel = {k[0], k[1]}; }
     auto s = n.ints("strides");
     p.stride = (s.size() == 2) ? std::array<std::int64_t, 2>{s[0], s[1]}
                                : p.kernel;  // ONNX: по умолчанию шаг = окно
-    auto pad = n.ints("pads");
-    if (pad.size() == 4) { p.pad = {pad[0], pad[1], pad[2], pad[3]}; }
     p.count_include_pad = n.i("count_include_pad", 0) != 0;
+    bool ok = x.ndim() == 4;
+    p.pad = resolve_pads(n, {ok ? x.shape[2] : 0, ok ? x.shape[3] : 0}, p.kernel,
+                         p.stride, {1, 1}, ok);  // пулинг без дилатации
     return p;
+}
+
+// Разбор режимов ONNX Resize из атрибутов ноды.
+ResizeMode resize_mode(const Node& n) {
+    std::string m = n.str("mode", "nearest");
+    if (m == "nearest") return ResizeMode::Nearest;
+    if (m == "linear" || m == "bilinear") return ResizeMode::Linear;
+    throw std::runtime_error("Resize: неподдержанный mode='" + m +
+                             "' (есть nearest, linear)");
+}
+ResizeCoord resize_coord(const Node& n) {
+    std::string c = n.str("coordinate_transformation_mode", "half_pixel");
+    if (c == "half_pixel")         return ResizeCoord::HalfPixel;
+    if (c == "pytorch_half_pixel") return ResizeCoord::PytorchHalfPixel;
+    if (c == "align_corners")      return ResizeCoord::AlignCorners;
+    if (c == "asymmetric")         return ResizeCoord::Asymmetric;
+    throw std::runtime_error(
+        "Resize: неподдержанный coordinate_transformation_mode='" + c + "'");
+}
+ResizeNearest resize_nmode(const Node& n) {
+    std::string m = n.str("nearest_mode", "round_prefer_floor");
+    if (m == "round_prefer_floor") return ResizeNearest::RoundPreferFloor;
+    if (m == "round_prefer_ceil")  return ResizeNearest::RoundPreferCeil;
+    if (m == "floor")              return ResizeNearest::Floor;
+    if (m == "ceil")               return ResizeNearest::Ceil;
+    throw std::runtime_error("Resize: неподдержанный nearest_mode='" + m + "'");
 }
 
 // Тензор-форма (ONNX хранит её int64; у нас буфер float — округляем).
@@ -169,13 +238,15 @@ void register_all() {
         const Tensor& x = need(in, 0, "X");
         const Tensor& w = need(in, 1, "W");
         const Tensor* b = opt(in, 2);
-        return one(conv2d(x, w, b ? *b : kEmpty, conv_params(n)));
+        return one(conv2d(x, w, b ? *b : kEmpty, conv_params(n, x, w)));
     });
     register_op("MaxPool", [](auto& in, const Node& n) {
-        return one(maxpool2d(need(in, 0, "X"), pool_params(n)));
+        const Tensor& x = need(in, 0, "X");
+        return one(maxpool2d(x, pool_params(n, x)));
     });
     register_op("AveragePool", [](auto& in, const Node& n) {
-        return one(avgpool2d(need(in, 0, "X"), pool_params(n)));
+        const Tensor& x = need(in, 0, "X");
+        return one(avgpool2d(x, pool_params(n, x)));
     });
     register_op("GlobalAveragePool", [](auto& in, const Node&) {
         return one(global_average_pool(need(in, 0, "X")));
@@ -214,21 +285,24 @@ void register_all() {
     register_op("Min", [](auto& in, const Node&) { return one(min_(need(in, 0, "A"), need(in, 1, "B"))); });
     register_op("Max", [](auto& in, const Node&) { return one(max_(need(in, 0, "A"), need(in, 1, "B"))); });
 
-    // --- resize (neck upsample) ---
-    register_op("Resize", [](auto& in, const Node&) {
+    // --- resize (neck upsample, image-to-image) ---
+    register_op("Resize", [](auto& in, const Node& n) {
         const Tensor& x = need(in, 0, "X");
-        const Tensor* sc = opt(in, 2);   // scales
-        const Tensor* sz = opt(in, 3);   // sizes
+        const Tensor* sc = opt(in, 2);   // scales (вход 2)
+        const Tensor* sz = opt(in, 3);   // sizes  (вход 3)
         std::vector<float> scales;
         if (sc && !sc->empty()) {
             for (float v : sc->data) scales.push_back(v);
         } else if (sz && !sz->empty()) {
+            if (sz->numel() != x.ndim())
+                throw std::runtime_error("Resize: длина sizes != ndim входа");
             for (int i = 0; i < x.ndim(); ++i)
                 scales.push_back(sz->data[(std::size_t)i] / (float)x.shape[i]);
         } else {
             throw std::runtime_error("Resize: нет ни scales, ни sizes");
         }
-        return one(resize_nearest(x, scales));
+        return one(resize(x, scales, resize_mode(n), resize_coord(n),
+                          resize_nmode(n)));
     });
 
     // --- split (C2f) ---

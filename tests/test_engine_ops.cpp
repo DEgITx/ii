@@ -309,6 +309,48 @@ TEST(Resize, NearestScales) {
     expect_data(y, {1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4});
 }
 
+TEST(Resize, NearestModeRoundPreferCeil) {
+    // scale 1.5 по последней оси: 2 -> 3. coord asymmetric, round_prefer_ceil.
+    // o=0 -> 0; o=1 -> round(0.667)=1; o=2 -> round(1.333)=1.
+    Tensor x(Shape{3}, std::vector<float>{10, 20, 30});
+    Tensor y = ii::resize(x, {1.5f}, ii::ResizeMode::Nearest,
+                          ii::ResizeCoord::Asymmetric,
+                          ii::ResizeNearest::RoundPreferCeil);
+    EXPECT_EQ(y.shape, (Shape{4}));
+    expect_data(y, {10, 20, 20, 30});  // floor(3*1.5)=4 точек
+}
+
+TEST(Resize, LinearHalfPixelUpsample) {
+    // [1,3] -> 4 по ширине, half_pixel (как в OpenCV/torch bilinear).
+    Tensor x(Shape{1, 1, 1, 2}, std::vector<float>{1, 3});
+    Tensor y = ii::resize(x, {1, 1, 1, 2}, ii::ResizeMode::Linear,
+                          ii::ResizeCoord::HalfPixel);
+    EXPECT_EQ(y.shape, (Shape{1, 1, 1, 4}));
+    expect_data(y, {1.0f, 1.5f, 2.5f, 3.0f});
+}
+
+TEST(Resize, LinearAlignCorners) {
+    // align_corners сохраняет крайние значения: [1,3] -> [1, 1.667, 2.333, 3].
+    Tensor x(Shape{1, 1, 1, 2}, std::vector<float>{1, 3});
+    Tensor y = ii::resize(x, {1, 1, 1, 2}, ii::ResizeMode::Linear,
+                          ii::ResizeCoord::AlignCorners);
+    EXPECT_EQ(y.shape, (Shape{1, 1, 1, 4}));
+    expect_data(y, {1.0f, 1.0f + 2.0f / 3.0f, 1.0f + 4.0f / 3.0f, 3.0f});
+}
+
+TEST(Resize, LinearBilinear2D) {
+    // 2x2 -> 4x4 bilinear, align_corners: углы сохранены, центр интерполирован.
+    Tensor x(Shape{1, 1, 2, 2}, std::vector<float>{1, 2, 3, 4});
+    Tensor y = ii::resize(x, {1, 1, 2, 2}, ii::ResizeMode::Linear,
+                          ii::ResizeCoord::AlignCorners);
+    EXPECT_EQ(y.shape, (Shape{1, 1, 4, 4}));
+    EXPECT_NEAR(y.data[0], 1.0f, 1e-4f);    // угол (0,0)
+    EXPECT_NEAR(y.data[3], 2.0f, 1e-4f);    // угол (0,3)
+    EXPECT_NEAR(y.data[12], 3.0f, 1e-4f);   // угол (3,0)
+    EXPECT_NEAR(y.data[15], 4.0f, 1e-4f);   // угол (3,3)
+    EXPECT_NEAR(y.data[5], 2.0f, 1e-4f);    // (1/3,1/3) -> 2.0
+}
+
 TEST(Split, AlongAxis) {
     Tensor x(Shape{2, 4}, std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8});
     auto parts = ii::split(x, 1, {2, 2});

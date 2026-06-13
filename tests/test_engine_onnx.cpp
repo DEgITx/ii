@@ -91,6 +91,25 @@ std::string attr_value_tensor(const std::string& tensor_bytes) {
     std::string wrap; put_bytes(wrap, 5, a);  // attribute (поле 5 ноды)
     return wrap;
 }
+// AttributeProto-обёртки для скалярных/списочных Constant-значений.
+std::string attr_float(const std::string& name, float f) {
+    std::string a; put_str(a, 1, name); put_float(a, 2, f);   // f (поле 2)
+    std::string wrap; put_bytes(wrap, 5, a); return wrap;
+}
+std::string attr_int(const std::string& name, std::int64_t i) {
+    std::string a; put_str(a, 1, name); put_int(a, 3, i);     // i (поле 3)
+    std::string wrap; put_bytes(wrap, 5, a); return wrap;
+}
+std::string attr_floats(const std::string& name, std::vector<float> v) {
+    std::string a; put_str(a, 1, name);
+    for (float f : v) put_float(a, 7, f);                     // floats (поле 7)
+    std::string wrap; put_bytes(wrap, 5, a); return wrap;
+}
+std::string attr_ints(const std::string& name, std::vector<std::int64_t> v) {
+    std::string a; put_str(a, 1, name);
+    for (auto x : v) put_int(a, 8, x);                        // ints (поле 8)
+    std::string wrap; put_bytes(wrap, 5, a); return wrap;
+}
 std::string model(const std::string& graph_bytes) {
     std::string m; put_bytes(m, 7, graph_bytes); return m;
 }
@@ -167,6 +186,78 @@ TEST(Onnx, ConstantFolded) {
     ii::Executor ex(graph);
     ASSERT_TRUE(ex.run({}));
     EXPECT_EQ(ex.output(0)->data, (std::vector<float>{0, 2}));
+}
+
+// Constant через value_floats: сворачивается в 1-D initializer.
+TEST(Onnx, ConstantValueFloats) {
+    std::string g;
+    put_bytes(g, 1, node("Constant", {}, {"C"},
+                         attr_floats("value_floats", {-1, 2, 3})));
+    put_bytes(g, 1, node("Relu", {"C"}, {"Y"}));
+    put_bytes(g, 12, value_info("Y", {3}));
+    std::string m = model(g);
+
+    ii::Graph graph;
+    std::string err;
+    ASSERT_TRUE(ii::parse_onnx(m.data(), m.size(), graph, err)) << err;
+    ASSERT_EQ(graph.initializers.count("C"), 1u);
+    EXPECT_EQ(graph.initializers["C"].shape, (ii::Shape{3}));
+    EXPECT_EQ(graph.initializers["C"].data, (std::vector<float>{-1, 2, 3}));
+
+    ii::Executor ex(graph);
+    ASSERT_TRUE(ex.run({}));
+    EXPECT_EQ(ex.output(0)->data, (std::vector<float>{0, 2, 3}));
+}
+
+// Constant через value_ints: список целых -> 1-D float-тензор.
+TEST(Onnx, ConstantValueInts) {
+    std::string g;
+    put_bytes(g, 1, node("Constant", {}, {"C"},
+                         attr_ints("value_ints", {2, 5, 7})));
+    put_bytes(g, 1, node("Identity", {"C"}, {"Y"}));
+    put_bytes(g, 12, value_info("Y", {3}));
+    std::string m = model(g);
+
+    ii::Graph graph;
+    std::string err;
+    ASSERT_TRUE(ii::parse_onnx(m.data(), m.size(), graph, err)) << err;
+    EXPECT_EQ(graph.initializers["C"].shape, (ii::Shape{3}));
+    EXPECT_EQ(graph.initializers["C"].data, (std::vector<float>{2, 5, 7}));
+}
+
+// Constant через скаляр value_int: 0-мерный тензор (одно значение).
+TEST(Onnx, ConstantScalarInt) {
+    std::string g;
+    put_bytes(g, 1, node("Constant", {}, {"C"}, attr_int("value_int", 7)));
+    put_bytes(g, 1, node("Relu", {"C"}, {"Y"}));
+    put_bytes(g, 12, value_info("Y", {}));
+    std::string m = model(g);
+
+    ii::Graph graph;
+    std::string err;
+    ASSERT_TRUE(ii::parse_onnx(m.data(), m.size(), graph, err)) << err;
+    EXPECT_EQ(graph.initializers["C"].shape, (ii::Shape{}));  // скаляр
+    EXPECT_EQ(graph.initializers["C"].data, (std::vector<float>{7}));
+
+    ii::Executor ex(graph);
+    ASSERT_TRUE(ex.run({}));
+    EXPECT_EQ(ex.output(0)->data, (std::vector<float>{7}));
+}
+
+// Constant через скаляр value_float.
+TEST(Onnx, ConstantScalarFloat) {
+    std::string g;
+    put_bytes(g, 1, node("Constant", {}, {"C"},
+                         attr_float("value_float", 2.5f)));
+    put_bytes(g, 1, node("Identity", {"C"}, {"Y"}));
+    put_bytes(g, 12, value_info("Y", {}));
+    std::string m = model(g);
+
+    ii::Graph graph;
+    std::string err;
+    ASSERT_TRUE(ii::parse_onnx(m.data(), m.size(), graph, err)) << err;
+    EXPECT_EQ(graph.initializers["C"].shape, (ii::Shape{}));
+    EXPECT_EQ(graph.initializers["C"].data, (std::vector<float>{2.5f}));
 }
 
 TEST(Onnx, RejectsGarbage) {

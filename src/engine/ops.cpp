@@ -561,11 +561,50 @@ Tensor max_(const Tensor& a, const Tensor& b) {
     return ewise(a, b, [](float x, float y){ return std::max(x, y); });
 }
 
-// ---- resize (nearest, per-axis scales) -------------------------------------
-Tensor resize_nearest(const Tensor& x, const std::vector<float>& scales) {
+// ---- resize (nearest / linear, per-axis scales) ----------------------------
+namespace {
+
+// Выходная координата -> исходная (вещественная), по правилам ONNX
+// coordinate_transformation_mode.
+float resize_src_coord(std::int64_t o, float scale, std::int64_t out_len,
+                       std::int64_t in_len, ResizeCoord m) {
+    switch (m) {
+        case ResizeCoord::Asymmetric:
+            return scale != 0.0f ? o / scale : 0.0f;
+        case ResizeCoord::AlignCorners:
+            return out_len <= 1
+                       ? 0.0f
+                       : o * (float)(in_len - 1) / (float)(out_len - 1);
+        case ResizeCoord::PytorchHalfPixel:
+            return out_len > 1 ? (o + 0.5f) / scale - 0.5f : 0.0f;
+        case ResizeCoord::HalfPixel:
+        default:
+            return (o + 0.5f) / scale - 0.5f;
+    }
+}
+
+// Округление исходной координаты до индекса для nearest (ONNX nearest_mode).
+std::int64_t resize_round(float c, ResizeNearest m) {
+    switch (m) {
+        case ResizeNearest::Floor:          return (std::int64_t)std::floor(c);
+        case ResizeNearest::Ceil:           return (std::int64_t)std::ceil(c);
+        case ResizeNearest::RoundPreferCeil: return (std::int64_t)std::floor(c + 0.5f);
+        case ResizeNearest::RoundPreferFloor:
+        default:                            return (std::int64_t)std::ceil(c - 0.5f);
+    }
+}
+
+std::int64_t clampi(std::int64_t v, std::int64_t lo, std::int64_t hi) {
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+}  // namespace
+
+Tensor resize(const Tensor& x, const std::vector<float>& scales,
+              ResizeMode mode, ResizeCoord coord, ResizeNearest nearest) {
     int nd = x.ndim();
     if ((int)scales.size() != nd)
-        throw std::runtime_error("resize_nearest: len(scales) != ndim");
+        throw std::runtime_error("resize: len(scales) != ndim");
     Shape os(nd);
     for (int i = 0; i < nd; ++i) {
         os[i] = (std::int64_t)std::floor(x.shape[i] * scales[i]);
@@ -575,18 +614,66 @@ Tensor resize_nearest(const Tensor& x, const std::vector<float>& scales) {
     auto out_str = row_major_strides(os);
     Tensor out(os);
     std::int64_t total = out.numel();
-    for (std::int64_t lin = 0; lin < total; ++lin) {
-        std::int64_t rem = lin, src = 0;
-        for (int d = 0; d < nd; ++d) {
-            std::int64_t oc = (rem / out_str[d]) % os[d];
-            std::int64_t ic = (std::int64_t)std::floor(oc / scales[d]);
-            if (ic < 0) ic = 0;
-            if (ic >= x.shape[d]) ic = x.shape[d] - 1;
-            src += ic * in_str[d];
+
+    if (mode == ResizeMode::Nearest) {
+        for (std::int64_t lin = 0; lin < total; ++lin) {
+            std::int64_t rem = lin, src = 0;
+            for (int d = 0; d < nd; ++d) {
+                std::int64_t oc = (rem / out_str[d]) % os[d];
+                float c = resize_src_coord(oc, scales[d], os[d], x.shape[d], coord);
+                src += clampi(resize_round(c, nearest), 0, x.shape[d] - 1) * in_str[d];
+            }
+            out.data[static_cast<std::size_t>(lin)] = x.data[static_cast<std::size_t>(src)];
         }
-        out.data[static_cast<std::size_t>(lin)] = x.data[static_cast<std::size_t>(src)];
+        return out;
+    }
+
+    // Линейная (мультилинейная) интерполяция. Предрасчёт на каждую ось пары
+    // соседей lo/hi и веса wlo, чтобы не считать координаты на каждый элемент;
+    // затем сумма по 2^nd угловым точкам (для NCHW nd<=4 — не более 16).
+    std::vector<std::vector<std::int64_t>> lo(nd), hi(nd);
+    std::vector<std::vector<float>>        wlo(nd);
+    for (int d = 0; d < nd; ++d) {
+        std::int64_t in_len = x.shape[d];
+        lo[d].resize((std::size_t)os[d]);
+        hi[d].resize((std::size_t)os[d]);
+        wlo[d].resize((std::size_t)os[d]);
+        for (std::int64_t o = 0; o < os[d]; ++o) {
+            float c = resize_src_coord(o, scales[d], os[d], in_len, coord);
+            std::int64_t l = (std::int64_t)std::floor(c);
+            float frac = c - (float)l;
+            lo[d][(std::size_t)o]  = clampi(l, 0, in_len - 1);
+            hi[d][(std::size_t)o]  = clampi(l + 1, 0, in_len - 1);
+            wlo[d][(std::size_t)o] = 1.0f - frac;
+        }
+    }
+
+    std::vector<std::int64_t> oc(nd);
+    std::int64_t corners = (std::int64_t)1 << nd;
+    for (std::int64_t lin = 0; lin < total; ++lin) {
+        std::int64_t rem = lin;
+        for (int d = 0; d < nd; ++d) oc[d] = (rem / out_str[d]) % os[d];
+        float acc = 0.0f;
+        for (std::int64_t mask = 0; mask < corners; ++mask) {
+            float wgt = 1.0f;
+            std::int64_t src = 0;
+            for (int d = 0; d < nd; ++d) {
+                std::size_t k = (std::size_t)oc[d];
+                bool use_hi = (mask >> d) & 1;
+                wgt *= use_hi ? (1.0f - wlo[d][k]) : wlo[d][k];
+                if (wgt == 0.0f) break;             // вырожденный угол — пропуск
+                src += (use_hi ? hi[d][k] : lo[d][k]) * in_str[d];
+            }
+            if (wgt != 0.0f) acc += wgt * x.data[static_cast<std::size_t>(src)];
+        }
+        out.data[static_cast<std::size_t>(lin)] = acc;
     }
     return out;
+}
+
+Tensor resize_nearest(const Tensor& x, const std::vector<float>& scales) {
+    return resize(x, scales, ResizeMode::Nearest,
+                  ResizeCoord::Asymmetric, ResizeNearest::Floor);
 }
 
 // ---- split -----------------------------------------------------------------

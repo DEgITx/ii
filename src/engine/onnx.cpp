@@ -396,10 +396,27 @@ void parse_graph(Pb r, Graph& g) {
     // остальные превращаем в ii::Node. Порядок нод в ONNX топологический.
     for (const RawNode& rn : nodes) {
         if (rn.op_type == "Constant" && !rn.outputs.empty()) {
+            // ONNX Constant несёт значение ровно в одном из атрибутов: tensor
+            // (value/sparse_value) или скаляр/список (value_float[s]/value_int[s]).
+            // Поддерживаем числовые варианты — движок и так считает во float32.
+            const std::string& out = rn.outputs[0];
             for (const RawAttr& a : rn.attrs) {
                 if (a.name == "value" && a.has_t) {
-                    g.initializers[rn.outputs[0]] = to_tensor(a.t);
+                    g.initializers[out] = to_tensor(a.t);
+                } else if (a.name == "value_float") {
+                    g.initializers[out] = Tensor(Shape{}, std::vector<float>{a.f});
+                } else if (a.name == "value_floats") {
+                    g.initializers[out] =
+                        Tensor(Shape{(std::int64_t)a.floats.size()}, a.floats);
+                } else if (a.name == "value_int") {
+                    g.initializers[out] =
+                        Tensor(Shape{}, std::vector<float>{(float)a.i});
+                } else if (a.name == "value_ints") {
+                    std::vector<float> d(a.ints.begin(), a.ints.end());
+                    g.initializers[out] =
+                        Tensor(Shape{(std::int64_t)a.ints.size()}, std::move(d));
                 }
+                // value_string(s)/sparse_value не поддержаны (движок числовой).
             }
             continue;
         }

@@ -120,8 +120,25 @@ Tensor min_(const Tensor& a, const Tensor& b);
 Tensor max_(const Tensor& a, const Tensor& b);
 
 // ---- Выборка / форма (shape-подграфы экспортов) ---------------------------
-// Resize ближайшим соседом по per-axis масштабам (len == ndim). Режим
-// координат «asymmetric» + nearest=floor — то, что даёт upsample в neck'е.
+// Полная семантика ONNX Resize. Способ интерполяции:
+enum class ResizeMode { Nearest, Linear };
+// Преобразование выходной координаты в исходную (coordinate_transformation_mode):
+enum class ResizeCoord { HalfPixel, PytorchHalfPixel, AlignCorners, Asymmetric };
+// Правило округления для nearest (nearest_mode):
+enum class ResizeNearest { RoundPreferFloor, RoundPreferCeil, Floor, Ceil };
+
+// Resize по per-axis масштабам (len == ndim). Поддерживает ближайшего соседа
+// и (мульти)линейную интерполяцию с любым из режимов координат ONNX. Выходной
+// размер по оси = floor(in * scale). Для линейного режима интерполяция идёт по
+// всем осям (на осях с масштабом 1 вырождается в копию — корректно для NCHW,
+// где масштабируются только H,W).
+Tensor resize(const Tensor& x, const std::vector<float>& scales,
+              ResizeMode mode,
+              ResizeCoord coord = ResizeCoord::HalfPixel,
+              ResizeNearest nearest = ResizeNearest::RoundPreferFloor);
+
+// Resize ближайшим соседом, координаты «asymmetric», округление floor — ровно
+// то, что даёт upsample в neck'е детектора. Тонкая обёртка над resize().
 Tensor resize_nearest(const Tensor& x, const std::vector<float>& scales);
 
 // Разбиение по оси на части заданных размеров (сумма == size по оси).
