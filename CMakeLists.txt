@@ -53,15 +53,15 @@ endif()
 # ---- Опции по умолчанию ---------------------------------------------------
 # Display и Camera — платформо-зависимые. Дисплей доступен на Linux
 # (Wayland/EGL/GLES2) и на Windows (Win32/Direct3D 11), поэтому там ON.
-# Камера (V4L2) — пока только Linux; на остальных платформах OFF и сборка
-# идёт со стабами, чтобы make_display()/make_camera() корректно вернули
-# nullptr там, где бэкенда нет.
+# Камера: Linux — V4L2, Windows — Media Foundation; на остальных платформах
+# OFF и сборка идёт со стабами, чтобы make_display()/make_camera()
+# корректно вернули nullptr там, где бэкенда нет.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     option(USE_DISPLAY "Сборка с backend'ом для отображения (Wayland на Linux)" ON)
-    option(USE_CAMERA  "Сборка с V4L2 backend'ом для захвата с камеры"          ON)
+    option(USE_CAMERA  "Сборка с backend'ом для захвата с камеры (V4L2)"        ON)
 elseif(WIN32)
     option(USE_DISPLAY "Сборка с backend'ом для отображения (Direct3D 11 на Windows)" ON)
-    option(USE_CAMERA  "Сборка с V4L2 backend'ом для захвата с камеры"          OFF)
+    option(USE_CAMERA  "Сборка с backend'ом для захвата с камеры (Media Foundation)"  ON)
 else()
     option(USE_DISPLAY "Сборка с backend'ом для отображения"                    OFF)
     option(USE_CAMERA  "Сборка с V4L2 backend'ом для захвата с камеры"          OFF)
@@ -391,8 +391,18 @@ if(USE_DIRECTML)
     endif()
 endif()
 
-# ---- Backend для камеры (V4L2) -------------------------------------------
-if(USE_CAMERA)
+# ---- Backend для камеры --------------------------------------------------
+# Linux -> V4L2 (camera_v4l2.cpp);
+# Windows -> Media Foundation (camera_mediafoundation.cpp);
+# прочее / USE_CAMERA=OFF -> заглушка (make_camera() возвращает nullptr).
+if(USE_CAMERA AND WIN32)
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/camera_mediafoundation.cpp)
+    target_compile_definitions(ii_core PRIVATE NPU_HAS_CAMERA=1)
+    # Media Foundation: mfplat/mf/mfreadwrite — сам reader и устройства;
+    # mfuuid — GUID'ы форматов/атрибутов; ole32 — COM. Все есть в любом
+    # Windows SDK, доп. путей не требуют.
+    target_link_libraries(ii_core PUBLIC mfplat mf mfreadwrite mfuuid ole32)
+elseif(USE_CAMERA)
     target_sources(ii_core PRIVATE ${II_SRC_DIR}/camera_v4l2.cpp)
     target_compile_definitions(ii_core PRIVATE NPU_HAS_CAMERA=1)
 else()
