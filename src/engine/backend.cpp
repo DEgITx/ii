@@ -1,4 +1,4 @@
-// Реализация inf::Engine поверх встроенного движка `ii`.
+// Реализация ii::Engine поверх встроенного движка `ii`.
 //
 // Это мост между backend-нейтральным контрактом раннера (inference.h) и
 // собственным графовым движком (engine/graph.* / engine/ops.*). Зависимостей от
@@ -25,9 +25,9 @@
 
 #include "engine/graph.h"
 #include "engine/loader.h"
-#include "engine/parallel.h"
+#include "parallel.h"
 
-namespace inf {
+namespace ii {
 
 namespace {
 
@@ -43,7 +43,7 @@ class IiEngine final : public Engine {
 public:
     bool load(const std::string& model_path, const Options& opts) override {
         // Число потоков для параллельных ядер движка. 0 -> по числу ядер,
-        // 1 -> строго последовательно (см. engine/parallel.h). Берём из
+        // 1 -> строго последовательно (см. parallel.h). Берём из
         // Options::num_threads, как и прочие бэкенды интерпретируют --threads.
         ii::set_num_threads(opts.num_threads);
 
@@ -81,7 +81,7 @@ public:
         if (!exec_) return false;
         if (!exec_->run()) return false;
         // Копируем выходы в собственные буферы: указатель output_data() должен
-        // оставаться стабильным между прогонами (контракт inf::Engine).
+        // оставаться стабильным между прогонами (контракт ii::Engine).
         for (std::size_t i = 0; i < out_buf_.size(); ++i) {
             const ii::Tensor* o = exec_->output(i);
             if (!o) return false;
@@ -153,4 +153,4 @@ std::unique_ptr<Engine> make_ii_engine() {
     return std::unique_ptr<Engine>(new IiEngine());
 }
 
-}  // namespace inf
+} // namespace ii

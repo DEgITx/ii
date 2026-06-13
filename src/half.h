@@ -5,7 +5,7 @@
 // могли разделять и backend-контракт (inference.h), и раннер (tensor_utils,
 // image_proc), и встроенный движок `ii` (engine/onnx.cpp), не таща друг друга.
 //
-// Имя/пространство имён сохранены (inf::half_to_float) ради совместимости —
+// Имя/пространство имён сохранены (ii::half_to_float) ради совместимости —
 // это часть публичного набора числовых помощников inference.h.
 
 #pragma once
@@ -13,7 +13,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace inf {
+namespace ii {
 
 // Без зависимости от __fp16 / F16C — работает на любом ARMv8 / x86-64 / MSVC.
 // Header-inline: вызывается в горячих циклах деквантования.
@@ -42,4 +42,4 @@ inline float half_to_float(std::uint16_t h) {
     return out;
 }
 
-}  // namespace inf
+} // namespace ii

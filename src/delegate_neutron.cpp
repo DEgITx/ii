@@ -10,7 +10,7 @@
 // Сам плагин делегата (libneutron_delegate.so) в репозиторий не входит и
 // поставляется отдельно вместе с драйверами/BSP целевой платформы.
 
-namespace inf {
+namespace ii {
 
 const char* module_default_delegate_path() {
 #if defined(__linux__)
@@ -20,4 +20,4 @@ const char* module_default_delegate_path() {
 #endif
 }
 
-}  // namespace inf
+} // namespace ii

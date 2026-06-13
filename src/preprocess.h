@@ -14,7 +14,7 @@
 
 #include "inference.h"
 
-namespace iirun {
+namespace ii {
 
 // Загруженное изображение: RGB HWC, 3 канала, 0..255.
 struct Image {
@@ -52,14 +52,14 @@ void rgb_to_gray(const uint8_t* rgb, std::size_t pixels,
 // Бэкенд гарантирует, что буфер достаточен для info.bytes. Для горячего
 // пути (tile-режим) квантование идёт через 256-элементную LUT, кэшируемую
 // на тред по ключу (dtype, scale, zp).
-bool fill_input(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
+bool fill_input(const std::vector<uint8_t>& rgb, const ii::TensorDesc& info,
                 void* data);
 
 // Заливка входа в NCHW-раскладке (channel-planar) — для ONNX-моделей
 // [1,C,H,W]. На вход тот же HWC-буфер, что и у fill_input (как из letterbox),
 // плюс геометрия C/H/W; пиксели транспонируются HWC -> CHW. Нормализация и
 // квантование идентичны fill_input.
-bool fill_input_nchw(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
+bool fill_input_nchw(const std::vector<uint8_t>& rgb, const ii::TensorDesc& info,
                      void* data, int C, int H, int W);
 
-}  // namespace iirun
+} // namespace ii

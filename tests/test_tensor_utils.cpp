@@ -10,13 +10,13 @@
 #include "inference.h"
 #include "tensor_utils.h"
 
-using iirun::numel;
-using iirun::shape_to_str;
-using iirun::image_input_channels;
-using iirun::is_image_input;
-using iirun::dequantize_output;
-using inf::DType;
-using inf::TensorDesc;
+using ii::numel;
+using ii::shape_to_str;
+using ii::image_input_channels;
+using ii::is_image_input;
+using ii::dequantize_output;
+using ii::DType;
+using ii::TensorDesc;
 
 // ---- numel ----------------------------------------------------------------
 
@@ -72,7 +72,7 @@ TensorDesc make_desc(DType dt, std::size_t count, float scale, int zp) {
     d.dtype = dt;
     d.scale = scale;
     d.zero_point = zp;
-    d.bytes = count * inf::dtype_size(dt);
+    d.bytes = count * ii::dtype_size(dt);
     return d;
 }
 }  // namespace

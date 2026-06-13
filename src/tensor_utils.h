@@ -1,4 +1,4 @@
-// Мелкие универсальные помощники над тензорами (inf::TensorDesc):
+// Мелкие универсальные помощники над тензорами (ii::TensorDesc):
 // арифметика по shape, печать сводки/головы выхода, деквантование
 // произвольного выходного тензора в float.
 //
@@ -13,12 +13,12 @@
 
 #include "inference.h"
 
-namespace iirun {
+namespace ii {
 
-// Историческое имя — алиас, чтобы не плодить inf::TensorDesc в каждой
+// Историческое имя — алиас, чтобы не плодить ii::TensorDesc в каждой
 // строчке. Всё остальное (DType, half_to_float, dtype_name, dtype_size)
 // приходит из inference.h.
-using TensorInfo = inf::TensorDesc;
+using TensorInfo = ii::TensorDesc;
 
 // Число элементов по shape; 0 для динамического/нулевого размера
 // (отрицательная/нулевая ось не поддерживается).
@@ -76,4 +76,4 @@ double now_ms();
 bool dequantize_output(const TensorInfo& info, const void* data,
                        std::vector<float>& out);
 
-}  // namespace iirun
+} // namespace ii

@@ -9,8 +9,8 @@
 
 #include "preprocess.h"
 
-using iirun::rgb_to_gray;
-using iirun::letterbox;
+using ii::rgb_to_gray;
+using ii::letterbox;
 
 // ---- rgb_to_gray ----------------------------------------------------------
 

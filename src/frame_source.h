@@ -20,7 +20,7 @@
 
 #include "camera.h"
 
-namespace iirun {
+namespace ii {
 
 struct FrameSource {
     virtual ~FrameSource() = default;
@@ -58,4 +58,4 @@ private:
     int            w_, h_;
 };
 
-}  // namespace iirun
+} // namespace ii

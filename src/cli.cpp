@@ -5,15 +5,15 @@
 #include <cstdio>
 #include <cstdlib>
 
-namespace iirun {
+namespace ii {
 
 void print_usage(const char* prog) {
-    const char* def_delegate = inf::default_delegate_path();
+    const char* def_delegate = ii::default_delegate_path();
     const char* def_delegate_show = (def_delegate && *def_delegate)
         ? def_delegate : "(нет на этой платформе)";
     // Собираем список собранных бэкендов для подсказки в --help.
     std::string backends_str;
-    for (const auto& b : inf::available_backends()) {
+    for (const auto& b : ii::available_backends()) {
         if (!backends_str.empty()) backends_str += ", ";
         backends_str += b;
     }
@@ -188,4 +188,4 @@ bool parse_args(int argc, char** argv, Args& a) {
     return true;
 }
 
-}  // namespace iirun
+} // namespace ii

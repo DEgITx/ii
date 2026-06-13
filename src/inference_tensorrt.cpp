@@ -1,4 +1,4 @@
-// Реализация inf::Engine поверх NVIDIA TensorRT.
+// Реализация ii::Engine поверх NVIDIA TensorRT.
 //
 // Поддерживаемые форматы модели:
 //   * сериализованный движок (.engine / .plan / .trt) — десериализуется
@@ -42,7 +42,7 @@
 #endif
 #include <cuda_runtime_api.h>
 
-namespace inf {
+namespace ii {
 
 namespace {
 
@@ -433,4 +433,4 @@ std::unique_ptr<Engine> make_tensorrt_engine() {
     return std::unique_ptr<Engine>(new TensorRTEngine());
 }
 
-}  // namespace inf
+} // namespace ii

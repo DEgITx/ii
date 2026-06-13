@@ -9,9 +9,9 @@
 #include "preprocess.h"
 #include "tensor_utils.h"
 
-using iirun::ImageLayout;
-using iirun::image_input_info;
-using iirun::fill_input_nchw;
+using ii::ImageLayout;
+using ii::image_input_info;
+using ii::fill_input_nchw;
 
 TEST(ImageLayout, DetectNhwcVsNchw) {
     ImageLayout lay;
@@ -39,8 +39,8 @@ TEST(FillInputNchw, TransposesHwcToChw) {
     // 2x2 RGB, пиксели HWC.
     std::vector<uint8_t> rgb = {10, 20, 30,  40, 50, 60,
                                 70, 80, 90,  100, 110, 120};
-    inf::TensorDesc info;
-    info.dtype = inf::DType::Float32;
+    ii::TensorDesc info;
+    info.dtype = ii::DType::Float32;
     info.shape = {1, 3, 2, 2};
 
     std::vector<float> out(12, -1.0f);

@@ -14,17 +14,17 @@
 #include "image_proc.h"
 #include "inference.h"
 
-using imgproc::OutputRange;
-using imgproc::parse_output_range;
-using imgproc::is_image_output;
-using imgproc::detect_image_output_index;
-using imgproc::decode_image_output;
-using imgproc::decode_image_output_to;
-using imgproc::DecodeOptions;
-using imgproc::OutputImage;
-using imgproc::DecodeCache;
-using inf::TensorDesc;
-using inf::DType;
+using ii::OutputRange;
+using ii::parse_output_range;
+using ii::is_image_output;
+using ii::detect_image_output_index;
+using ii::decode_image_output;
+using ii::decode_image_output_to;
+using ii::DecodeOptions;
+using ii::OutputImage;
+using ii::DecodeCache;
+using ii::TensorDesc;
+using ii::DType;
 
 namespace {
 

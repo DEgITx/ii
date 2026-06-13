@@ -1,4 +1,4 @@
-// Реализация inf::Engine поверх ONNX Runtime с execution provider
+// Реализация ii::Engine поверх ONNX Runtime с execution provider
 // DirectML (фактически — стек Windows ML: ONNX-граф крутится поверх
 // DirectX 12 на любом D3D12-совместимом GPU/iGPU/NPU под Windows).
 //
@@ -49,7 +49,7 @@
 #include <windows.h>
 #endif
 
-namespace inf {
+namespace ii {
 
 namespace {
 
@@ -393,4 +393,4 @@ std::unique_ptr<Engine> make_directml_engine() {
     return std::unique_ptr<Engine>(new DirectMLEngine());
 }
 
-}  // namespace inf
+} // namespace ii

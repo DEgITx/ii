@@ -1,4 +1,4 @@
-// Реализация inf::Engine поверх TensorFlow Lite + external delegate.
+// Реализация ii::Engine поверх TensorFlow Lite + external delegate.
 //
 // Все включения tflite/* — здесь и только здесь. Остальные модули
 // раннера (ii.cpp, yolo.cpp, и т.п.) видят только inference.h и могут
@@ -23,11 +23,11 @@
 #include "tensorflow/lite/model.h"
 #include "tensorflow/lite/delegates/external/external_delegate.h"
 
-namespace inf {
+namespace ii {
 
 namespace {
 
-// Маппинг TfLiteType -> inf::DType. Покрывает всё, что встречается у
+// Маппинг TfLiteType -> ii::DType. Покрывает всё, что встречается у
 // нас в моделях (включая float16 для голов «лёгких» экспортов).
 DType from_tflite(TfLiteType t) {
     switch (t) {
@@ -168,4 +168,4 @@ std::unique_ptr<Engine> make_tflite_engine() {
     return std::unique_ptr<Engine>(new TfliteEngine());
 }
 
-}  // namespace inf
+} // namespace ii

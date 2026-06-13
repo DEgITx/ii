@@ -9,7 +9,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace tile {
+namespace ii {
 
 namespace {
 
@@ -153,7 +153,7 @@ void TileCanvas::reset(int w, int h, int overlap_out_, bool blend_) {
     }
 }
 
-void TileCanvas::paste(const imgproc::OutputImage& tile, int dst_x, int dst_y) {
+void TileCanvas::paste(const ii::OutputImage& tile, int dst_x, int dst_y) {
     if (tile.rgb.empty() || tile.width <= 0 || tile.height <= 0) return;
     if (width <= 0 || height <= 0) return;
 
@@ -248,4 +248,4 @@ void TileCanvas::finalize() {
     blend_clean = true;
 }
 
-}  // namespace tile
+} // namespace ii

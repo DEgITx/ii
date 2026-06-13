@@ -8,10 +8,10 @@ file — across several inference backends behind a single interface.
 It is designed to be **embeddable**: the core knows nothing about any specific
 framework. Backends (TensorFlow Lite, NVIDIA TensorRT, ONNX Runtime / DirectML)
 are selected at build time and dispatched at runtime through one narrow
-`inf::Engine` abstraction, so you can drop the runner — or just its inference
+`ii::Engine` abstraction, so you can drop the runner — or just its inference
 layer — into a larger application without dragging in dependencies you don't use.
 
-That same `inf::Engine` abstraction makes `ii` more than a CLI: it is the
+That same `ii::Engine` abstraction makes `ii` more than a CLI: it is the
 foundation of a small, embeddable **inference engine** in its own right. Today
 it wraps third-party runtimes behind a uniform interface; the longer-term
 direction is to grow into a self-contained inference engine — a native execution
@@ -161,13 +161,16 @@ Run `./ii --help` for the full option list.
 
 ## Architecture
 
-The runner is split into small, single-purpose modules so that backends and
-platform features can be turned on and off independently:
+The whole codebase lives in one namespace, **`ii`**, and compiles into one
+static library, **`ii_core`** (everything except the CLI: `main()` in `ii.cpp`
+and arg parsing in `cli.*`). The `ii` executable and the unit tests both link
+that library. Inside it the code is split into small, single-purpose modules so
+that backends and platform features can be turned on and off independently:
 
-- **`inference.*`** — the backend-agnostic `inf::Engine` interface and the
+- **`inference.*`** — the backend-agnostic `ii::Engine` interface and the
   `make_engine()` factory. Each backend lives in its own translation unit
   (`inference_tflite.cpp`, `inference_tensorrt.cpp`, `inference_directml.cpp`)
-  and is linked in only when its CMake option is enabled.
+  and is linked into `ii_core` only when its CMake option is enabled.
 - **`delegate.*`** — selection of an optional external TFLite delegate, kept
   separate from the inference core so the runner is not tied to any particular
   accelerator. A delegate path can always be supplied via `--delegate`.
@@ -178,21 +181,26 @@ platform features can be turned on and off independently:
   elsewhere).
 - **`camera.*` / `frame_source.*`** — abstract video source (V4L2 backend on
   Linux, a stub elsewhere) feeding a unified inference loop.
-- **`parallel.*` / `stats.*` / `sysmon.*` / `csv_export.*`** — thread pool,
-  FPS statistics, resource monitoring and CSV export.
+- **`parallel.*`** — the project-wide parallelism module: a bit-identical
+  intra-op `parallel_for(count, min_grain, body)` (used by the engine's hot
+  kernels and reusable for tiling / decode / preprocessing) plus a generic
+  `ThreadPool` with `submit()`/futures for coarse-grained work.
+- **`stats.*` / `sysmon.*` / `csv_export.*`** — FPS statistics, resource
+  monitoring and CSV export.
 
 ## Use as a library
 
-`ii` is not only a CLI — the inference core is designed to be **embedded in
-other applications**. The `inf::Engine` interface (`inference.h`) is fully
-self-contained: it pulls in no backend SDK headers, so a host program can depend
-on just that one narrow abstraction and link whichever backend(s) it built.
+`ii` is not only a CLI — everything except the CLI is the `ii_core` static
+library, designed to be **embedded in other applications**. The `ii::Engine`
+interface (`inference.h`) is fully self-contained: it pulls in no backend SDK
+headers, so a host program can depend on just that one narrow abstraction and
+link whichever backend(s) it built.
 
 ```cpp
 #include "inference.h"
 
-auto eng = inf::make_engine("tflite");      // or "tensorrt" / "directml"
-inf::Engine::Options opts;
+auto eng = ii::make_engine("tflite");       // or "tensorrt" / "directml" / "ii"
+ii::Engine::Options opts;
 opts.delegate_path = "";                     // "" = CPU
 opts.num_threads   = 4;
 eng->load("model.tflite", opts);
@@ -204,11 +212,13 @@ const void* out = eng->output_data(0);       // read with outputs()[0] desc
 
 Supporting pieces are equally decoupled and reusable on their own:
 `preprocess.*` (letterbox), `yolo.*` (decode + NMS), `image_proc.*` / `tile.*`
-(image-to-image decode and tiling), and `tensor_utils.*` (quantize / dequantize).
-Because backends register behind `make_engine()`, you can drop in the whole
-runner or just its inference layer without dragging in dependencies you don't
-use. There is no installed library target today — embed by adding the relevant
-sources (and the backend's `INF_HAS_*` define) to your own build.
+(image-to-image decode and tiling), `parallel.*` (intra-op + task parallelism),
+and `tensor_utils.*` (quantize / dequantize). Because backends register behind
+`make_engine()`, you can drop in the whole runner or just its inference layer
+without dragging in dependencies you don't use. To embed, link the `ii_core`
+target (e.g. via `add_subdirectory()`) — it propagates the `src/` include path —
+or add the relevant sources plus the backend's `USE_*`/`INF_HAS_*` define to
+your own build.
 
 ## License
 

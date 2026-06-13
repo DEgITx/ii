@@ -29,7 +29,7 @@
 
 #include "image_proc.h"
 
-namespace tile {
+namespace ii {
 
 // План разбиения source-кадра на тайлы. Все координаты в input-space
 // (т.е. в пикселях исходного кадра, до апскейла модели).
@@ -114,11 +114,11 @@ struct TileCanvas {
     // blend-режиме весовая функция — произведение линейных ramp’ов
     // по обеим осям, длина ramp’а = overlap_out от каждого края тайла;
     // в blend=false режиме это простой byte-копир.
-    void paste(const imgproc::OutputImage& tile, int dst_x, int dst_y);
+    void paste(const ii::OutputImage& tile, int dst_x, int dst_y);
 
     // Финализация: в blend-режиме делит acc на weight и пишет в rgb.
     // В blend=false режиме no-op (rgb уже заполнен paste’ом).
     void finalize();
 };
 
-}  // namespace tile
+} // namespace ii

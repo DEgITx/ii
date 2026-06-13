@@ -38,7 +38,7 @@
 
 #include "inference.h"
 
-namespace imgproc {
+namespace ii {
 
 // Диапазон значений выхода модели до нормировки в uint8 [0..255].
 // Подбирается одним флагом --output-range у ii.cpp.
@@ -77,7 +77,7 @@ struct OutputImage {
 // что-то реально поменялось — в стабильном видео-цикле это сравнение
 // четырёх полей за вызов decode.
 struct DecodeCache {
-    inf::DType  dtype = inf::DType::Unknown;
+    ii::DType  dtype = ii::DType::Unknown;
     float       scale = 0.0f;
     int         zero_point = 0;
     OutputRange range = OutputRange::Unit;
@@ -86,14 +86,14 @@ struct DecodeCache {
 };
 
 // Похож ли тензор на изображение: NHWC [1,H,W,1] или [1,H,W,3] с H,W >= 2.
-bool is_image_output(const inf::TensorDesc& info);
+bool is_image_output(const ii::TensorDesc& info);
 
 // Автодетект единственного «image-shaped» выхода среди списка.
 // Возвращает:
 //   * индекс — если ровно один кандидат подходит под is_image_output;
 //   * -1     — если кандидатов несколько (нужен явный --output-index)
 //              или ни одного.
-int detect_image_output_index(const std::vector<inf::TensorDesc>& outs);
+int detect_image_output_index(const std::vector<ii::TensorDesc>& outs);
 
 // Декодировать тензор в RGB-кадр. Печатает причину отказа в stderr
 // (один раз) для нештатных dtype/shape, что важно в видео-цикле.
@@ -102,7 +102,7 @@ int detect_image_output_index(const std::vector<inf::TensorDesc>& outs);
 // LUT (см. DecodeCache). nullptr — каждый вызов сам пересчитывает
 // таблицу (для не-горячих путей это копейки, и старый код вызовов
 // продолжает компилироваться без изменений).
-bool decode_image_output(const inf::TensorDesc& info, const void* data,
+bool decode_image_output(const ii::TensorDesc& info, const void* data,
                          const DecodeOptions& opt, OutputImage& out,
                          DecodeCache* cache = nullptr);
 
@@ -119,7 +119,7 @@ bool decode_image_output(const inf::TensorDesc& info, const void* data,
 // Caller отвечает за то, что dst_x + W и dst_y + H влезают в буфер
 // (W, H — размеры выхода тензора). Для tile.plan_tiles это гарантировано
 // «snap-to-edge» логикой.
-bool decode_image_output_to(const inf::TensorDesc& info, const void* data,
+bool decode_image_output_to(const ii::TensorDesc& info, const void* data,
                             const DecodeOptions& opt,
                             uint8_t* dst_rgb, std::size_t dst_stride,
                             int dst_x, int dst_y,
@@ -129,4 +129,4 @@ bool decode_image_output_to(const inf::TensorDesc& info, const void* data,
 // печатает причину в stderr при ошибке записи.
 bool save_png(const OutputImage& img, const std::string& path);
 
-}  // namespace imgproc
+} // namespace ii

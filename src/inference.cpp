@@ -10,7 +10,7 @@
 #include <cctype>
 #include <cstdio>
 
-namespace inf {
+namespace ii {
 
 const char* dtype_name(DType t) {
     switch (t) {
@@ -149,4 +149,4 @@ std::vector<std::string> available_backends() {
 // часть) + опциональные модули делегатов — чтобы ядро инференса не зависело
 // от конкретного ускорителя.
 
-}  // namespace inf
+} // namespace ii

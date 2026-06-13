@@ -1,5 +1,16 @@
-# Сборка C++ раннера: бэкенды инференса (TFLite / TensorRT / DirectML) +
-# Wayland/EGL вывод + V4L2 камера.
+# Сборка C++ раннера `ii` и его ядра как переиспользуемой библиотеки.
+#
+# Архитектура сборки:
+#   * ii_core  — СТАТИЧЕСКАЯ библиотека со всем, кроме CLI: движок `ii`,
+#                бэкенды инференса (TFLite / TensorRT / DirectML), препроцесс,
+#                tile/декод, YOLO, parallel, вывод (Wayland/D3D11), камера.
+#                Это и есть «цельная библиотека» — её линкуют и бинарь, и
+#                юнит-тесты, и любое встраивающее приложение.
+#   * ii       — сам бинарь: только main + разбор аргументов (ii.cpp + cli.cpp),
+#                слинкованный с ii_core. CLI намеренно не в библиотеке.
+#
+# Всё API живёт в едином пространстве имён `ii` (движок, контракт inf::Engine,
+# хелперы раннера — больше нет раздельных inf/iirun/imgproc/tile/parallel).
 #
 # Поддерживаемые платформы:
 #   * Linux (в т.ч. встраиваемый / SBC) — полный набор (Wayland/EGL/GLES2,
@@ -10,33 +21,23 @@
 #     TensorRT / DirectML).
 #
 # Доступные бэкенды инференса (включаются опциями CMake):
-#   * USE_TFLITE   (ON  по умолчанию) — TensorFlow Lite + опциональный
-#                                       внешний делегат (NPU/GPU);
-#   * USE_TENSORRT (OFF по умолчанию) — NVIDIA TensorRT 10+, GPU;
-#                                       требует CUDA Runtime и nvinfer
-#                                       (опционально nvonnxparser для
-#                                       сборки .engine из .onnx);
-#   * USE_DIRECTML (OFF по умолчанию) — ONNX Runtime + DirectML EP,
-#                                       NPU/GPU/iGPU под Windows
-#                                       (на не-Windows собирается только
-#                                       CPU EP — полезно для регрессий).
+#   * USE_II_ENGINE (ON  по умолчанию) — встроенный pure-C++ движок, без SDK;
+#   * USE_TFLITE    (ON  по умолчанию) — TensorFlow Lite + опциональный
+#                                        внешний делегат (NPU/GPU);
+#   * USE_TENSORRT  (OFF по умолчанию) — NVIDIA TensorRT 10+, GPU;
+#   * USE_DIRECTML  (OFF по умолчанию) — ONNX Runtime + DirectML EP.
 #
 # Пример (Linux):
 #     cmake -S . -B build -DTFLITE_ROOT=/usr
 #     cmake --build build -j
 #
-# Если TFLite собран отдельно — укажите пути явно:
-#     cmake -S . -B build \
-#         -DTFLITE_INCLUDE_DIR=/opt/tflite/include \
-#         -DTFLITE_LIB=/opt/tflite/lib/libtensorflowlite.so
-#
 # Без графического вывода / без камеры:
 #     cmake -S . -B build -DUSE_DISPLAY=OFF -DUSE_CAMERA=OFF
 #
-# Windows (через vcpkg, MSVC):
-#     cmake -S . -B build -DTFLITE_ROOT=C:/path/to/tflite-prebuilt
-#     cmake --build build --config Release -j
-#   (USE_DISPLAY / USE_CAMERA по умолчанию OFF — Wayland/V4L2 на Windows нет.)
+# Юнит-тесты без единого SDK (как в CI):
+#     cmake -S . -B build -DBUILD_TESTS=ON -DUSE_TFLITE=OFF \
+#         -DUSE_DISPLAY=OFF -DUSE_CAMERA=OFF
+#     cmake --build build -j && ctest --test-dir build --output-on-failure
 
 cmake_minimum_required(VERSION 3.16)
 project(ii CXX C)
@@ -92,55 +93,53 @@ option(USE_NEUTRON_DELEGATE
 # OFF — тестируются только бэкенд-независимые модули, backend SDK не нужен.
 option(BUILD_TESTS "Сборка юнит-тестов на GoogleTest" OFF)
 
-# Исходники лежат в подкаталоге src/ (CMake теперь в корне репозитория);
-# все файлы добавляются относительно этого каталога.
+# Исходники лежат в подкаталоге src/ (CMake в корне репозитория).
 set(II_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
-# Исходники встроенного движка `ii` (без inf::Engine-моста — он добавляется
-# к бинарю отдельно). Вынесены в переменную, чтобы тот же набор могли
-# собрать юнит-тесты (tests/CMakeLists.txt).
-set(II_ENGINE_SOURCES
-    ${II_SRC_DIR}/engine/tensor.cpp
-    ${II_SRC_DIR}/engine/ops.cpp
-    ${II_SRC_DIR}/engine/parallel.cpp
-    ${II_SRC_DIR}/engine/graph.cpp
-    ${II_SRC_DIR}/engine/kernels.cpp
-    ${II_SRC_DIR}/engine/onnx.cpp)
-
-# ---- Бинарь (без бэкендов; они подключаются ниже опционально) ------------
-add_executable(ii
-    ${II_SRC_DIR}/ii.cpp
-    ${II_SRC_DIR}/cli.cpp
+# ---- Библиотека ii_core: всё, кроме CLI -----------------------------------
+# Базовый (всегда собираемый, backend-нейтральный) набор. Опциональные части
+# (движок ii, бэкенды, дисплей, камера) добавляются в эту же цель ниже через
+# target_sources(ii_core ...) под своими опциями.
+add_library(ii_core STATIC
     ${II_SRC_DIR}/preprocess.cpp
     ${II_SRC_DIR}/tensor_utils.cpp
+    ${II_SRC_DIR}/yolo.cpp
     ${II_SRC_DIR}/yolo_render.cpp
     ${II_SRC_DIR}/inference.cpp
     ${II_SRC_DIR}/delegate.cpp
     ${II_SRC_DIR}/image_proc.cpp
     ${II_SRC_DIR}/tile.cpp
-    ${II_SRC_DIR}/parallel.cpp
-    ${II_SRC_DIR}/yolo.cpp)
+    ${II_SRC_DIR}/parallel.cpp)
 
-# Заголовки лежат рядом с исходниками — добавляем src/ в пути включения,
-# чтобы #include "inference.h" и пр. находились при сборке из корня.
-target_include_directories(ii PRIVATE ${II_SRC_DIR})
+# Заголовки лежат рядом с исходниками — src/ доступен и потребителям
+# библиотеки (бинарь, тесты, встраивающее приложение), поэтому PUBLIC.
+target_include_directories(ii_core PUBLIC ${II_SRC_DIR})
 
-# ---- Платформо-зависимые флаги компилятора и линкер-флаги ----------------
-if(MSVC)
-    # /W4 = -Wall -Wextra эквивалент; /utf-8 нужен из-за русских комментариев
-    # и литералов в исходниках. /O2 — релизная оптимизация; добавляем её только
-    # для не-Debug конфигов: в Debug CMake подставляет /RTC1 (runtime checks),
-    # а /O2 с /RTC1 несовместимы (cl: command line error D8016).
-    # NOMINMAX отключает конфликтующие макросы из <windows.h> (min/max),
-    # а _CRT_SECURE_NO_WARNINGS — глушит шум по std::fopen/strncpy.
-    target_compile_options(ii PRIVATE /W4 /utf-8 $<$<NOT:$<CONFIG:Debug>>:/O2>)
-    target_compile_definitions(ii PRIVATE
-        NOMINMAX
-        _CRT_SECURE_NO_WARNINGS
-        WIN32_LEAN_AND_MEAN)
-else()
-    target_compile_options(ii PRIVATE -Wall -Wextra -O3)
-endif()
+# ---- Бинарь: только main + CLI, всё остальное берётся из ii_core ----------
+add_executable(ii
+    ${II_SRC_DIR}/ii.cpp
+    ${II_SRC_DIR}/cli.cpp)
+target_link_libraries(ii PRIVATE ii_core)
+
+# ---- Платформо-зависимые флаги компилятора (для библиотеки и бинаря) ------
+# Применяем к обеим целям: оба TU содержат русские комментарии/литералы
+# (нужен /utf-8 на MSVC) и должны собираться с одинаковыми предупреждениями.
+foreach(_ii_tgt ii_core ii)
+    if(MSVC)
+        # /W4 ~ -Wall -Wextra; /utf-8 — из-за русских комментариев и литералов.
+        # /O2 — только для не-Debug (в Debug CMake ставит /RTC1, несовместимый
+        # с /O2). NOMINMAX гасит min/max-макросы из <windows.h>,
+        # _CRT_SECURE_NO_WARNINGS — шум по fopen/strncpy.
+        target_compile_options(${_ii_tgt} PRIVATE
+            /W4 /utf-8 $<$<NOT:$<CONFIG:Debug>>:/O2>)
+        target_compile_definitions(${_ii_tgt} PRIVATE
+            NOMINMAX
+            _CRT_SECURE_NO_WARNINGS
+            WIN32_LEAN_AND_MEAN)
+    else()
+        target_compile_options(${_ii_tgt} PRIVATE -Wall -Wextra -O3)
+    endif()
+endforeach()
 
 # ---- SIMD: AVX2/FMA на x86 ради векторизации горячих ядер -----------------
 # Авто-векторизатор (свёртка/матумножение в engine/ops.cpp) на x86 по умолчанию
@@ -153,9 +152,9 @@ if(USE_NATIVE_SIMD)
     string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _ii_arch)
     if(_ii_arch MATCHES "x86_64|amd64|i[0-9]86")
         if(MSVC)
-            target_compile_options(ii PRIVATE /arch:AVX2)
+            target_compile_options(ii_core PRIVATE /arch:AVX2)
         else()
-            target_compile_options(ii PRIVATE -mavx2 -mfma)
+            target_compile_options(ii_core PRIVATE -mavx2 -mfma)
         endif()
         message(STATUS "ii SIMD: AVX2+FMA (x86)")
     else()
@@ -164,17 +163,18 @@ if(USE_NATIVE_SIMD)
 endif()
 
 # dl/pthread — POSIX; на Windows их нет (а TFLite сам линкуется со своими
-# системными зависимостями через .lib импорт-библиотеку).
+# системными зависимостями через .lib импорт-библиотеку). PUBLIC — чтобы
+# зависимости унаследовал и бинарь, линкующийся со статической ii_core.
 if(UNIX)
-    target_link_libraries(ii PRIVATE dl pthread)
+    target_link_libraries(ii_core PUBLIC dl pthread)
 endif()
 
-# std::thread / std::async (модуль parallel.cpp — пул потоков). MSVC тащит
+# std::thread / std::async (модуль parallel.cpp — пулы потоков). MSVC тащит
 # поддержку потоков сам; glibc уже покрыт pthread выше, но Threads::Threads
 # даёт правильный флаг (-pthread) и для MinGW, и для прочих тулчейнов.
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
-target_link_libraries(ii PRIVATE Threads::Threads)
+target_link_libraries(ii_core PUBLIC Threads::Threads)
 
 # ---- stb (одноголовники для image/resize, без внешних зависимостей) -------
 include(FetchContent)
@@ -183,7 +183,9 @@ FetchContent_Declare(stb
     GIT_TAG        master
     GIT_SHALLOW    TRUE)
 FetchContent_MakeAvailable(stb)
-target_include_directories(ii PRIVATE ${stb_SOURCE_DIR})
+# PUBLIC — preprocess.cpp/image_proc.cpp в библиотеке тянут stb; тесты,
+# собирающие те же модули через ii_core, наследуют путь.
+target_include_directories(ii_core PUBLIC ${stb_SOURCE_DIR})
 
 # ---- Бэкенд: TFLite -------------------------------------------------------
 if(USE_TFLITE)
@@ -215,21 +217,29 @@ if(USE_TFLITE)
     message(STATUS "TFLite include: ${TFLITE_INCLUDE_DIR}")
     message(STATUS "TFLite lib:     ${TFLITE_LIB}")
 
-    target_sources(ii PRIVATE ${II_SRC_DIR}/inference_tflite.cpp)
-    target_include_directories(ii PRIVATE ${TFLITE_INCLUDE_DIR})
-    target_link_libraries(ii PRIVATE ${TFLITE_LIB})
-    target_compile_definitions(ii PRIVATE INF_HAS_TFLITE=1)
+    # inference_tflite.cpp — единственный TU, тянущий заголовки TFLite,
+    # поэтому include/lib приватны для ii_core (потребители идут через
+    # inf::Engine и SDK не видят). INF_HAS_TFLITE нужен inference.cpp
+    # (фабрика make_engine) — он тоже в ii_core, так что PRIVATE достаточно.
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/inference_tflite.cpp)
+    target_include_directories(ii_core PRIVATE ${TFLITE_INCLUDE_DIR})
+    target_link_libraries(ii_core PUBLIC ${TFLITE_LIB})
+    target_compile_definitions(ii_core PRIVATE INF_HAS_TFLITE=1)
 endif()
 
 # ---- Бэкенд: встроенный движок ii (pure C++, всегда доступен) -------------
-# Никаких внешних зависимостей: компилируем ядро движка + мост inf::Engine
-# прямо в бинарь. INF_HAS_II включает фабричную ветку make_ii_engine() в
-# inference.cpp.
+# Никаких внешних зависимостей: ядро движка + мост inf::Engine компилируются
+# прямо в библиотеку. INF_HAS_II включает фабричную ветку make_ii_engine() в
+# inference.cpp. parallel.cpp (общий пул) уже в базовом наборе ii_core.
 if(USE_II_ENGINE)
-    target_sources(ii PRIVATE
-        ${II_ENGINE_SOURCES}
+    target_sources(ii_core PRIVATE
+        ${II_SRC_DIR}/engine/tensor.cpp
+        ${II_SRC_DIR}/engine/ops.cpp
+        ${II_SRC_DIR}/engine/graph.cpp
+        ${II_SRC_DIR}/engine/kernels.cpp
+        ${II_SRC_DIR}/engine/onnx.cpp
         ${II_SRC_DIR}/engine/backend.cpp)
-    target_compile_definitions(ii PRIVATE INF_HAS_II=1)
+    target_compile_definitions(ii_core PRIVATE INF_HAS_II=1)
     message(STATUS "ii engine: встроенный pure-C++ бэкенд (ON)")
 endif()
 
@@ -237,8 +247,8 @@ endif()
 # Платформенно-специфичная мелочь: дефолтный путь к .so-плагину делегата.
 # Отделён от ядра, чтобы раннер не был привязан ни к одному ускорителю.
 if(USE_NEUTRON_DELEGATE)
-    target_sources(ii PRIVATE ${II_SRC_DIR}/delegate_neutron.cpp)
-    target_compile_definitions(ii PRIVATE INF_HAS_DELEGATE_MODULE=1)
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/delegate_neutron.cpp)
+    target_compile_definitions(ii_core PRIVATE INF_HAS_DELEGATE_MODULE=1)
     message(STATUS "Delegate module: внешний NPU-делегат (ON)")
 endif()
 
@@ -300,20 +310,20 @@ if(USE_TENSORRT)
                        "отключена, доступны только .engine/.plan/.trt")
     endif()
 
-    target_sources(ii PRIVATE ${II_SRC_DIR}/inference_tensorrt.cpp)
-    target_include_directories(ii PRIVATE ${TRT_INCLUDE_DIR})
-    target_link_libraries(ii PRIVATE ${TRT_NVINFER_LIB})
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/inference_tensorrt.cpp)
+    target_include_directories(ii_core PRIVATE ${TRT_INCLUDE_DIR})
+    target_link_libraries(ii_core PUBLIC ${TRT_NVINFER_LIB})
     if(CUDAToolkit_FOUND)
-        target_link_libraries(ii PRIVATE CUDA::cudart)
+        target_link_libraries(ii_core PUBLIC CUDA::cudart)
     else()
-        target_include_directories(ii PRIVATE ${_INF_CUDA_INCLUDE_DIR})
-        target_link_libraries(ii PRIVATE ${_INF_CUDART_LIB})
+        target_include_directories(ii_core PRIVATE ${_INF_CUDA_INCLUDE_DIR})
+        target_link_libraries(ii_core PUBLIC ${_INF_CUDART_LIB})
     endif()
     if(TRT_NVONNXPARSER_LIB)
-        target_link_libraries(ii PRIVATE ${TRT_NVONNXPARSER_LIB})
-        target_compile_definitions(ii PRIVATE INF_TRT_HAS_ONNX=1)
+        target_link_libraries(ii_core PUBLIC ${TRT_NVONNXPARSER_LIB})
+        target_compile_definitions(ii_core PRIVATE INF_TRT_HAS_ONNX=1)
     endif()
-    target_compile_definitions(ii PRIVATE INF_HAS_TENSORRT=1)
+    target_compile_definitions(ii_core PRIVATE INF_HAS_TENSORRT=1)
 endif()
 
 # ---- Бэкенд: DirectML (через ONNX Runtime) -------------------------------
@@ -351,10 +361,10 @@ if(USE_DIRECTML)
     message(STATUS "ONNX Runtime include: ${ORT_INCLUDE_DIR}")
     message(STATUS "ONNX Runtime lib:     ${ORT_LIB}")
 
-    target_sources(ii PRIVATE ${II_SRC_DIR}/inference_directml.cpp)
-    target_include_directories(ii PRIVATE ${ORT_INCLUDE_DIR})
-    target_link_libraries(ii PRIVATE ${ORT_LIB})
-    target_compile_definitions(ii PRIVATE INF_HAS_DIRECTML=1)
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/inference_directml.cpp)
+    target_include_directories(ii_core PRIVATE ${ORT_INCLUDE_DIR})
+    target_link_libraries(ii_core PUBLIC ${ORT_LIB})
+    target_compile_definitions(ii_core PRIVATE INF_HAS_DIRECTML=1)
 
     if(WIN32)
         # dml_provider_factory.h обычно лежит рядом с onnxruntime_cxx_api.h.
@@ -364,7 +374,7 @@ if(USE_DIRECTML)
                   ${ORT_ROOT}/include
                   ${ORT_ROOT}/include/onnxruntime)
         if(ORT_DML_PROVIDER_HEADER)
-            target_compile_definitions(ii PRIVATE INF_DML_EP_AVAILABLE=1)
+            target_compile_definitions(ii_core PRIVATE INF_DML_EP_AVAILABLE=1)
             message(STATUS "DirectML EP: подключён (header: "
                            "${ORT_DML_PROVIDER_HEADER})")
         else()
@@ -383,10 +393,10 @@ endif()
 
 # ---- Backend для камеры (V4L2) -------------------------------------------
 if(USE_CAMERA)
-    target_sources(ii PRIVATE ${II_SRC_DIR}/camera_v4l2.cpp)
-    target_compile_definitions(ii PRIVATE NPU_HAS_CAMERA=1)
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/camera_v4l2.cpp)
+    target_compile_definitions(ii_core PRIVATE NPU_HAS_CAMERA=1)
 else()
-    target_sources(ii PRIVATE ${II_SRC_DIR}/camera_stub.cpp)
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/camera_stub.cpp)
 endif()
 
 # ---- Backend для отображения ---------------------------------------------
@@ -394,11 +404,11 @@ endif()
 # Windows -> Win32/Direct3D 11 (display_d3d11.cpp);
 # прочее / USE_DISPLAY=OFF -> заглушка (make_display() возвращает nullptr).
 if(USE_DISPLAY AND WIN32)
-    target_sources(ii PRIVATE ${II_SRC_DIR}/display_d3d11.cpp)
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/display_d3d11.cpp)
     # d3dcompiler — компиляция HLSL-шейдеров в рантайме (D3DCompile);
     # d3d11/dxgi — само устройство и swapchain. Все три есть в любом
     # Windows SDK, дополнительных путей не требуют.
-    target_link_libraries(ii PRIVATE d3d11 dxgi d3dcompiler)
+    target_link_libraries(ii_core PUBLIC d3d11 dxgi d3dcompiler)
 elseif(USE_DISPLAY)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(WAYLAND REQUIRED IMPORTED_TARGET
@@ -433,19 +443,19 @@ elseif(USE_DISPLAY)
         DEPENDS ${XDG_SHELL_XML}
         VERBATIM)
 
-    target_sources(ii PRIVATE
+    target_sources(ii_core PRIVATE
         ${II_SRC_DIR}/display_wayland.cpp
         ${XDG_SHELL_HEADER}
         ${XDG_SHELL_SOURCE})
-    target_include_directories(ii PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-    target_link_libraries(ii PRIVATE PkgConfig::WAYLAND)
+    target_include_directories(ii_core PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+    target_link_libraries(ii_core PUBLIC PkgConfig::WAYLAND)
 else()
-    target_sources(ii PRIVATE ${II_SRC_DIR}/display_stub.cpp)
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/display_stub.cpp)
 endif()
 
 # ---- Юнит-тесты (опционально) --------------------------------------------
-# Подключается после FetchContent(stb), т.к. tests используют ${stb_SOURCE_DIR}
-# для сборки preprocess.cpp.
+# Подключается после FetchContent(stb), т.к. tests наследуют ${stb_SOURCE_DIR}
+# и прочие пути от ii_core.
 if(BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)

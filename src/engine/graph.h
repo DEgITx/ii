@@ -8,7 +8,7 @@
 // загрузчик ONNX и остальной движок не нужно.
 //
 // Загрузчики моделей (ONNX — engine/onnx.cpp; TFLite — позже) наполняют
-// Graph; мост к inf::Engine (engine/backend.cpp) гоняет его через Executor.
+// Graph; мост к ii::Engine (engine/backend.cpp) гоняет его через Executor.
 
 #pragma once
 
@@ -71,7 +71,7 @@ struct Graph {
     std::unordered_map<std::string, Tensor> initializers;
     std::vector<std::string>                input_names;
     std::vector<std::string>                output_names;
-    // Объявленные формы входов (для дескрипторов inf::Engine; -1 == динам.).
+    // Объявленные формы входов (для дескрипторов ii::Engine; -1 == динам.).
     std::unordered_map<std::string, Shape>  input_shapes;
 };
 
@@ -104,7 +104,7 @@ inline void register_op(const std::string& op_type, Kernel k) {
 void ensure_builtin_kernels();
 
 // Исполнитель графа: одна загруженная модель = один Executor. Не
-// потокобезопасен (как и весь inf::Engine) — load/run последовательны.
+// потокобезопасен (как и весь ii::Engine) — load/run последовательны.
 //
 // При конструировании Executor один раз строит план исполнения: нумерует
 // все значения графа целочисленными идентификаторами, классифицирует их

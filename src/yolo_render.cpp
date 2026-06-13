@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 
-namespace iirun {
+namespace ii {
 
 bool detect_yolo_head(const std::vector<TensorInfo>& outs, int forced,
                       YoloHead& h) {
@@ -117,4 +117,4 @@ std::vector<DisplayBox> detections_to_boxes(
     return out;
 }
 
-}  // namespace iirun
+} // namespace ii

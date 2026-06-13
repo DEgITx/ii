@@ -20,7 +20,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-namespace imgproc {
+namespace ii {
 
 namespace {
 
@@ -44,10 +44,10 @@ inline float to_unit(float v, OutputRange r) {
 // Пересчитать LUT кэша под текущие параметры квантования, если они
 // изменились. Возвращает true, если LUT валиден и применим для
 // горячего цикла (т.е. dtype ∈ {Int8, UInt8} и cache != nullptr).
-bool ensure_decode_lut(DecodeCache* cache, const inf::TensorDesc& info,
+bool ensure_decode_lut(DecodeCache* cache, const ii::TensorDesc& info,
                        OutputRange range) {
     if (!cache) return false;
-    if (info.dtype != inf::DType::Int8 && info.dtype != inf::DType::UInt8) {
+    if (info.dtype != ii::DType::Int8 && info.dtype != ii::DType::UInt8) {
         cache->lut_valid = false;
         return false;
     }
@@ -61,7 +61,7 @@ bool ensure_decode_lut(DecodeCache* cache, const inf::TensorDesc& info,
 
     const float scale = info.scale != 0.0f ? info.scale : 1.0f;
     const int   zp    = info.zero_point;
-    if (info.dtype == inf::DType::Int8) {
+    if (info.dtype == ii::DType::Int8) {
         // Индекс LUT = uint8-перепрочтение int8: u ∈ [0..127] → int8 0..127,
         // u ∈ [128..255] → int8 -128..-1. Так в горячем цикле достаточно
         // привести int8 к uint8 и сразу обратиться в таблицу.
@@ -122,7 +122,7 @@ void decode_kernel(const TSrc* p, int w, int h, int c,
 // Общая «развилка по dtype» для декода: и `decode_image_output`, и
 // `decode_image_output_to` сходятся сюда. dst_base уже сдвинут на
 // (dst_x, dst_y) caller’ом; stride — байты между строками назначения.
-bool decode_dispatch(const inf::TensorDesc& info, const void* data,
+bool decode_dispatch(const ii::TensorDesc& info, const void* data,
                      const DecodeOptions& opt,
                      uint8_t* dst_base, std::size_t stride,
                      DecodeCache* cache) {
@@ -141,7 +141,7 @@ bool decode_dispatch(const inf::TensorDesc& info, const void* data,
     DecodeCache* cc = cache ? cache : &local;
 
     switch (info.dtype) {
-        case inf::DType::Int8: {
+        case ii::DType::Int8: {
             ensure_decode_lut(cc, info, range);
             const uint8_t* lut = cc->lut;
             const int8_t*  p   = reinterpret_cast<const int8_t*>(data);
@@ -149,7 +149,7 @@ bool decode_dispatch(const inf::TensorDesc& info, const void* data,
                           [lut](int8_t v) { return lut[(uint8_t)v]; });
             return true;
         }
-        case inf::DType::UInt8: {
+        case ii::DType::UInt8: {
             ensure_decode_lut(cc, info, range);
             const uint8_t* lut = cc->lut;
             const uint8_t* p   = reinterpret_cast<const uint8_t*>(data);
@@ -157,7 +157,7 @@ bool decode_dispatch(const inf::TensorDesc& info, const void* data,
                           [lut](uint8_t v) { return lut[v]; });
             return true;
         }
-        case inf::DType::Float32: {
+        case ii::DType::Float32: {
             const float* p = reinterpret_cast<const float*>(data);
             decode_kernel(p, w, h, c, dst_base, stride,
                           [range](float v) {
@@ -165,16 +165,16 @@ bool decode_dispatch(const inf::TensorDesc& info, const void* data,
                           });
             return true;
         }
-        case inf::DType::Float16: {
+        case ii::DType::Float16: {
             const uint16_t* p = reinterpret_cast<const uint16_t*>(data);
             decode_kernel(p, w, h, c, dst_base, stride,
                           [range](uint16_t v) {
                               return to_byte(
-                                  to_unit(inf::half_to_float(v), range));
+                                  to_unit(ii::half_to_float(v), range));
                           });
             return true;
         }
-        case inf::DType::Int16: {
+        case ii::DType::Int16: {
             const int16_t* p = reinterpret_cast<const int16_t*>(data);
             decode_kernel(p, w, h, c, dst_base, stride,
                           [range, scale, zp](int16_t v) {
@@ -183,7 +183,7 @@ bool decode_dispatch(const inf::TensorDesc& info, const void* data,
                           });
             return true;
         }
-        case inf::DType::UInt16: {
+        case ii::DType::UInt16: {
             const uint16_t* p = reinterpret_cast<const uint16_t*>(data);
             decode_kernel(p, w, h, c, dst_base, stride,
                           [range, scale, zp](uint16_t v) {
@@ -199,14 +199,14 @@ bool decode_dispatch(const inf::TensorDesc& info, const void* data,
 
 // Проверка dtype с warn-once для нештатных типов (общая часть для
 // обеих публичных функций).
-bool check_decode_dtype(const inf::TensorDesc& info) {
+bool check_decode_dtype(const ii::TensorDesc& info) {
     switch (info.dtype) {
-        case inf::DType::Float32:
-        case inf::DType::Float16:
-        case inf::DType::Int8:
-        case inf::DType::UInt8:
-        case inf::DType::Int16:
-        case inf::DType::UInt16:
+        case ii::DType::Float32:
+        case ii::DType::Float16:
+        case ii::DType::Int8:
+        case ii::DType::UInt8:
+        case ii::DType::Int16:
+        case ii::DType::UInt16:
             return true;
         default: {
             static bool warned = false;
@@ -214,7 +214,7 @@ bool check_decode_dtype(const inf::TensorDesc& info) {
                 std::fprintf(stderr,
                     "image_proc: dtype выхода=%s не поддержан для "
                     "image-decode. Последующие подобные сообщения "
-                    "подавлены.\n", inf::dtype_name(info.dtype));
+                    "подавлены.\n", ii::dtype_name(info.dtype));
                 warned = true;
             }
             return false;
@@ -238,7 +238,7 @@ bool parse_output_range(const std::string& name, OutputRange& out) {
     return false;
 }
 
-bool is_image_output(const inf::TensorDesc& info) {
+bool is_image_output(const ii::TensorDesc& info) {
     const auto& s = info.shape;
     if (s.size() != 4) return false;
     if (s[0] != 1) return false;
@@ -247,7 +247,7 @@ bool is_image_output(const inf::TensorDesc& info) {
     return true;
 }
 
-int detect_image_output_index(const std::vector<inf::TensorDesc>& outs) {
+int detect_image_output_index(const std::vector<ii::TensorDesc>& outs) {
     int found = -1;
     for (size_t i = 0; i < outs.size(); ++i) {
         if (is_image_output(outs[i])) {
@@ -261,7 +261,7 @@ int detect_image_output_index(const std::vector<inf::TensorDesc>& outs) {
     return found;
 }
 
-bool decode_image_output(const inf::TensorDesc& info, const void* data,
+bool decode_image_output(const ii::TensorDesc& info, const void* data,
                          const DecodeOptions& opt, OutputImage& out,
                          DecodeCache* cache) {
     if (!is_image_output(info)) {
@@ -295,7 +295,7 @@ bool decode_image_output(const inf::TensorDesc& info, const void* data,
                            out.rgb.data(), (std::size_t)w * 3, cache);
 }
 
-bool decode_image_output_to(const inf::TensorDesc& info, const void* data,
+bool decode_image_output_to(const ii::TensorDesc& info, const void* data,
                             const DecodeOptions& opt,
                             uint8_t* dst_rgb, std::size_t dst_stride,
                             int dst_x, int dst_y,
@@ -333,4 +333,4 @@ bool save_png(const OutputImage& img, const std::string& path) {
     return true;
 }
 
-}  // namespace imgproc
+} // namespace ii

@@ -3,7 +3,7 @@
 // Модели собираются прямо в тесте — кодируем минимальный protobuf
 // ModelProto байтами, без внешних файлов и зависимостей. Так проверяется
 // весь путь: разбор wire-формата -> Graph -> Executor -> число, а также
-// мост inf::Engine (make_ii_engine) на временном .onnx-файле.
+// мост ii::Engine (make_ii_engine) на временном .onnx-файле.
 
 #include <gtest/gtest.h>
 
@@ -18,7 +18,7 @@
 #include "engine/tensor.h"
 #include "inference.h"
 
-namespace inf { std::unique_ptr<Engine> make_ii_engine(); }  // из engine/backend.cpp
+namespace ii { std::unique_ptr<Engine> make_ii_engine(); }  // из engine/backend.cpp
 
 namespace {
 
@@ -268,7 +268,7 @@ TEST(Onnx, RejectsGarbage) {
     EXPECT_FALSE(err.empty());
 }
 
-// Полный путь через inf::Engine: загрузка .onnx-файла, заполнение входа,
+// Полный путь через ii::Engine: загрузка .onnx-файла, заполнение входа,
 // invoke, чтение выхода.
 TEST(Onnx, EngineAdapterEndToEnd) {
     std::string g;
@@ -282,8 +282,8 @@ TEST(Onnx, EngineAdapterEndToEnd) {
     const char* path = "ii_adapter_test.onnx";
     { std::ofstream f(path, std::ios::binary); f.write(m.data(), (std::streamsize)m.size()); }
 
-    auto eng = inf::make_ii_engine();
-    inf::Engine::Options opts;
+    auto eng = ii::make_ii_engine();
+    ii::Engine::Options opts;
     ASSERT_TRUE(eng->load(path, opts));
 
     ASSERT_EQ(eng->inputs().size(), 1u);

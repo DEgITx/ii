@@ -1,5 +1,5 @@
 // Универсальный раннер моделей поверх любого бэкенда, реализующего
-// inf::Engine (см. inference.h): TensorFlow Lite (+ опциональный внешний
+// ii::Engine (см. inference.h): TensorFlow Lite (+ опциональный внешний
 // делегат NPU/GPU), NVIDIA TensorRT, ONNX Runtime / DirectML. Сам раннер
 // не знает про конкретный фреймворк: бэкенд выбирается через --backend и
 // подключается на этапе сборки (USE_TFLITE / USE_TENSORRT / USE_DIRECTML).
@@ -103,13 +103,13 @@ struct SigintGuard {
 #endif
 };
 
-inline bool safe_invoke(inf::Engine& e) {
+inline bool safe_invoke(ii::Engine& e) {
     SigintGuard g;
     return e.invoke();
 }
 }  // namespace
 
-using namespace iirun;
+using namespace ii;
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
@@ -164,8 +164,8 @@ int main(int argc, char** argv) {
             "image, либо детекции.\n");
         return 1;
     }
-    imgproc::OutputRange output_range = imgproc::OutputRange::Unit;
-    if (!imgproc::parse_output_range(args.output_range_str, output_range)) {
+    ii::OutputRange output_range = ii::OutputRange::Unit;
+    if (!ii::parse_output_range(args.output_range_str, output_range)) {
         std::fprintf(stderr,
             "Неизвестный --output-range: '%s'. Допустимые: unit, signed, byte.\n",
             args.output_range_str.c_str());
@@ -219,20 +219,20 @@ int main(int argc, char** argv) {
         }
     }
 
-    auto eng = inf::make_engine(args.backend);
+    auto eng = ii::make_engine(args.backend);
     if (!eng) {
         std::fprintf(stderr,
             "Не удалось создать бэкенд '%s'. Доступные: ",
             args.backend.c_str());
         bool first = true;
-        for (const auto& b : inf::available_backends()) {
+        for (const auto& b : ii::available_backends()) {
             std::fprintf(stderr, "%s%s", first ? "" : ", ", b.c_str());
             first = false;
         }
         std::fprintf(stderr, "\n");
         return 2;
     }
-    inf::Engine::Options eopts;
+    ii::Engine::Options eopts;
     eopts.delegate_path = args.no_delegate ? std::string{} : args.delegate;
     eopts.num_threads   = args.threads;
     if (!eng->load(args.model, eopts)) return 2;
@@ -306,7 +306,7 @@ int main(int argc, char** argv) {
                 return 3;
             }
             image_output_idx = args.output_index;
-            if (!imgproc::is_image_output(out_info[image_output_idx])) {
+            if (!ii::is_image_output(out_info[image_output_idx])) {
                 std::fprintf(stderr,
                     "Выход[%d] '%s' shape=%s не похож на изображение "
                     "(ожидаю NHWC [1,H,W,1|3]).\n",
@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
                 return 3;
             }
         } else {
-            image_output_idx = imgproc::detect_image_output_index(out_info);
+            image_output_idx = ii::detect_image_output_index(out_info);
             if (image_output_idx < 0) {
                 std::fprintf(stderr,
                     "Не нашёл единственного image-shaped выхода среди %zu. "
@@ -588,7 +588,7 @@ int main(int argc, char** argv) {
             // В tile-режиме источник остаётся исходного разрешения; летающий
             // letterbox не нужен — каждый тайл нарезается из img.rgb прямо
             // в input_rgb внутри run_tile_pass.
-            const auto layout = tile::plan_tiles(
+            const auto layout = ii::plan_tiles(
                 img.w, img.h, in_w, in_h, args.tile_overlap);
             std::printf(
                 "Изображение: %s  %dx%d -> tile %dx%d×%d тайлов "
@@ -670,8 +670,8 @@ int main(int argc, char** argv) {
     // Используется одиночным инференсом, видео-циклом и камерой. После
     // первого invoke размер RGB-буфера фиксируется и в видео-цикле не
     // перевыделяется (decode_image_output делает .resize() того же размера).
-    imgproc::OutputImage    out_img;
-    imgproc::DecodeOptions  dec_opts;
+    ii::OutputImage    out_img;
+    ii::DecodeOptions  dec_opts;
     dec_opts.range = output_range;
 
     // Кэш LUT для INT8/UInt8 квантования выхода. Параметры (dtype, scale,
@@ -680,11 +680,11 @@ int main(int argc, char** argv) {
     // десятки/сотни раз за кадр). Без LUT каждый из ~150K пикселей
     // выхода 384×384 проходил через std::lround — ~30 тактов/пиксель;
     // с LUT — одна индексация на 1 такт.
-    imgproc::DecodeCache    dec_cache;
+    ii::DecodeCache    dec_cache;
     auto decode_current_output = [&]() -> bool {
         if (image_output_idx < 0) return false;
         const void* data = eng->output_data(image_output_idx);
-        return imgproc::decode_image_output(out_info[image_output_idx],
+        return ii::decode_image_output(out_info[image_output_idx],
                                             data, dec_opts, out_img,
                                             &dec_cache);
     };
@@ -708,11 +708,11 @@ int main(int argc, char** argv) {
     // сторона должна прервать цикл. Декод одного тайла, не сработавший,
     // пропускается без обрыва — для видео-цикла это важно, иначе один
     // битый кадр уронит весь поток.
-    tile::TileCanvas tile_canvas;
+    ii::TileCanvas tile_canvas;
     auto run_tile_pass = [&](const uint8_t* src_rgb,
                              int src_w, int src_h) -> bool {
         if (image_output_idx < 0) return false;
-        const auto layout = tile::plan_tiles(
+        const auto layout = ii::plan_tiles(
             src_w, src_h, in_w, in_h, args.tile_overlap);
         const bool blend = (args.tile_overlap > 0);
         tile_canvas.reset(src_w * scale_x, src_h * scale_y,
@@ -723,7 +723,7 @@ int main(int argc, char** argv) {
             for (int i = 0; i < layout.nx(); ++i) {
                 const int x0 = layout.x0[i];
                 const int y0 = layout.y0[j];
-                tile::extract_tile(src_rgb, src_w, src_h, x0, y0,
+                ii::extract_tile(src_rgb, src_w, src_h, x0, y0,
                                    in_w, in_h, input_rgb);
                 if (!fill_model_from_rgb()) return false;
                 if (!safe_invoke(*eng)) return false;
@@ -731,7 +731,7 @@ int main(int argc, char** argv) {
                 if (blend) {
                     // В blend-режиме без out_img не обойтись: paste
                     // выполняет взвешенное накопление в acc/weight.
-                    if (!imgproc::decode_image_output(
+                    if (!ii::decode_image_output(
                             tile_info, tdata, dec_opts, out_img,
                             &dec_cache)) {
                         continue;
@@ -744,7 +744,7 @@ int main(int argc, char** argv) {
                     // буферов и memcpy. Тайл целиком помещается в canvas
                     // (plan_tiles снэпает последний к краю), поэтому
                     // дополнительного клиппинга не требуется.
-                    if (!imgproc::decode_image_output_to(
+                    if (!ii::decode_image_output_to(
                             tile_info, tdata, dec_opts,
                             tile_canvas.rgb.data(), canvas_stride,
                             x0 * scale_x, y0 * scale_y,
@@ -896,7 +896,7 @@ int main(int argc, char** argv) {
                                 has_camera ? " (камера)" : " (статический)");
                 }
                 if (args.tile_mode && src) {
-                    const auto layout = tile::plan_tiles(
+                    const auto layout = ii::plan_tiles(
                         orig_w, orig_h, in_w, in_h, args.tile_overlap);
                     std::printf(
                         "Tile pass: %d тайлов/кадр (%dx%d сетка), "
@@ -1074,7 +1074,7 @@ int main(int argc, char** argv) {
         // --camera-size). Печатаем по тому же шаблону, что и для картинки,
         // чтобы пользователю не пришлось считать тайлы в уме.
         if (args.tile_mode) {
-            const auto layout = tile::plan_tiles(
+            const auto layout = ii::plan_tiles(
                 cam->width(), cam->height(), in_w, in_h, args.tile_overlap);
             std::printf(
                 "Камера: %dx%d -> tile %dx%d×%d тайлов "
@@ -1155,7 +1155,7 @@ int main(int argc, char** argv) {
                     out_img.width, out_img.height, out_img.channels_src,
                     out_img.rgb.size());
                 if (!args.save_output_path.empty()) {
-                    if (imgproc::save_png(out_img, args.save_output_path)) {
+                    if (ii::save_png(out_img, args.save_output_path)) {
                         std::printf("Сохранено: %s\n",
                                     args.save_output_path.c_str());
                     }
@@ -1221,14 +1221,14 @@ int main(int argc, char** argv) {
         // что и есть «золотой» референс. В будущем, если бэкенд эталона
         // понадобится менять (например, сверять TensorRT vs TFLite-CPU),
         // здесь можно будет принимать опцию --compare-backend.
-        auto ref = inf::make_engine(args.backend);
+        auto ref = ii::make_engine(args.backend);
         if (!ref) {
             std::fprintf(stderr,
                 "[%s] не удалось создать бэкенд '%s' для эталона.\n",
                 ref_label, args.backend.c_str());
             return;
         }
-        inf::Engine::Options ropts;
+        ii::Engine::Options ropts;
         ropts.num_threads = args.threads;
         if (!ref->load(ref_model_path, ropts)) return;
 

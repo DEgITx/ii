@@ -18,8 +18,8 @@
 //     накладных, не измеримо.
 //
 // Жизненный цикл:
-//   auto eng = inf::make_engine();              // дефолтный бэкенд
-//   inf::Engine::Options opts;
+//   auto eng = ii::make_engine();              // дефолтный бэкенд
+//   ii::Engine::Options opts;
 //   opts.delegate_path = "/path/to/libdelegate.so";   // или "" — CPU
 //   opts.num_threads   = 4;
 //   if (!eng->load("model.tflite", opts)) ...;
@@ -37,9 +37,9 @@
 #include <string>
 #include <vector>
 
-#include "half.h"  // inf::half_to_float — единая реализация на весь проект
+#include "half.h"  // ii::half_to_float — единая реализация на весь проект
 
-namespace inf {
+namespace ii {
 
 // Платформенно-нейтральные типы данных тензора. Покрывают весь набор,
 // поддерживаемый TFLite + типовые случаи TensorRT/DirectML. Конкретный
@@ -62,7 +62,7 @@ const char* dtype_name(DType t);
 std::size_t dtype_size(DType t);
 
 // half_to_float теперь живёт в half.h (подключён выше) — одна реализация
-// на весь проект. Имя и пространство имён (inf::half_to_float) сохранены.
+// на весь проект. Имя и пространство имён (ii::half_to_float) сохранены.
 
 // Срез информации о тензоре в backend-нейтральном виде.
 // scale == 0 означает «не квантован» (или per-channel — в этом случае
@@ -142,4 +142,4 @@ std::vector<std::string> available_backends();
 // через --delegate. ii.cpp использует это как значение по-умолчанию.
 const char* default_delegate_path();
 
-}  // namespace inf
+} // namespace ii

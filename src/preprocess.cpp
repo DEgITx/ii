@@ -13,7 +13,7 @@
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "stb_image_resize2.h"
 
-namespace iirun {
+namespace ii {
 
 bool load_image(const std::string& path, Image& out) {
     int w = 0, h = 0, c = 0;
@@ -84,7 +84,7 @@ namespace {
 // будут пинг-понговать ключ и пересчитывать LUT, но это копейки
 // (256 итераций) на фоне даже одного инвока.
 struct InputQuantCache {
-    inf::DType dtype = inf::DType::Unknown;
+    ii::DType dtype = ii::DType::Unknown;
     float      scale = 0.0f;
     int        zero_point = 0;
     bool       valid = false;
@@ -92,7 +92,7 @@ struct InputQuantCache {
     uint16_t   lut16[256]{};     // для Int16 (bit-pattern) / UInt16
 };
 
-bool ensure_input_quant_lut(InputQuantCache& c, const inf::TensorDesc& info) {
+bool ensure_input_quant_lut(InputQuantCache& c, const ii::TensorDesc& info) {
     if (c.valid
         && c.dtype == info.dtype
         && c.scale == info.scale
@@ -103,10 +103,10 @@ bool ensure_input_quant_lut(InputQuantCache& c, const inf::TensorDesc& info) {
     const int   zp = info.zero_point;
     int lo = 0, hi = 0;
     switch (info.dtype) {
-        case inf::DType::Int8:   lo = -128;   hi = 127;   break;
-        case inf::DType::UInt8:  lo = 0;      hi = 255;   break;
-        case inf::DType::Int16:  lo = -32768; hi = 32767; break;
-        case inf::DType::UInt16: lo = 0;      hi = 65535; break;
+        case ii::DType::Int8:   lo = -128;   hi = 127;   break;
+        case ii::DType::UInt8:  lo = 0;      hi = 255;   break;
+        case ii::DType::Int16:  lo = -32768; hi = 32767; break;
+        case ii::DType::UInt16: lo = 0;      hi = 65535; break;
         default:
             c.valid = false;
             return false;
@@ -118,7 +118,7 @@ bool ensure_input_quant_lut(InputQuantCache& c, const inf::TensorDesc& info) {
         // Сохраняем bit-pattern целевого типа в беззнаковом контейнере —
         // в горячем цикле просто кастуем к int8_t/int16_t и пишем в
         // буфер модели.
-        if (info.dtype == inf::DType::Int8 || info.dtype == inf::DType::UInt8) {
+        if (info.dtype == ii::DType::Int8 || info.dtype == ii::DType::UInt8) {
             c.lut8[u] = (uint8_t)q;
         } else {
             c.lut16[u] = (uint16_t)q;
@@ -133,7 +133,7 @@ bool ensure_input_quant_lut(InputQuantCache& c, const inf::TensorDesc& info) {
 
 }  // namespace
 
-bool fill_input(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
+bool fill_input(const std::vector<uint8_t>& rgb, const ii::TensorDesc& info,
                 void* data) {
     const std::size_t n = rgb.size();
 
@@ -143,33 +143,33 @@ bool fill_input(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
     thread_local InputQuantCache cache;
 
     switch (info.dtype) {
-        case inf::DType::Float32: {
+        case ii::DType::Float32: {
             float* p = reinterpret_cast<float*>(data);
             for (std::size_t i = 0; i < n; ++i) p[i] = rgb[i] / 255.0f;
             return true;
         }
-        case inf::DType::Int8: {
+        case ii::DType::Int8: {
             ensure_input_quant_lut(cache, info);
             int8_t* p = reinterpret_cast<int8_t*>(data);
             const uint8_t* lut = cache.lut8;
             for (std::size_t i = 0; i < n; ++i) p[i] = (int8_t)lut[rgb[i]];
             return true;
         }
-        case inf::DType::UInt8: {
+        case ii::DType::UInt8: {
             ensure_input_quant_lut(cache, info);
             uint8_t* p = reinterpret_cast<uint8_t*>(data);
             const uint8_t* lut = cache.lut8;
             for (std::size_t i = 0; i < n; ++i) p[i] = lut[rgb[i]];
             return true;
         }
-        case inf::DType::Int16: {
+        case ii::DType::Int16: {
             ensure_input_quant_lut(cache, info);
             int16_t* p = reinterpret_cast<int16_t*>(data);
             const uint16_t* lut = cache.lut16;
             for (std::size_t i = 0; i < n; ++i) p[i] = (int16_t)lut[rgb[i]];
             return true;
         }
-        case inf::DType::UInt16: {
+        case ii::DType::UInt16: {
             ensure_input_quant_lut(cache, info);
             uint16_t* p = reinterpret_cast<uint16_t*>(data);
             const uint16_t* lut = cache.lut16;
@@ -178,12 +178,12 @@ bool fill_input(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
         }
         default:
             std::fprintf(stderr, "Неподдерживаемый dtype входа: %s (код %d)\n",
-                         inf::dtype_name(info.dtype), (int)info.dtype);
+                         ii::dtype_name(info.dtype), (int)info.dtype);
             return false;
     }
 }
 
-bool fill_input_nchw(const std::vector<uint8_t>& rgb, const inf::TensorDesc& info,
+bool fill_input_nchw(const std::vector<uint8_t>& rgb, const ii::TensorDesc& info,
                      void* data, int C, int H, int W) {
     const std::size_t HW = (std::size_t)H * W;
     if (rgb.size() < HW * (std::size_t)C) {
@@ -195,14 +195,14 @@ bool fill_input_nchw(const std::vector<uint8_t>& rgb, const inf::TensorDesc& inf
     // src = rgb[(y*W+x)*C + c]  (HWC),  dst = data[c*H*W + (y*W+x)]  (CHW).
     // Внутренний цикл по hw держит непрерывную запись в dst-плоскость канала.
     switch (info.dtype) {
-        case inf::DType::Float32: {
+        case ii::DType::Float32: {
             float* p = reinterpret_cast<float*>(data);
             for (int c = 0; c < C; ++c)
                 for (std::size_t hw = 0; hw < HW; ++hw)
                     p[c * HW + hw] = rgb[hw * C + c] / 255.0f;
             return true;
         }
-        case inf::DType::Int8: {
+        case ii::DType::Int8: {
             ensure_input_quant_lut(cache, info);
             int8_t* p = reinterpret_cast<int8_t*>(data);
             const uint8_t* lut = cache.lut8;
@@ -211,7 +211,7 @@ bool fill_input_nchw(const std::vector<uint8_t>& rgb, const inf::TensorDesc& inf
                     p[c * HW + hw] = (int8_t)lut[rgb[hw * C + c]];
             return true;
         }
-        case inf::DType::UInt8: {
+        case ii::DType::UInt8: {
             ensure_input_quant_lut(cache, info);
             uint8_t* p = reinterpret_cast<uint8_t*>(data);
             const uint8_t* lut = cache.lut8;
@@ -220,7 +220,7 @@ bool fill_input_nchw(const std::vector<uint8_t>& rgb, const inf::TensorDesc& inf
                     p[c * HW + hw] = lut[rgb[hw * C + c]];
             return true;
         }
-        case inf::DType::Int16: {
+        case ii::DType::Int16: {
             ensure_input_quant_lut(cache, info);
             int16_t* p = reinterpret_cast<int16_t*>(data);
             const uint16_t* lut = cache.lut16;
@@ -229,7 +229,7 @@ bool fill_input_nchw(const std::vector<uint8_t>& rgb, const inf::TensorDesc& inf
                     p[c * HW + hw] = (int16_t)lut[rgb[hw * C + c]];
             return true;
         }
-        case inf::DType::UInt16: {
+        case ii::DType::UInt16: {
             ensure_input_quant_lut(cache, info);
             uint16_t* p = reinterpret_cast<uint16_t*>(data);
             const uint16_t* lut = cache.lut16;
@@ -240,9 +240,9 @@ bool fill_input_nchw(const std::vector<uint8_t>& rgb, const inf::TensorDesc& inf
         }
         default:
             std::fprintf(stderr, "fill_input_nchw: dtype %s не поддержан.\n",
-                         inf::dtype_name(info.dtype));
+                         ii::dtype_name(info.dtype));
             return false;
     }
 }
 
-}  // namespace iirun
+} // namespace ii

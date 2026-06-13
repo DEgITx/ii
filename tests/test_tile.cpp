@@ -11,11 +11,11 @@
 
 #include "tile.h"
 
-using tile::plan_tiles;
-using tile::extract_tile;
-using tile::TileLayout;
-using tile::TileCanvas;
-using imgproc::OutputImage;
+using ii::plan_tiles;
+using ii::extract_tile;
+using ii::TileLayout;
+using ii::TileCanvas;
+using ii::OutputImage;
 
 // ---- plan_tiles -----------------------------------------------------------
 

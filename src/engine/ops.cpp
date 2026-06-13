@@ -7,7 +7,7 @@
 #include <cmath>
 #include <stdexcept>
 
-#include "engine/parallel.h"
+#include "parallel.h"
 
 namespace ii {
 
@@ -15,7 +15,7 @@ namespace {
 
 // Целевой минимум скалярной работы на один параллельный кусок. Ниже этого
 // порога распараллеливание не окупает накладные расходы потоков, и
-// parallel_for выполняет всё на месте (см. engine/parallel.h). Из него
+// parallel_for выполняет всё на месте (см. parallel.h). Из него
 // выводится грейн каждого ядра: grain = kMinWorkPerChunk / (работа на элемент).
 constexpr std::int64_t kMinWorkPerChunk = 1 << 15;
 

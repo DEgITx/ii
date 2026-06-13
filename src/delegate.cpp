@@ -11,7 +11,7 @@
 
 #include "inference.h"
 
-namespace inf {
+namespace ii {
 
 #if defined(INF_HAS_DELEGATE_MODULE)
 // Определяется опциональным модулем делегата (см., например,
@@ -28,4 +28,4 @@ const char* default_delegate_path() {
 #endif
 }
 
-}  // namespace inf
+} // namespace ii

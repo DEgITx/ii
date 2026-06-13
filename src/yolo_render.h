@@ -13,7 +13,7 @@
 #include "tensor_utils.h"
 #include "yolo.h"
 
-namespace iirun {
+namespace ii {
 
 // Описание найденной YOLO-головы: индекс выхода и его раскладка.
 struct YoloHead {
@@ -35,4 +35,4 @@ bool detect_yolo_head(const std::vector<TensorInfo>& outs, int forced,
 // score и стабильный по классу цвет.
 std::vector<DisplayBox> detections_to_boxes(const std::vector<Detection>& dets);
 
-}  // namespace iirun
+} // namespace ii

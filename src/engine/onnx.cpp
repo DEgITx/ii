@@ -22,14 +22,14 @@
 #include <unordered_set>
 #include <vector>
 
-#include "half.h"  // inf::half_to_float — единая реализация на весь проект
+#include "half.h"  // ii::half_to_float — единая реализация на весь проект
 
 namespace ii {
 
 namespace {
 
 // float16 -> float32 берём из общего half.h (раньше дублировалось здесь).
-using inf::half_to_float;
+using ii::half_to_float;
 
 // ---- минимальный protobuf-ридер -------------------------------------------
 // Wire types: 0=varint, 1=fixed64, 2=length-delimited, 5=fixed32.

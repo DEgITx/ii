@@ -3,7 +3,7 @@
 // Хост-приложению, которому нужен движок (тензоры + операции + граф +
 // загрузчик ONNX), достаточно одного #include "engine/ii.h" — без знания
 // о внутреннем разбиении на модули. Для интеграции в качестве бэкенда
-// inf::Engine используйте дополнительно фабрику make_ii_engine()
+// ii::Engine используйте дополнительно фабрику make_ii_engine()
 // (engine/backend.cpp) — она объявлена в inference.h-стеке, чтобы не тянуть
 // контракт раннера в чисто библиотечные сборки.
 //
@@ -15,3 +15,4 @@
 #include "engine/ops.h"      // математические ядра (conv/matmul/softmax/...)
 #include "engine/graph.h"    // Graph, Node, OpRegistry, Executor, register_op
 #include "engine/loader.h"   // load_onnx / parse_onnx
+#include "parallel.h"        // parallel_for / set_num_threads / ThreadPool

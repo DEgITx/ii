@@ -9,16 +9,16 @@
 
 #include "inference.h"
 
-namespace iirun {
+namespace ii {
 
 struct Args {
     std::string model;
     std::string image;
     // Имя бэкенда инференса: "ii" / "tflite" / "tensorrt" / "directml".
     // Пустая строка (дефолт) -> авто: TFLite, если собран, иначе встроенный
-    // движок `ii`. См. inf::make_engine.
+    // движок `ii`. См. ii::make_engine.
     std::string backend;
-    std::string delegate = inf::default_delegate_path();
+    std::string delegate = ii::default_delegate_path();
     bool no_delegate = false;
     bool benchmark = false;
     int runs = 100;
@@ -119,11 +119,11 @@ struct Args {
 };
 
 // Печать справки по использованию (список собранных бэкендов берётся из
-// inf::available_backends()).
+// ii::available_backends()).
 void print_usage(const char* prog);
 
 // Разбор argv в Args. Возвращает false при ошибке или -h/--help
 // (в обоих случаях вызывающая сторона должна завершиться).
 bool parse_args(int argc, char** argv, Args& a);
 
-}  // namespace iirun
+} // namespace ii
