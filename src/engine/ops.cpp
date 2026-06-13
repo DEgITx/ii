@@ -242,6 +242,27 @@ Tensor layer_norm(const Tensor& x, const Tensor& weight, const Tensor& bias,
 }
 
 // ---- матумножение -----------------------------------------------------------
+namespace {
+
+// Накопить одну строку результата: C[j] = init + sum_k A[k] * B[k*N + j],
+// j в [0, N). A — строка длины K; B — матрица (K, N) row-major; init —
+// стартовое значение (bias или 0). Внутренний цикл по j непрерывен по памяти
+// B и C, поэтому компилятор его векторизует (AVX2+FMA при USE_NATIVE_SIMD).
+// Это единое горячее ядро для matmul и свёртки (через im2col): порядок
+// суммирования по k фиксирован, так что результат детерминирован и не зависит
+// от числа потоков.
+inline void gemm_row(const float* A, const float* B, float* C,
+                     std::int64_t K, std::int64_t N, float init) {
+    for (std::int64_t j = 0; j < N; ++j) C[j] = init;
+    for (std::int64_t k = 0; k < K; ++k) {
+        float a = A[k];
+        const float* Brow = B + k * N;
+        for (std::int64_t j = 0; j < N; ++j) C[j] += a * Brow[j];
+    }
+}
+
+}  // namespace
+
 Tensor matmul(const Tensor& a, const Tensor& b) {
     // 1-D промоутинг по семантике NumPy/ONNX.
     bool a1d = a.ndim() == 1, b1d = b.ndim() == 1;
@@ -290,11 +311,7 @@ Tensor matmul(const Tensor& a, const Tensor& b) {
             const float* Arow = Adat + (ia * M + i) * K;
             const float* Bp   = Bdat + ib * K * N;
             float*       Crow = Cdat + r * N;     // r == bi*M + i
-            for (std::int64_t k = 0; k < K; ++k) {
-                float av = Arow[k];
-                const float* Brow = Bp + k * N;
-                for (std::int64_t j = 0; j < N; ++j) Crow[j] += av * Brow[j];
-            }
+            gemm_row(Arow, Bp, Crow, K, N, 0.0f);
         }
     });
 
@@ -365,44 +382,110 @@ Tensor conv2d(const Tensor& x, const Tensor& w, const Tensor& bias,
     std::int64_t Mg = M / g;  // фильтров на группу
     Tensor out(Shape{Nn, M, OH, OW}, 0.0f);
 
-    // Параллелим по плоскому индексу строки выхода (n, m, oy): строк
-    // Nn*M*OH — для любой сети их с запасом хватает на все ядра, а каждая
-    // строка пишет свой непрерывный ряд из OW значений независимо от прочих.
-    std::int64_t rows = Nn * M * OH;
-    std::int64_t work_per_row = OW * Cg * kH * kW;
-    parallel_for(rows, grain_for(work_per_row), [&](std::int64_t r0, std::int64_t r1) {
-        for (std::int64_t r = r0; r < r1; ++r) {
-            std::int64_t oy  = r % OH;
-            std::int64_t tmp = r / OH;
-            std::int64_t m   = tmp % M;
-            std::int64_t n   = tmp / M;
-            std::int64_t gi  = m / Mg;                  // группа этого фильтра
-            std::int64_t cbase = gi * Cg;               // первый канал группы
-            float b = bias.empty() ? 0.0f : bias.data[static_cast<std::size_t>(m)];
-
-            for (std::int64_t ox = 0; ox < OW; ++ox) {
-                float acc = b;
-                for (std::int64_t ci = 0; ci < Cg; ++ci) {
-                    std::int64_t c = cbase + ci;
+    // --- Depthwise (Cg == 1): im2col невыгоден — K = kH*kW крошечный, и GEMM
+    // вырождается в скаляр на фильтр. Считаем прямой свёрткой, распараллелив по
+    // независимым строкам выхода (n, m, oy). ---
+    if (Cg == 1) {
+        std::int64_t rows = Nn * M * OH;
+        parallel_for(rows, grain_for(OW * kH * kW), [&](std::int64_t r0, std::int64_t r1) {
+            for (std::int64_t r = r0; r < r1; ++r) {
+                std::int64_t oy  = r % OH;
+                std::int64_t tmp = r / OH;
+                std::int64_t m   = tmp % M;
+                std::int64_t n   = tmp / M;
+                std::int64_t c   = m / Mg;        // depthwise: канал = номер группы
+                float b = bias.empty() ? 0.0f : bias.data[static_cast<std::size_t>(m)];
+                const float* xc = x.data.data() + (n * C + c) * H * W;
+                const float* wm = w.data.data() + m * (kH * kW);
+                float* orow = out.data.data() + ((n * M + m) * OH + oy) * OW;
+                for (std::int64_t ox = 0; ox < OW; ++ox) {
+                    float acc = b;
                     for (std::int64_t ky = 0; ky < kH; ++ky) {
                         std::int64_t iy = oy * sH + ky * dH - pT;
                         if (iy < 0 || iy >= H) continue;
+                        const float* xrow = xc + iy * W;
+                        const float* wrow = wm + ky * kW;
                         for (std::int64_t kx = 0; kx < kW; ++kx) {
                             std::int64_t ix = ox * sW + kx * dW - pL;
                             if (ix < 0 || ix >= W) continue;
-                            float xv = x.data[static_cast<std::size_t>(
-                                ((n * C + c) * H + iy) * W + ix)];
-                            float wv = w.data[static_cast<std::size_t>(
-                                ((m * Cg + ci) * kH + ky) * kW + kx)];
-                            acc += xv * wv;
+                            acc += xrow[ix] * wrow[kx];
                         }
                     }
+                    orow[ox] = acc;
                 }
-                out.data[static_cast<std::size_t>(
-                    ((n * M + m) * OH + oy) * OW + ox)] = acc;
             }
+        });
+        return out;
+    }
+
+    // --- Общий случай (Cg > 1): im2col + GEMM. Свёртка переписывается в плотное
+    // матумножение W(M, K) x col(K, P), где K = Cg*kH*kW, P = OH*OW. Это
+    // превращает разрозненные обращения в памяти в непрерывный поток (быстрый
+    // векторизуемый gemm_row) — главный выигрыш фазы 2. Порядок суммирования по
+    // k = (ci, ky, kx) тот же, что в прямой свёртке, поэтому числа не меняются. ---
+    std::int64_t K = Cg * kH * kW;
+    std::int64_t P = OH * OW;
+
+    // 1x1 без сдвига/паддинга/дилатации: окно — это сам пиксель, im2col не нужен —
+    // каналы группы (Cg x P) уже лежат непрерывно, GEMM идёт прямо по входу.
+    bool no_im2col = (kH == 1 && kW == 1 && sH == 1 && sW == 1 &&
+                      dH == 1 && dW == 1 &&
+                      pT == 0 && pL == 0 && pB == 0 && pR == 0);
+
+    // Буфер im2col (K x P) — один на весь вызов, переиспользуется по батчам и
+    // группам (форма у всех групп одинакова). Для 1x1 не выделяется вовсе.
+    std::vector<float> col;
+    if (!no_im2col) col.resize(static_cast<std::size_t>(K * P));
+
+    const float* wbase = w.data.data();  // строка фильтра m = wbase + m*K
+    for (std::int64_t n = 0; n < Nn; ++n) {
+        for (std::int64_t gi = 0; gi < g; ++gi) {
+            // Вход группы: каналы [gi*Cg, gi*Cg+Cg) батча n лежат непрерывно.
+            const float* xg = x.data.data() + (n * C + gi * Cg) * H * W;
+            const float* B;
+            if (no_im2col) {
+                B = xg;                          // (Cg, H*W) == (K, P), P == H*W
+            } else {
+                // im2col: col[k*P + oy*OW+ox] = x_patch для k = (ci, ky, kx).
+                // Строки k независимы — параллелим по ним.
+                parallel_for(K, grain_for(P), [&](std::int64_t k0, std::int64_t k1) {
+                    for (std::int64_t k = k0; k < k1; ++k) {
+                        std::int64_t kx = k % kW;
+                        std::int64_t t  = k / kW;
+                        std::int64_t ky = t % kH;
+                        std::int64_t ci = t / kH;
+                        const float* xc = xg + ci * H * W;
+                        float* crow = col.data() + k * P;
+                        for (std::int64_t oy = 0; oy < OH; ++oy) {
+                            std::int64_t iy = oy * sH + ky * dH - pT;
+                            float* cseg = crow + oy * OW;
+                            if (iy < 0 || iy >= H) {
+                                for (std::int64_t ox = 0; ox < OW; ++ox) cseg[ox] = 0.0f;
+                                continue;
+                            }
+                            const float* xrow = xc + iy * W;
+                            for (std::int64_t ox = 0; ox < OW; ++ox) {
+                                std::int64_t ix = ox * sW + kx * dW - pL;
+                                cseg[ox] = (ix < 0 || ix >= W) ? 0.0f : xrow[ix];
+                            }
+                        }
+                    }
+                });
+                B = col.data();
+            }
+
+            // GEMM: out[m] (P) = wbase[m] (K) x B (K, P) + bias[m]. Строки выхода
+            // (фильтры группы) независимы — параллелим по ним.
+            float* obase = out.data.data() + n * M * P;
+            parallel_for(Mg, grain_for(K * P), [&](std::int64_t mo0, std::int64_t mo1) {
+                for (std::int64_t mo = mo0; mo < mo1; ++mo) {
+                    std::int64_t m = gi * Mg + mo;
+                    float init = bias.empty() ? 0.0f : bias.data[static_cast<std::size_t>(m)];
+                    gemm_row(wbase + m * K, B, obase + m * P, K, P, init);
+                }
+            });
         }
-    });
+    }
     return out;
 }
 
