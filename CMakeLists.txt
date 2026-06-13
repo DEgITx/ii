@@ -142,6 +142,27 @@ else()
     target_compile_options(ii PRIVATE -Wall -Wextra -O3)
 endif()
 
+# ---- SIMD: AVX2/FMA на x86 ради векторизации горячих ядер -----------------
+# Авто-векторизатор (свёртка/матумножение в engine/ops.cpp) на x86 по умолчанию
+# ограничен SSE2 (особенно у MSVC) — это вдвое уже AVX2 и без FMA. Включаем
+# AVX2+FMA, которые есть на любом x86-CPU примерно с 2013 г. На ARM (i.MX95)
+# NEON — базовый набор, его -O3 задействует и без флагов. Отключите
+# (-DUSE_NATIVE_SIMD=OFF) для совсем старого x86 без AVX2 или переносимого бинаря.
+option(USE_NATIVE_SIMD "Включить AVX2/FMA на x86 для векторизации ядер" ON)
+if(USE_NATIVE_SIMD)
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _ii_arch)
+    if(_ii_arch MATCHES "x86_64|amd64|i[0-9]86")
+        if(MSVC)
+            target_compile_options(ii PRIVATE /arch:AVX2)
+        else()
+            target_compile_options(ii PRIVATE -mavx2 -mfma)
+        endif()
+        message(STATUS "ii SIMD: AVX2+FMA (x86)")
+    else()
+        message(STATUS "ii SIMD: нативная для ${CMAKE_SYSTEM_PROCESSOR} (напр. NEON через -O3)")
+    endif()
+endif()
+
 # dl/pthread — POSIX; на Windows их нет (а TFLite сам линкуется со своими
 # системными зависимостями через .lib импорт-библиотеку).
 if(UNIX)
