@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/github-logo.png" alt="ii logo" width="600">
+</p>
+
 # ii — run neural networks anywhere, simply
 
 `ii` is a small, fast **inference library and command-line runner** for neural
@@ -83,10 +87,8 @@ plain C++20 — no TensorFlow, no ONNX Runtime, no CUDA. It loads ONNX models
 directly, supports a broad op set (Conv, Gemm/MatMul, the common activations,
 pooling, normalization, resize, concat/slice/gather/reshape, reductions, …), and
 fans heavy kernels out across cores via an allocation-free parallel primitive
-that stays **bit-identical to serial** — so it doubles as a correctness oracle
-for the other backends. It is the path to take when you want a small, dependency-
-free runner on an embedded device, or a reference to validate a quantized model
-against.
+that stays **bit-identical to serial**. It is the path to take when you want a
+small, dependency-free runner on an embedded device.
 
 ## Building
 
