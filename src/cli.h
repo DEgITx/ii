@@ -15,8 +15,9 @@ struct Args {
     std::string model;
     std::string image;
     // Имя бэкенда инференса: "ii" / "tflite" / "tensorrt" / "directml".
-    // Пустая строка (дефолт) -> авто: TFLite, если собран, иначе встроенный
-    // движок `ii`. См. ii::make_engine.
+    // Пустая строка (дефолт) -> авто-выбор «наиболее удачного работоспособного»
+    // бэкенда: перебор по приоритету (tensorrt -> directml -> tflite -> ii) с
+    // фактической проверкой load(). См. ii::load_best_engine.
     std::string backend;
     std::string delegate = ii::default_delegate_path();
     bool no_delegate = false;

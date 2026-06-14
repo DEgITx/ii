@@ -76,8 +76,12 @@ Only the built-in `ii` engine is enabled by default — it needs no external SDK
 so the project builds and runs out of the box. The other backends are opt-in:
 turn them on with their `USE_*` option once you have the corresponding SDK. A
 single binary can carry any combination of backends; choose at runtime with
-`--backend <name>`. The empty/default backend resolves to TFLite if it was built,
-otherwise the always-present `ii` engine. The compiled-in backends are listed in
+`--backend <name>`. When `--backend` is omitted, the runner **auto-selects the
+best working backend**: it tries the compiled-in backends in priority order
+(`tensorrt` → `directml` → `tflite` → `ii`) and keeps the first one that actually
+loads the model with the given options — so the chosen backend matches both the
+model format and the available hardware/delegate, falling back all the way to the
+always-present pure-CPU `ii` engine. The compiled-in backends are listed in
 `--help`.
 
 ### The built-in `ii` engine

@@ -219,23 +219,34 @@ int main(int argc, char** argv) {
         }
     }
 
-    auto eng = ii::make_engine(args.backend);
-    if (!eng) {
-        std::fprintf(stderr,
-            "Не удалось создать бэкенд '%s'. Доступные: ",
-            args.backend.c_str());
-        bool first = true;
-        for (const auto& b : ii::available_backends()) {
-            std::fprintf(stderr, "%s%s", first ? "" : ", ", b.c_str());
-            first = false;
-        }
-        std::fprintf(stderr, "\n");
-        return 2;
-    }
     ii::Engine::Options eopts;
     eopts.delegate_path = args.no_delegate ? std::string{} : args.delegate;
     eopts.num_threads   = args.threads;
-    if (!eng->load(args.model, eopts)) return 2;
+
+    // Выбор бэкенда. Если --backend не задан, авто-выбираем «наиболее
+    // удачный работоспособный»: load_best_engine перебирает собранные
+    // бэкенды по приоритету и возвращает первый, реально загрузивший
+    // модель (Engine уже загружен). Иначе — явно запрошенный бэкенд.
+    std::unique_ptr<ii::Engine> eng;
+    if (args.backend.empty()) {
+        eng = ii::load_best_engine(args.model, eopts);
+        if (!eng) return 2;
+    } else {
+        eng = ii::make_engine(args.backend);
+        if (!eng) {
+            std::fprintf(stderr,
+                "Не удалось создать бэкенд '%s'. Доступные: ",
+                args.backend.c_str());
+            bool first = true;
+            for (const auto& b : ii::available_backends()) {
+                std::fprintf(stderr, "%s%s", first ? "" : ", ", b.c_str());
+                first = false;
+            }
+            std::fprintf(stderr, "\n");
+            return 2;
+        }
+        if (!eng->load(args.model, eopts)) return 2;
+    }
 
     // Тег для логов: где именно крутится инференс. С NPU/делегатом
     // подразумевается ускоритель; без делегата — CPU. Бэкенд тоже
@@ -1221,11 +1232,15 @@ int main(int argc, char** argv) {
         // что и есть «золотой» референс. В будущем, если бэкенд эталона
         // понадобится менять (например, сверять TensorRT vs TFLite-CPU),
         // здесь можно будет принимать опцию --compare-backend.
-        auto ref = ii::make_engine(args.backend);
+        // Эталон крутим на ТОМ ЖЕ бэкенде, что выбран для основного движка
+        // (с авто-выбором args.backend может быть пуст — берём фактически
+        // выбранный backend_name, а не сырой флаг).
+        const std::string ref_backend = eng->backend_name();
+        auto ref = ii::make_engine(ref_backend);
         if (!ref) {
             std::fprintf(stderr,
                 "[%s] не удалось создать бэкенд '%s' для эталона.\n",
-                ref_label, args.backend.c_str());
+                ref_label, ref_backend.c_str());
             return;
         }
         ii::Engine::Options ropts;

@@ -145,6 +145,58 @@ std::vector<std::string> available_backends() {
     return out;
 }
 
+std::vector<std::string> backend_priority() {
+    // Порядок «best → worst»: сперва аппаратно-ускоренные GPU-бэкенды
+    // (tensorrt самый быстрый там, где есть NVIDIA; directml — GPU на
+    // Windows), затем tflite (CPU + опциональный делегат/NPU), и в самом
+    // конце встроенный `ii` — pure-CPU, всегда работоспособен, служит
+    // гарантированным fallback и численным оракулом. Пересекаем со
+    // списком собранных бэкендов, сохраняя этот приоритет.
+    static const char* order[] = {"tensorrt", "directml", "tflite", "ii"};
+    const auto built = available_backends();
+    std::vector<std::string> out;
+    for (const char* name : order) {
+        for (const auto& b : built) {
+            if (b == name) { out.emplace_back(name); break; }
+        }
+    }
+    return out;
+}
+
+std::unique_ptr<Engine> load_best_engine(const std::string& model_path,
+                                         const Engine::Options& opts,
+                                         std::string* chosen_backend) {
+    const auto order = backend_priority();
+    if (order.empty()) {
+        std::fprintf(stderr, "Не собран ни один бэкенд инференса.\n");
+        return nullptr;
+    }
+    // Перебираем кандидатов по приоритету; берём первый, который РЕАЛЬНО
+    // загрузил модель этими opts. load() сам печатает диагностику — при
+    // неудаче поясняем, что пробуем следующего кандидата, чтобы вывод не
+    // выглядел как фатальная ошибка.
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        const std::string& name = order[i];
+        std::printf("Авто-выбор бэкенда: пробую '%s'...\n", name.c_str());
+        auto eng = make_engine(name);
+        if (!eng) continue;  // на всякий случай: имя из собранного списка
+        if (eng->load(model_path, opts)) {
+            std::printf("Авто-выбор бэкенда: выбран '%s'.\n", name.c_str());
+            if (chosen_backend) *chosen_backend = name;
+            return eng;
+        }
+        if (i + 1 < order.size()) {
+            std::fprintf(stderr,
+                "Бэкенд '%s' не смог загрузить модель — пробую следующий.\n",
+                name.c_str());
+        }
+    }
+    std::fprintf(stderr,
+        "Авто-выбор: ни один из собранных бэкендов не смог загрузить '%s'.\n",
+        model_path.c_str());
+    return nullptr;
+}
+
 // default_delegate_path() вынесена в delegate.cpp (платформенно-нейтральная
 // часть) + опциональные модули делегатов — чтобы ядро инференса не зависело
 // от конкретного ускорителя.
