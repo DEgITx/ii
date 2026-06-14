@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/github-logo.png" alt="ii logo" width="600">
+</p>
+
 # ii — run neural networks anywhere, simply
 
 `ii` is a small, fast **inference library and command-line runner** for neural
