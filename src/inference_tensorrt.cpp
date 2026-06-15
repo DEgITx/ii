@@ -306,17 +306,22 @@ private:
             d.zero_point = 0;
             d.bytes      = numel_(dims) * dtype_size(d.dtype);
 
-            // Аллокация host + device. host — обычный malloc (ii.cpp
-            // обращается к буферу как к простому массиву); device —
-            // cudaMalloc.
-            void* host = std::malloc(d.bytes);
+            // Аллокация host + device. host — pinned-память
+            // (cudaHostAlloc): ii.cpp обращается к буферу как к простому
+            // массиву, но при этом cudaMemcpyAsync из неё делает реальный
+            // асинхронный DMA, а не деградирует до синхронной копии через
+            // staging-буфер драйвера (как было бы с обычным malloc).
+            // device — cudaMalloc.
+            void* host = nullptr;
+            cudaError_t eh = cudaHostAlloc(&host, d.bytes, cudaHostAllocDefault);
             void* dev  = nullptr;
             cudaError_t e = cudaMalloc(&dev, d.bytes);
-            if (!host || e != cudaSuccess) {
+            if (eh != cudaSuccess || !host || e != cudaSuccess) {
                 std::fprintf(stderr,
                     "[TensorRT] alloc упал для тензора '%s' (%zu байт).\n",
                     d.name.c_str(), d.bytes);
-                if (host) std::free(host);
+                if (host) cudaFreeHost(host);
+                if (dev)  cudaFree(dev);
                 free_buffers_();
                 return false;
             }
@@ -343,7 +348,7 @@ private:
     }
 
     void free_buffers_() {
-        for (void* h : host_bufs_) std::free(h);
+        for (void* h : host_bufs_) if (h) cudaFreeHost(h);
         for (void* d : dev_bufs_)  if (d) cudaFree(d);
         host_bufs_.clear();
         dev_bufs_.clear();
