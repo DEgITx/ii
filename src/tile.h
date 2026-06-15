@@ -73,52 +73,38 @@ void extract_tile(const uint8_t* src_rgb, int src_w, int src_h,
                   int x0, int y0, int tile_w, int tile_h,
                   std::vector<uint8_t>& dst);
 
-// Canvas для сборки тайлов в финальный кадр. В двух режимах:
-//   * blend=false — простой overwrite-paste. Тайлы пишутся как есть,
-//     overlap-зоны перезаписываются последним пастом. Дёшево, без
-//     float-буферов. Подходит для denoise/enhance с тщательным
-//     overlap=0 (тайлы стыкуются ровно по сетке) или когда визуальные
-//     швы не критичны.
-//   * blend=true — линейное feathering: в overlap-зоне вес тайла
-//     плавно (линейно) спадает от центра к краю, итог = взвешенная
-//     сумма / суммарный вес. Требует двух float-буферов (acc и weight)
-//     суммарно ~16 байт на пиксель canvas’а. Швы при разумном
-//     overlap (4..16 пикселей input-space) становятся незаметны.
+// Canvas для сборки тайлов в финальный кадр. Один uint8 RGB-буфер;
+// тайлы рисуются слева-направо/сверху-вниз и накладываются методом
+// «over» (incremental composite):
+//
+//   canvas = α·tile + (1−α)·canvas,
+//
+// где α (fixed-point 0..256) растёт линейно 0→1 на полосе ramp пикселей
+// у ЛЕВОГО/ВЕРХНЕГО края тайла и равна 1 (непрозрачно) вне полосы.
+// Перекрытие тайла с уже нарисованными соседями — это всегда его левый
+// и верхний края (правый/нижний перекроет следующий тайл), поэтому
+// растушёвка только по ведущим краям даёт ровно линейный cross-fade на
+// швах. Никаких float-буферов на весь canvas и никаких делений в горячем
+// цикле — всё целочисленно, один проход на тайл.
+//
+// overlap=0 (ramp=0) вырождается в простой overwrite-paste.
 struct TileCanvas {
     int width = 0, height = 0;
-    int overlap_out = 0;     // overlap * scale в output-space (для feathering)
-    bool blend = false;
+    std::vector<uint8_t> rgb;     // финальный кадр, HWC RGB
 
-    std::vector<uint8_t> rgb;     // финальный кадр, HWC RGB (после finalize)
-    std::vector<float>   acc;     // акк. сумма (w*h*3), только при blend
-    std::vector<float>   weight;  // акк. вес  (w*h),   только при blend
+    // Подготовить canvas под наложение тайлов. Если размер не меняется —
+    // без realloc’а (resize того же размера — no-op). Без zero-init:
+    // plan_tiles снэпает последний тайл к краю, так что canvas покрывается
+    // целиком и каждый байт перезаписывается composite/decode.
+    void reset(int w, int h);
 
-    // Инвариант blend-режима: true ⇒ acc/weight гарантированно занулены и
-    // готовы к накоплению. finalize() оставляет буферы чистыми (зануляет
-    // каждую использованную ячейку сразу после деления), поэтому reset()
-    // при неизменном размере canvas’а пропускает полный memset на ~42 МБ.
-    // Сбрасывается в false, как только paste() начал накопление; если
-    // проход прервался до finalize() — следующий reset() сделает полную
-    // очистку, так что корректность не зависит от того, дошли ли мы до
-    // finalize() в предыдущем кадре.
-    bool blend_clean = false;
-
-    // Подготовить canvas под пасты. Если размер не меняется — без
-    // realloc’а; в blend-режиме acc/weight зануляются лишь при
-    // (ре)аллокации или если предыдущий проход не финализирован
-    // (см. blend_clean).
-    void reset(int w, int h, int overlap_out_, bool blend_);
-
-    // Вставить декодированный тайл в позицию (dst_x, dst_y) (это
-    // output-space координаты, т.е. с учётом scale модели). В
-    // blend-режиме весовая функция — произведение линейных ramp’ов
-    // по обеим осям, длина ramp’а = overlap_out от каждого края тайла;
-    // в blend=false режиме это простой byte-копир.
-    void paste(const ii::OutputImage& tile, int dst_x, int dst_y);
-
-    // Финализация: в blend-режиме делит acc на weight и пишет в rgb.
-    // В blend=false режиме no-op (rgb уже заполнен paste’ом).
-    void finalize();
+    // Наложить декодированный тайл в позицию (dst_x, dst_y) (output-space,
+    // т.е. с учётом scale модели). ramp_x / ramp_y — ширина растушёвки
+    // (в пикселях output-space) на ЛЕВОМ / ВЕРХНЕМ крае тайла; 0 — край
+    // непрозрачный (первый столбец/строка либо overlap=0). На полосе ramp
+    // α растёт линейно 0→1, вне полосы α=1 → простой byte-копир.
+    void composite(const ii::OutputImage& tile, int dst_x, int dst_y,
+                   int ramp_x, int ramp_y);
 };
 
 } // namespace ii

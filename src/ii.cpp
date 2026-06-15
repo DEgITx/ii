@@ -707,27 +707,30 @@ int main(int argc, char** argv) {
     // RGB-кадром (исходное разрешение × scale модели), и весь дальнейший
     // display/save код подхватывает его без изменений.
     //
-    // Оптимизация overwrite-пути: вместо «decode → промежуточный out_img →
-    // paste в canvas» (две полные записи декодированного тайла в DRAM),
-    // вызываем decode_image_output_to и пишем сразу в нужную позицию
-    // canvas’а. На кадр это экономит ~канваc-в-байтах memcpy и столько
-    // же memset (~16 МБ DRAM-трафика для 1996×1332 при 24 тайлах).
-    // Blend-режим (overlap > 0) всё ещё идёт через out_img + paste,
-    // потому что paste делает взвешенное накопление в float-acc.
+    // overlap == 0: декодируем тайл сразу в нужную позицию canvas’а
+    // (decode_image_output_to) — без промежуточного буфера и memcpy.
+    // overlap > 0: декодируем тайл в персистентный scratch tile_buf и
+    // накладываем его на canvas методом «over» (composite) с линейной
+    // растушёвкой по ведущим (левому/верхнему) краям. Никаких float-буферов
+    // и делений на пиксель — только целочисленный alpha-blend в узких
+    // полосах шва. tile_buf держится размером тайла (~0.4 МБ) и не свапается
+    // с canvas — поэтому per-frame realloc’а нет ни у scratch’а, ни у canvas.
     //
     // Возвращает false при фатальной ошибке (Invoke упал) — вызывающая
     // сторона должна прервать цикл. Декод одного тайла, не сработавший,
     // пропускается без обрыва — для видео-цикла это важно, иначе один
     // битый кадр уронит весь поток.
-    ii::TileCanvas tile_canvas;
+    ii::TileCanvas  tile_canvas;
+    ii::OutputImage tile_buf;   // scratch под декод одного тайла (только blend)
     auto run_tile_pass = [&](const uint8_t* src_rgb,
                              int src_w, int src_h) -> bool {
         if (image_output_idx < 0) return false;
         const auto layout = ii::plan_tiles(
             src_w, src_h, in_w, in_h, args.tile_overlap);
-        const bool blend = (args.tile_overlap > 0);
-        tile_canvas.reset(src_w * scale_x, src_h * scale_y,
-                          args.tile_overlap * scale_x, blend);
+        const bool blend  = (args.tile_overlap > 0);
+        const int  ramp_x = args.tile_overlap * scale_x;
+        const int  ramp_y = args.tile_overlap * scale_y;
+        tile_canvas.reset(src_w * scale_x, src_h * scale_y);
         const std::size_t canvas_stride = (std::size_t)tile_canvas.width * 3;
         const auto& tile_info = out_info[image_output_idx];
         for (int j = 0; j < layout.ny(); ++j) {
@@ -740,15 +743,20 @@ int main(int argc, char** argv) {
                 if (!safe_invoke(*eng)) return false;
                 const void* tdata = eng->output_data(image_output_idx);
                 if (blend) {
-                    // В blend-режиме без out_img не обойтись: paste
-                    // выполняет взвешенное накопление в acc/weight.
+                    // Декод во временный буфер, затем over-composite на
+                    // canvas. Растушёвка только по ведущим краям: левый
+                    // край ramp’ится при i>0 (есть уже нарисованный сосед
+                    // слева), верхний — при j>0; первый столбец/строка
+                    // непрозрачны.
                     if (!ii::decode_image_output(
-                            tile_info, tdata, dec_opts, out_img,
+                            tile_info, tdata, dec_opts, tile_buf,
                             &dec_cache)) {
                         continue;
                     }
-                    tile_canvas.paste(out_img,
-                                      x0 * scale_x, y0 * scale_y);
+                    tile_canvas.composite(tile_buf,
+                                          x0 * scale_x, y0 * scale_y,
+                                          i > 0 ? ramp_x : 0,
+                                          j > 0 ? ramp_y : 0);
                 } else {
                     // Overwrite-режим: пишем декодированный тайл сразу
                     // в нужную позицию canvas’а — никаких промежуточных
@@ -765,11 +773,11 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        tile_canvas.finalize();
         // Перекидываем итог в out_img через swap (O(1), вместо copy ~8 МБ
-        // для 1996×1332). Следующий вызов reset() переиспользует ту же
-        // память — выделение не требуется. Размер фиксируется по первому
-        // кадру (src_w/src_h в живом видео-цикле обычно постоянны).
+        // для 1996×1332). out_img и tile_canvas.rgb — оба полноразмерные,
+        // поэтому swap ping-pong’ает два буфера одного размера и следующий
+        // reset() не делает realloc. Размер фиксируется по первому кадру
+        // (src_w/src_h в живом видео-цикле обычно постоянны).
         out_img.width        = tile_canvas.width;
         out_img.height       = tile_canvas.height;
         out_img.channels_src = 3;

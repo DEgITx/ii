@@ -1,12 +1,12 @@
 // Реализация tile.h: планирование сетки, извлечение тайла с replicate-edge
-// и сборка результата в canvas (с опциональным линейным feathering’ом).
+// и сборка результата в canvas (incremental over-composite с линейным
+// feathering’ом по ведущим краям).
 //
 // Никаких бэкенд-специфичных хедеров — модуль чисто «пиксельный».
 
 #include "tile.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 
 namespace ii {
@@ -105,147 +105,68 @@ void extract_tile(const uint8_t* src_rgb, int src_w, int src_h,
     }
 }
 
-void TileCanvas::reset(int w, int h, int overlap_out_, bool blend_) {
-    width       = w;
-    height      = h;
-    overlap_out = overlap_out_;
-    blend       = blend_;
-
-    const size_t pixels    = (size_t)w * h;
-    const size_t rgb_bytes = pixels * 3;
-
-    if (blend) {
-        // rgb: при blend (overlap > 0) каждый пиксель canvas’а покрыт хотя
-        // бы одним тайлом с ненулевым весом (axis_w ≥ 1/overlap_out > 0),
-        // поэтому finalize() перезаписывает rgb целиком. Зануляем лишь при
-        // (ре)аллокации — как предсказуемый чёрный фон для гипотетических
-        // непокрытых пикселей (finalize() их пропускает). Учитываем, что
-        // ii.cpp свапает rgb с out_img между кадрами: вернувшийся буфер уже
-        // нужного размера, повторно его не трогаем (полное покрытие гарантирует
-        // перезапись всех пикселей в finalize()).
-        if (rgb.size() != rgb_bytes) rgb.assign(rgb_bytes, 0);
-
-        // acc/weight обязаны быть нулевыми перед накоплением (paste делает
-        // +=). finalize() зануляет каждую использованную ячейку сразу после
-        // деления, а непокрытые ячейки paste() не трогает вовсе — значит
-        // после успешного прохода буферы целиком нулевые (blend_clean=true),
-        // и полный memset на ~42 МБ можно пропустить. Он нужен лишь при
-        // (ре)аллокации или если предыдущий проход прервался до finalize().
-        if (acc.size() != rgb_bytes)      acc.assign(rgb_bytes, 0.0f);
-        else if (!blend_clean)            std::fill(acc.begin(), acc.end(), 0.0f);
-
-        if (weight.size() != pixels)      weight.assign(pixels, 0.0f);
-        else if (!blend_clean)            std::fill(weight.begin(), weight.end(), 0.0f);
-
-        // На входе в накопление буферы гарантированно нулевые (одной из
-        // веток выше). paste() сбросит флаг, как только начнёт писать.
-        blend_clean = true;
-    } else {
-        // overwrite-режим: plan_tiles снэпает последний тайл к краю,
-        // так что canvas покрывается тайлами целиком — каждый байт rgb
-        // гарантированно перезаписан paste’ом (или decode-into-canvas).
-        // resize без zero-init — для первой реcет’ом инициализированной
-        // памяти бывает один memset, дальше — no-op.
-        if (rgb.size() != rgb_bytes) rgb.resize(rgb_bytes);
-        acc.clear();
-        weight.clear();
-        blend_clean = false;  // float-буферы освобождены, инвариант не действует
-    }
+void TileCanvas::reset(int w, int h) {
+    width  = w;
+    height = h;
+    // plan_tiles снэпает последний тайл к краю, так что canvas покрывается
+    // тайлами целиком — каждый байт rgb гарантированно перезаписан
+    // composite/decode. resize без zero-init: один memset при (ре)аллокации,
+    // дальше — no-op (ii.cpp ping-pong’ает буфер с out_img того же размера).
+    const size_t rgb_bytes = (size_t)w * h * 3;
+    if (rgb.size() != rgb_bytes) rgb.resize(rgb_bytes);
 }
 
-void TileCanvas::paste(const ii::OutputImage& tile, int dst_x, int dst_y) {
+namespace {
+
+// α тайла (fixed-point 0..256) на смещении d от ведущего края при ширине
+// растушёвки r: вне полосы (d >= r) — 256 (полностью непрозрачно), внутри —
+// линейный рост, центрированный так, что концы не вырождаются в 0/256
+// (нет «шва» из чистого фона/тайла на самой кромке).
+inline int lead_alpha(int d, int r) {
+    if (r <= 0 || d >= r) return 256;
+    const int a = (2 * d + 1) * 128 / r;
+    return a < 0 ? 0 : (a > 256 ? 256 : a);
+}
+
+}  // namespace
+
+void TileCanvas::composite(const ii::OutputImage& tile, int dst_x, int dst_y,
+                           int ramp_x, int ramp_y) {
     if (tile.rgb.empty() || tile.width <= 0 || tile.height <= 0) return;
     if (width <= 0 || height <= 0) return;
 
-    if (!blend) {
-        // Простой overwrite + клиппинг в границы canvas. Цикл по
-        // валидному диапазону — без проверок на каждый пиксель.
-        const int y_beg = std::max(0, -dst_y);
-        const int y_end = std::min(tile.height, height - dst_y);
-        const int x_beg = std::max(0, -dst_x);
-        const int x_end = std::min(tile.width,  width  - dst_x);
-        if (y_beg >= y_end || x_beg >= x_end) return;
-        const size_t row_bytes = (size_t)(x_end - x_beg) * 3;
-        for (int y = y_beg; y < y_end; ++y) {
-            const uint8_t* sp =
-                &tile.rgb[(size_t)(y * tile.width + x_beg) * 3];
-            uint8_t* dp =
-                &rgb[(size_t)((dst_y + y) * width + (dst_x + x_beg)) * 3];
-            std::memcpy(dp, sp, row_bytes);
-        }
-        return;
-    }
-
-    // Blend-режим. Весовая функция = произведение линейных ramp’ов
-    // вдоль каждой оси: вес пикселя растёт от 0 на самом краю тайла
-    // до 1 на расстоянии overlap_out пикселей внутрь, и так же спадает
-    // у противоположного края. Это даёт мягкие швы шириной overlap_out
-    // даже без хитрых cosine-весов. Если overlap_out <= 0, ramp
-    // вырождается в постоянную 1 — blend становится «среднее
-    // арифметическое в зоне пересечения», что обычно тоже OK.
-    auto axis_w = [](int idx, int dim, int ov) -> float {
-        if (ov <= 0) return 1.0f;
-        // расстояние до ближайшего края тайла (в пикселях)
-        const float d_left  = (float)(idx + 1);
-        const float d_right = (float)(dim - idx);
-        const float d       = std::min(d_left, d_right);
-        const float w       = d / (float)ov;
-        if (w < 0.0f) return 0.0f;
-        if (w > 1.0f) return 1.0f;
-        return w;
-    };
-
+    // Клиппинг тайла в границы canvas — дальше цикл без проверок на пиксель.
     const int y_beg = std::max(0, -dst_y);
     const int y_end = std::min(tile.height, height - dst_y);
     const int x_beg = std::max(0, -dst_x);
     const int x_end = std::min(tile.width,  width  - dst_x);
     if (y_beg >= y_end || x_beg >= x_end) return;
 
-    // Начинаем накопление в acc/weight — буферы больше не «чистые».
-    // Если проход прервётся до finalize(), следующий reset() это увидит.
-    blend_clean = false;
-
     for (int y = y_beg; y < y_end; ++y) {
-        const float wy = axis_w(y, tile.height, overlap_out);
-        const uint8_t* sp_row =
-            &tile.rgb[(size_t)(y * tile.width) * 3];
-        for (int x = x_beg; x < x_end; ++x) {
-            const float wx = axis_w(x, tile.width, overlap_out);
-            const float w  = wx * wy;
-            if (w <= 0.0f) continue;
-            const uint8_t* sp = &sp_row[(size_t)x * 3];
-            const size_t  k   = (size_t)((dst_y + y) * width + (dst_x + x));
-            acc[k * 3 + 0] += w * (float)sp[0];
-            acc[k * 3 + 1] += w * (float)sp[1];
-            acc[k * 3 + 2] += w * (float)sp[2];
-            weight[k]      += w;
-        }
-    }
-}
+        const int ay = lead_alpha(y, ramp_y);
+        const uint8_t* sp =
+            &tile.rgb[(size_t)(y * tile.width + x_beg) * 3];
+        uint8_t* dp =
+            &rgb[(size_t)((dst_y + y) * width + (dst_x + x_beg)) * 3];
 
-void TileCanvas::finalize() {
-    if (!blend) return;
-    const size_t pixels = (size_t)width * height;
-    for (size_t k = 0; k < pixels; ++k) {
-        const float w = weight[k];
-        if (w <= 0.0f) continue;  // пиксель не покрыт ни одним тайлом — acc/weight уже 0
-        const float inv = 1.0f / w;
-        for (int c = 0; c < 3; ++c) {
-            float v = acc[k * 3 + c] * inv;
-            if (v < 0.0f)   v = 0.0f;
-            if (v > 255.0f) v = 255.0f;
-            rgb[k * 3 + c] = (uint8_t)std::lround(v);
-            // Возвращаем ячейку в нулевое состояние прямо здесь: строка уже
-            // в кэше (только что прочитали acc), так что запись почти
-            // бесплатна — и следующий reset() пропустит полный memset.
-            acc[k * 3 + c] = 0.0f;
+        // Строка целиком непрозрачна (ни верхней, ни левой растушёвки) —
+        // простой byte-копир, как в overwrite-режиме.
+        if (ay == 256 && ramp_x <= 0) {
+            std::memcpy(dp, sp, (size_t)(x_end - x_beg) * 3);
+            continue;
         }
-        weight[k] = 0.0f;
+        for (int x = x_beg; x < x_end; ++x, sp += 3, dp += 3) {
+            const int a = (lead_alpha(x, ramp_x) * ay) >> 8;  // 0..256
+            if (a >= 256) {                                    // непрозрачно — копия
+                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+            } else {
+                const int ia = 256 - a;
+                dp[0] = (uint8_t)((a * sp[0] + ia * dp[0] + 128) >> 8);
+                dp[1] = (uint8_t)((a * sp[1] + ia * dp[1] + 128) >> 8);
+                dp[2] = (uint8_t)((a * sp[2] + ia * dp[2] + 128) >> 8);
+            }
+        }
     }
-    // Все использованные ячейки занулены, непокрытые и так были нулевыми ⇒
-    // буферы целиком чисты независимо от того, каким будет покрытие в
-    // следующем кадре. Корректно даже при смене layout без смены размера.
-    blend_clean = true;
 }
 
 } // namespace ii

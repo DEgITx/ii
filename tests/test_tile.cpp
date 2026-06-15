@@ -1,6 +1,7 @@
 // Юнит-тесты тайл-арифметики (tile.*): планирование сетки (plan_tiles),
 // извлечение тайла с replicate-edge (extract_tile) и сборка результата
-// в canvas — overwrite-paste и линейный feathering (TileCanvas).
+// в canvas — over-composite с линейной растушёвкой по ведущим краям
+// (TileCanvas).
 //
 // Модуль чисто «пиксельный», backend SDK не требуется.
 
@@ -118,11 +119,12 @@ TEST(ExtractTile, ReplicateEdgeBeyondBounds) {
     EXPECT_EQ(px(2, 2), 4);  // оба за краем → правый-нижний
 }
 
-// ---- TileCanvas: overwrite (blend=false) ----------------------------------
+// ---- TileCanvas: composite (overwrite, ramp=0) ----------------------------
 
 TEST(TileCanvas, OverwritePaste) {
+    // ramp_x=ramp_y=0 → α=1 везде → простой overwrite.
     TileCanvas c;
-    c.reset(/*w=*/4, /*h=*/4, /*overlap_out=*/0, /*blend=*/false);
+    c.reset(/*w=*/4, /*h=*/4);
 
     OutputImage t;
     t.width = 2;
@@ -130,8 +132,7 @@ TEST(TileCanvas, OverwritePaste) {
     t.channels_src = 3;
     t.rgb.assign(2 * 2 * 3, 77);
 
-    c.paste(t, /*dst_x=*/1, /*dst_y=*/1);
-    c.finalize();  // no-op в overwrite-режиме
+    c.composite(t, /*dst_x=*/1, /*dst_y=*/1, /*ramp_x=*/0, /*ramp_y=*/0);
 
     ASSERT_EQ(c.rgb.size(), 4u * 4u * 3u);
     // Внутри пасты (1,1) — значение тайла.
@@ -143,67 +144,90 @@ TEST(TileCanvas, OverwriteClipsAtCanvasEdge) {
     // Тайл частично за правым/нижним краем canvas — лишнее клиппится,
     // без выхода за буфер.
     TileCanvas c;
-    c.reset(3, 3, 0, false);
+    c.reset(3, 3);
     OutputImage t;
     t.width = 2;
     t.height = 2;
     t.channels_src = 3;
     t.rgb.assign(2 * 2 * 3, 200);
-    c.paste(t, /*dst_x=*/2, /*dst_y=*/2);  // влезает только пиксель (2,2)
-    c.finalize();
+    c.composite(t, /*dst_x=*/2, /*dst_y=*/2, 0, 0);  // влезает только (2,2)
     EXPECT_EQ(c.rgb[(2 * 3 + 2) * 3], 200);
 }
 
-// ---- TileCanvas: blend (feathering) ---------------------------------------
+// ---- TileCanvas: composite (feathering по ведущим краям) ------------------
 
-TEST(TileCanvas, BlendSingleTileNoOverlapIsIdentity) {
-    // overlap_out=0 → axis_w=1 везде, вес=1, finalize = acc/1 = тайл.
+TEST(TileCanvas, CompositeNoRampIsOverwrite) {
+    // ramp=0 → тайл кладётся как есть, без подмешивания старого canvas’а.
     TileCanvas c;
-    c.reset(2, 2, /*overlap_out=*/0, /*blend=*/true);
+    c.reset(2, 2);
     OutputImage t;
     t.width = 2;
     t.height = 2;
     t.channels_src = 3;
     t.rgb.assign(2 * 2 * 3, 100);
-    c.paste(t, 0, 0);
-    c.finalize();
+    c.composite(t, 0, 0, 0, 0);
     for (auto v : c.rgb) EXPECT_EQ(v, 100);
 }
 
-TEST(TileCanvas, BlendTwoTilesAverageInOverlap) {
-    // Два тайла одинакового значения, перекрытие → взвешенное среднее
-    // того же значения = само значение (ни осветления, ни затемнения).
+TEST(TileCanvas, CompositeEqualTilesPreserveValueInSeam) {
+    // Два горизонтальных соседа одинакового значения с перекрытием:
+    // cross-fade двух равных значений = то же значение (без осветления/
+    // затемнения шва). Левый тайл непрозрачен (первый столбец, ramp_x=0),
+    // правый ramp’ится в перекрытии.
     TileCanvas c;
-    c.reset(3, 2, /*overlap_out=*/0, /*blend=*/true);
+    c.reset(3, 2);
     OutputImage a, b;
     a.width = b.width = 2;
     a.height = b.height = 2;
     a.channels_src = b.channels_src = 3;
     a.rgb.assign(2 * 2 * 3, 150);
     b.rgb.assign(2 * 2 * 3, 150);
-    c.paste(a, 0, 0);
-    c.paste(b, 1, 0);  // колонка x=1 перекрыта обоими
-    c.finalize();
-    // Везде должно остаться 150 (среднее равных значений).
+    c.composite(a, 0, 0, /*ramp_x=*/0, /*ramp_y=*/0);  // первый столбец
+    c.composite(b, 1, 0, /*ramp_x=*/1, /*ramp_y=*/0);  // x=1 перекрыт
     for (auto v : c.rgb) EXPECT_EQ(v, 150);
 }
 
-TEST(TileCanvas, BlendCleanInvariantAllowsReuse) {
-    // После finalize() буферы чисты (blend_clean) — повторный reset того
-    // же размера и новый проход дают корректный результат.
+TEST(TileCanvas, CompositeBlendsTowardNewTileInSeam) {
+    // Перекрытие тайлов с разными значениями: в зоне шва результат лежит
+    // строго между старым и новым значением (плавный переход, без скачка
+    // к чистому новому или чистому старому на кромке).
     TileCanvas c;
-    c.reset(2, 2, 0, true);
+    c.reset(4, 1);
+    OutputImage a, b;
+    a.width = b.width = 3;
+    a.height = b.height = 1;
+    a.channels_src = b.channels_src = 3;
+    a.rgb.assign(3 * 1 * 3, 0);    // левый тайл — чёрный
+    b.rgb.assign(3 * 1 * 3, 240);  // правый тайл — светлый
+    c.composite(a, 0, 0, /*ramp_x=*/0, 0);           // x: 0,1,2 ← 0
+    c.composite(b, 1, 0, /*ramp_x=*/2, 0);           // x: 1,2,3, ramp на 1,2
+    // x=0 — только a → 0.
+    EXPECT_EQ(c.rgb[(0) * 3], 0);
+    // x=1,2 — зона шва: между 0 и 240, монотонно растёт слева направо.
+    const int s1 = c.rgb[(1) * 3];
+    const int s2 = c.rgb[(2) * 3];
+    EXPECT_GT(s1, 0);
+    EXPECT_LT(s1, 240);
+    EXPECT_GT(s2, s1);
+    EXPECT_LT(s2, 240);
+    // x=3 — вне ramp’а правого тайла (d>=ramp) → чистый b.
+    EXPECT_EQ(c.rgb[(3) * 3], 240);
+}
+
+TEST(TileCanvas, CompositeReuseSameSize) {
+    // Повторный reset того же размера и новый проход дают корректный
+    // результат без «протёкших» значений предыдущего кадра.
+    TileCanvas c;
+    c.reset(2, 2);
     OutputImage t;
     t.width = 2;
     t.height = 2;
     t.channels_src = 3;
     t.rgb.assign(2 * 2 * 3, 60);
-    c.paste(t, 0, 0);
-    c.finalize();
+    c.composite(t, 0, 0, 0, 0);
 
-    c.reset(2, 2, 0, true);  // тот же размер — без полного memset
+    c.reset(2, 2);  // тот же размер — без realloc
     t.rgb.assign(2 * 2 * 3, 200);
-    c.paste(t, 0, 0);
-    c.finalize();
-    for (auto v : c.rgb) EXPECT_EQ(v, 200);  // нет «протёкших» 60
+    c.composite(t, 0, 0, 0, 0);
+    for (auto v : c.rgb) EXPECT_EQ(v, 200);
 }
