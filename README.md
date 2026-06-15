@@ -2,7 +2,18 @@
   <img src="docs/github-logo.png" alt="ii logo" width="600">
 </p>
 
+<p align="center">
+  <a href="https://github.com/DEgITx/ii/actions/workflows/ci.yml"><img src="https://github.com/DEgITx/ii/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/DEgITx/ii/releases/latest"><img src="https://img.shields.io/github/v/release/DEgITx/ii?label=release&sort=semver" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/DEgITx/ii" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/C%2B%2B-20-blue" alt="C++20">
+  <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey" alt="Platforms">
+  <a href="https://iirun.dev"><img src="https://img.shields.io/badge/website-iirun.dev-2ea44f" alt="Website"></a>
+</p>
+
 # ii — run neural networks anywhere, simply
+
+> **Official website: [iirun.dev](https://iirun.dev)** — downloads, documentation and examples.
 
 `ii` is a small, fast **inference library and command-line runner** for neural
 networks. Point it at a model and an image and it preprocesses the input, runs
@@ -93,6 +104,15 @@ pooling, normalization, resize, concat/slice/gather/reshape, reductions, …), a
 fans heavy kernels out across cores via an allocation-free parallel primitive
 that stays **bit-identical to serial**. It is the path to take when you want a
 small, dependency-free runner on an embedded device.
+
+## Download
+
+Prebuilt binaries for **Linux, Windows and macOS** are published on every
+release — grab the latest from the
+[**releases page**](https://github.com/DEgITx/ii/releases/latest) or from the
+official site [**iirun.dev**](https://iirun.dev). Each archive contains the `ii`
+executable plus the public headers, so it works both as a CLI and as a library
+drop-in. Prefer to build from source? See below.
 
 ## Building
 
