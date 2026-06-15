@@ -64,14 +64,15 @@ struct TileLayout {
 TileLayout plan_tiles(int src_w, int src_h, int tile_w, int tile_h,
                       int overlap);
 
-// Вырезать тайл из RGB-кадра. Если тайл выходит за границы (src < tile
-// или последний тайл смещён в пределы), за границей используется
-// replicate-edge (повтор крайнего пикселя) — избегаем чёрных полос
-// и серых padding-артефактов, которые SR-сеть честно бы «улучшила».
-// dst всегда имеет размер tile_w * tile_h * 3 и тип uint8 HWC.
-void extract_tile(const uint8_t* src_rgb, int src_w, int src_h,
+// Вырезать тайл из interleaved-кадра с `channels` каналами (3 — RGB,
+// 1 — grayscale/Y). Если тайл выходит за границы (src < tile или последний
+// тайл смещён в пределы), за границей используется replicate-edge (повтор
+// крайнего пикселя) — избегаем чёрных полос и серых padding-артефактов,
+// которые SR-сеть честно бы «улучшила». dst всегда имеет размер
+// tile_w * tile_h * channels и тип uint8 HWC.
+void extract_tile(const uint8_t* src, int src_w, int src_h,
                   int x0, int y0, int tile_w, int tile_h,
-                  std::vector<uint8_t>& dst);
+                  std::vector<uint8_t>& dst, int channels = 3);
 
 // Canvas для сборки тайлов в финальный кадр. Один uint8 RGB-буфер;
 // тайлы рисуются слева-направо/сверху-вниз и накладываются методом

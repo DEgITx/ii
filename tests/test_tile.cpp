@@ -119,6 +119,35 @@ TEST(ExtractTile, ReplicateEdgeBeyondBounds) {
     EXPECT_EQ(px(2, 2), 4);  // оба за краем → правый-нижний
 }
 
+TEST(ExtractTile, SingleChannelGray) {
+    // 3x2 grayscale (1 канал) источник, вырезаем 2x2 из (1,0).
+    std::vector<std::uint8_t> src = {
+        10, 20, 30,   // строка 0
+        40, 50, 60,   // строка 1
+    };
+    std::vector<std::uint8_t> dst;
+    extract_tile(src.data(), 3, 2, /*x0=*/1, /*y0=*/0, 2, 2, dst,
+                 /*channels=*/1);
+    ASSERT_EQ(dst.size(), 2u * 2u * 1u);
+    EXPECT_EQ(dst[0], 20);  // src(1,0)
+    EXPECT_EQ(dst[1], 30);  // src(2,0)
+    EXPECT_EQ(dst[2], 50);  // src(1,1)
+    EXPECT_EQ(dst[3], 60);  // src(2,1)
+}
+
+TEST(ExtractTile, SingleChannelReplicateEdge) {
+    // 2x2 gray, тайл 3x3 из (0,0): правый/нижний край повторяется.
+    std::vector<std::uint8_t> src = {1, 2,
+                                     3, 4};
+    std::vector<std::uint8_t> dst;
+    extract_tile(src.data(), 2, 2, 0, 0, 3, 3, dst, /*channels=*/1);
+    ASSERT_EQ(dst.size(), 3u * 3u * 1u);
+    auto px = [&](int x, int y) { return dst[y * 3 + x]; };
+    EXPECT_EQ(px(2, 0), 2);  // за правым краем → повтор x=1
+    EXPECT_EQ(px(0, 2), 3);  // за нижним краем → повтор y=1
+    EXPECT_EQ(px(2, 2), 4);  // оба за краем
+}
+
 // ---- TileCanvas: composite (overwrite, ramp=0) ----------------------------
 
 TEST(TileCanvas, OverwritePaste) {

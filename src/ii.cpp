@@ -59,6 +59,7 @@
 #include "frame_source.h"
 #include "image_proc.h"
 #include "inference.h"
+#include "parallel.h"
 #include "preprocess.h"
 #include "stats.h"
 #include "sysmon.h"
@@ -222,6 +223,13 @@ int main(int argc, char** argv) {
     ii::Engine::Options eopts;
     eopts.delegate_path = args.no_delegate ? std::string{} : args.delegate;
     eopts.num_threads   = args.threads;
+
+    // Размер пула параллельной CPU-постобработки (decode / composite /
+    // gray) для ЛЮБОГО бэкенда: дефолт 0 → все ядра, 1 → строго
+    // последовательно (для A/B-замеров). Встроенный ii-движок ставит то же
+    // значение в load() из Options::num_threads — здесь дублируем, чтобы и
+    // на TFLite/TRT/DML параллелизм управлялся через --threads.
+    ii::set_num_threads(args.threads);
 
     // Выбор бэкенда. Если --backend не задан, авто-выбираем «наиболее
     // удачный работоспособный»: load_best_engine перебирает собранные
@@ -720,8 +728,9 @@ int main(int argc, char** argv) {
     // сторона должна прервать цикл. Декод одного тайла, не сработавший,
     // пропускается без обрыва — для видео-цикла это важно, иначе один
     // битый кадр уронит весь поток.
-    ii::TileCanvas  tile_canvas;
-    ii::OutputImage tile_buf;   // scratch под декод одного тайла (только blend)
+    ii::TileCanvas       tile_canvas;
+    ii::OutputImage      tile_buf;    // scratch под декод одного тайла (только blend)
+    std::vector<uint8_t> src_gray;    // яркость всего кадра (gray-fast путь)
     auto run_tile_pass = [&](const uint8_t* src_rgb,
                              int src_w, int src_h) -> bool {
         if (image_output_idx < 0) return false;
@@ -733,13 +742,29 @@ int main(int argc, char** argv) {
         tile_canvas.reset(src_w * scale_x, src_h * scale_y);
         const std::size_t canvas_stride = (std::size_t)tile_canvas.width * 3;
         const auto& tile_info = out_info[image_output_idx];
+
+        // Gray-fast путь (NHWC C=1, типичный FSRCNN-Y и денойз по яркости):
+        // переводим ВЕСЬ кадр в яркость один раз параллельно, вместо BT.601
+        // на каждый тайл (24× по перекрывающимся областям на одном ядре).
+        // Дальше per-tile — лишь дешёвый вырез gray-тайла + квантизация.
+        const bool gray_fast =
+            (in_c == 1 && in_layout == ImageLayout::NHWC);
+        if (gray_fast)
+            rgb_to_gray(src_rgb, (size_t)src_w * src_h, src_gray);
+
         for (int j = 0; j < layout.ny(); ++j) {
             for (int i = 0; i < layout.nx(); ++i) {
                 const int x0 = layout.x0[i];
                 const int y0 = layout.y0[j];
-                ii::extract_tile(src_rgb, src_w, src_h, x0, y0,
-                                   in_w, in_h, input_rgb);
-                if (!fill_model_from_rgb()) return false;
+                if (gray_fast) {
+                    ii::extract_tile(src_gray.data(), src_w, src_h, x0, y0,
+                                       in_w, in_h, input_gray, /*channels=*/1);
+                    if (!fill_input(input_gray, in_info[0], in_t)) return false;
+                } else {
+                    ii::extract_tile(src_rgb, src_w, src_h, x0, y0,
+                                       in_w, in_h, input_rgb, 3);
+                    if (!fill_model_from_rgb()) return false;
+                }
                 if (!safe_invoke(*eng)) return false;
                 const void* tdata = eng->output_data(image_output_idx);
                 if (blend) {

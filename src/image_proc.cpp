@@ -11,8 +11,11 @@
 
 #include "image_proc.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+
+#include "parallel.h"
 
 // STB_IMAGE_WRITE_IMPLEMENTATION должен быть ровно в одной TU; здесь —
 // единственное место, где он подключается. ii.cpp подключает только
@@ -82,6 +85,13 @@ bool ensure_decode_lut(DecodeCache* cache, const ii::TensorDesc& info,
     return true;
 }
 
+// Минимальное число пикселей на параллельный кусок: ниже него дробить не
+// окупается (накладные расходы волны > выгоды). Грейн по строкам выводим
+// как kDecodeGrainPx / w, чтобы кусок содержал ~столько пикселей вне
+// зависимости от ширины выхода. Мелкий выход (single-image) останется
+// последовательным сам собой (см. parallel_for / plan_chunks).
+constexpr std::int64_t kDecodeGrainPx = 16384;
+
 // Тайтовое ядро декодера: проходит по тензору и пишет в произвольный
 // уголок буфера с заданным шагом строки. Параметризован функтором
 // conv (TSrc → uint8_t), что позволяет одним шаблоном обслуживать
@@ -89,33 +99,44 @@ bool ensure_decode_lut(DecodeCache* cache, const ii::TensorDesc& info,
 //
 // dst_base — адрес «логического» (dst_x, dst_y) пикселя в буфере, т.е.
 // caller уже сдвинул его на (dst_y * stride + dst_x * 3).
+//
+// Строки выхода независимы (каждая пишет в свой диапазон [y*stride ..]),
+// поэтому делим их между ядрами через parallel_for — результат бит-в-бит
+// совпадает с однопоточным. conv захватывает const-LUT/параметры, чтение
+// из нескольких потоков безопасно.
 template <typename TSrc, typename FConv>
 void decode_kernel(const TSrc* p, int w, int h, int c,
                    uint8_t* dst_base, std::size_t stride, FConv conv) {
+    const std::int64_t grain =
+        std::max<std::int64_t>(1, kDecodeGrainPx / (w > 0 ? w : 1));
     if (c == 3) {
-        for (int y = 0; y < h; ++y) {
-            uint8_t*    dp = dst_base + (std::size_t)y * stride;
-            const TSrc* sp = p + (std::size_t)y * w * 3;
-            for (int x = 0; x < w; ++x) {
-                dp[0] = conv(sp[0]);
-                dp[1] = conv(sp[1]);
-                dp[2] = conv(sp[2]);
-                dp += 3;
-                sp += 3;
+        ii::parallel_for(h, grain, [&](std::int64_t yb, std::int64_t ye) {
+            for (int y = (int)yb; y < (int)ye; ++y) {
+                uint8_t*    dp = dst_base + (std::size_t)y * stride;
+                const TSrc* sp = p + (std::size_t)y * w * 3;
+                for (int x = 0; x < w; ++x) {
+                    dp[0] = conv(sp[0]);
+                    dp[1] = conv(sp[1]);
+                    dp[2] = conv(sp[2]);
+                    dp += 3;
+                    sp += 3;
+                }
             }
-        }
+        });
     } else {
-        for (int y = 0; y < h; ++y) {
-            uint8_t*    dp = dst_base + (std::size_t)y * stride;
-            const TSrc* sp = p + (std::size_t)y * w;
-            for (int x = 0; x < w; ++x) {
-                const uint8_t b = conv(*sp++);
-                dp[0] = b;
-                dp[1] = b;
-                dp[2] = b;
-                dp += 3;
+        ii::parallel_for(h, grain, [&](std::int64_t yb, std::int64_t ye) {
+            for (int y = (int)yb; y < (int)ye; ++y) {
+                uint8_t*    dp = dst_base + (std::size_t)y * stride;
+                const TSrc* sp = p + (std::size_t)y * w;
+                for (int x = 0; x < w; ++x) {
+                    const uint8_t b = conv(*sp++);
+                    dp[0] = b;
+                    dp[1] = b;
+                    dp[2] = b;
+                    dp += 3;
+                }
             }
-        }
+        });
     }
 }
 

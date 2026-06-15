@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstring>
 
+#include "parallel.h"
+
 namespace ii {
 
 namespace {
@@ -63,10 +65,11 @@ TileLayout plan_tiles(int src_w, int src_h, int tile_w, int tile_h,
     return l;
 }
 
-void extract_tile(const uint8_t* src_rgb, int src_w, int src_h,
+void extract_tile(const uint8_t* src, int src_w, int src_h,
                   int x0, int y0, int tile_w, int tile_h,
-                  std::vector<uint8_t>& dst) {
-    dst.resize((size_t)tile_w * tile_h * 3);
+                  std::vector<uint8_t>& dst, int channels) {
+    const int ch = channels > 0 ? channels : 1;
+    dst.resize((size_t)tile_w * tile_h * ch);
 
     // Быстрый путь: тайл целиком внутри source — копируем построчно
     // через memcpy. Это самый частый случай (внутренние тайлы) и он
@@ -75,10 +78,10 @@ void extract_tile(const uint8_t* src_rgb, int src_w, int src_h,
     // позволить не можем.
     if (x0 >= 0 && y0 >= 0
         && x0 + tile_w <= src_w && y0 + tile_h <= src_h) {
-        const size_t row_bytes = (size_t)tile_w * 3;
+        const size_t row_bytes = (size_t)tile_w * ch;
         for (int y = 0; y < tile_h; ++y) {
             const uint8_t* sp =
-                &src_rgb[(size_t)((y0 + y) * src_w + x0) * 3];
+                &src[(size_t)((y0 + y) * src_w + x0) * ch];
             uint8_t* dp = &dst[(size_t)y * row_bytes];
             std::memcpy(dp, sp, row_bytes);
         }
@@ -96,11 +99,9 @@ void extract_tile(const uint8_t* src_rgb, int src_w, int src_h,
             int sx = x0 + x;
             if (sx < 0) sx = 0;
             else if (sx >= src_w) sx = src_w - 1;
-            const uint8_t* sp = &src_rgb[(size_t)(sy * src_w + sx) * 3];
-            uint8_t* dp = &dst[(size_t)(y * tile_w + x) * 3];
-            dp[0] = sp[0];
-            dp[1] = sp[1];
-            dp[2] = sp[2];
+            const uint8_t* sp = &src[(size_t)(sy * src_w + sx) * ch];
+            uint8_t* dp = &dst[(size_t)(y * tile_w + x) * ch];
+            for (int k = 0; k < ch; ++k) dp[k] = sp[k];
         }
     }
 }
@@ -142,31 +143,39 @@ void TileCanvas::composite(const ii::OutputImage& tile, int dst_x, int dst_y,
     const int x_end = std::min(tile.width,  width  - dst_x);
     if (y_beg >= y_end || x_beg >= x_end) return;
 
-    for (int y = y_beg; y < y_end; ++y) {
-        const int ay = lead_alpha(y, ramp_y);
-        const uint8_t* sp =
-            &tile.rgb[(size_t)(y * tile.width + x_beg) * 3];
-        uint8_t* dp =
-            &rgb[(size_t)((dst_y + y) * width + (dst_x + x_beg)) * 3];
+    // Строки независимы (каждая читает свою строку canvas+тайла и пишет свою),
+    // поэтому делим [y_beg, y_end) между ядрами. Зависимость «тайл N+1 читает
+    // запись тайла N в зоне перекрытия» не нарушается: тайлы по-прежнему идут
+    // по очереди, параллелится только нутро одного composite.
+    const std::int64_t grain =
+        std::max<std::int64_t>(1, 16384 / (width > 0 ? width : 1));
+    ii::parallel_for(y_end - y_beg, grain, [&](std::int64_t rb, std::int64_t re) {
+        for (int y = y_beg + (int)rb; y < y_beg + (int)re; ++y) {
+            const int ay = lead_alpha(y, ramp_y);
+            const uint8_t* sp =
+                &tile.rgb[(size_t)(y * tile.width + x_beg) * 3];
+            uint8_t* dp =
+                &rgb[(size_t)((dst_y + y) * width + (dst_x + x_beg)) * 3];
 
-        // Строка целиком непрозрачна (ни верхней, ни левой растушёвки) —
-        // простой byte-копир, как в overwrite-режиме.
-        if (ay == 256 && ramp_x <= 0) {
-            std::memcpy(dp, sp, (size_t)(x_end - x_beg) * 3);
-            continue;
-        }
-        for (int x = x_beg; x < x_end; ++x, sp += 3, dp += 3) {
-            const int a = (lead_alpha(x, ramp_x) * ay) >> 8;  // 0..256
-            if (a >= 256) {                                    // непрозрачно — копия
-                dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
-            } else {
-                const int ia = 256 - a;
-                dp[0] = (uint8_t)((a * sp[0] + ia * dp[0] + 128) >> 8);
-                dp[1] = (uint8_t)((a * sp[1] + ia * dp[1] + 128) >> 8);
-                dp[2] = (uint8_t)((a * sp[2] + ia * dp[2] + 128) >> 8);
+            // Строка целиком непрозрачна (ни верхней, ни левой растушёвки) —
+            // простой byte-копир, как в overwrite-режиме.
+            if (ay == 256 && ramp_x <= 0) {
+                std::memcpy(dp, sp, (size_t)(x_end - x_beg) * 3);
+                continue;
+            }
+            for (int x = x_beg; x < x_end; ++x, sp += 3, dp += 3) {
+                const int a = (lead_alpha(x, ramp_x) * ay) >> 8;  // 0..256
+                if (a >= 256) {                                    // непрозрачно — копия
+                    dp[0] = sp[0]; dp[1] = sp[1]; dp[2] = sp[2];
+                } else {
+                    const int ia = 256 - a;
+                    dp[0] = (uint8_t)((a * sp[0] + ia * dp[0] + 128) >> 8);
+                    dp[1] = (uint8_t)((a * sp[1] + ia * dp[1] + 128) >> 8);
+                    dp[2] = (uint8_t)((a * sp[2] + ia * dp[2] + 128) >> 8);
+                }
             }
         }
-    }
+    });
 }
 
 } // namespace ii

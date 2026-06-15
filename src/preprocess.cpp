@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "parallel.h"
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -64,12 +66,19 @@ void letterbox(const uint8_t* src_rgb, int src_w, int src_h,
 void rgb_to_gray(const uint8_t* rgb, std::size_t pixels,
                  std::vector<uint8_t>& gray) {
     gray.resize(pixels);
-    for (std::size_t i = 0; i < pixels; ++i) {
-        const unsigned r = rgb[i * 3 + 0];
-        const unsigned g = rgb[i * 3 + 1];
-        const unsigned b = rgb[i * 3 + 2];
-        gray[i] = (uint8_t)((77u * r + 150u * g + 29u * b) >> 8);
-    }
+    uint8_t* dst = gray.data();
+    // Пиксели независимы → делим между ядрами. На мелком буфере (per-tile
+    // 96×96) останется последовательным сам собой (grain), на крупном
+    // (весь кадр в tile-режиме) задействует все ядра. Грейн ~16K пикселей.
+    ii::parallel_for((std::int64_t)pixels, 16384,
+                     [&](std::int64_t b, std::int64_t e) {
+        for (std::int64_t i = b; i < e; ++i) {
+            const unsigned r = rgb[i * 3 + 0];
+            const unsigned g = rgb[i * 3 + 1];
+            const unsigned bl = rgb[i * 3 + 2];
+            dst[i] = (uint8_t)((77u * r + 150u * g + 29u * bl) >> 8);
+        }
+    });
 }
 
 namespace {
