@@ -415,3 +415,317 @@ TEST(Reduce, MeanSumMaxAlongAxis) {
     EXPECT_TRUE(all.shape.empty());
     expect_data(all, {21});
 }
+
+TEST(Reduce, MinKindAndKeepdims) {
+    Tensor x(Shape{2, 3}, std::vector<float>{1, 5, 2, 4, 0, 6});
+    expect_data(ii::reduce(x, {1}, false, 3), {1, 0});  // min по оси
+    // keepdims сохраняет редуцируемую ось как 1.
+    Tensor k = ii::reduce(x, {1}, true, 3);
+    EXPECT_EQ(k.shape, (Shape{2, 1}));
+    expect_data(k, {1, 0});
+    // редукция по всем осям с keepdims -> форма из единиц.
+    Tensor allk = ii::reduce(x, {}, true, 2);  // max всех
+    EXPECT_EQ(allk.shape, (Shape{1, 1}));
+    expect_data(allk, {6});
+}
+
+TEST(Reduce, MultiAxis3D) {
+    // (2,2,2): сумма по осям 0 и 2 -> остаётся ось 1 размера 2.
+    Tensor x(Shape{2, 2, 2},
+             std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8});
+    // элементы с j=0: индексы 0,1,4,5 = 1+2+5+6 = 14; j=1: 3+4+7+8 = 22.
+    Tensor y = ii::reduce(x, {0, 2}, false, 0);
+    EXPECT_EQ(y.shape, (Shape{2}));
+    expect_data(y, {14, 22});
+}
+
+// ---- активации: оставшиеся ветки ------------------------------------------
+
+TEST(Activations, TanhAndScalars) {
+    Tensor x(Shape{3}, std::vector<float>{-1, 0, 2});
+    expect_data(ii::tanh_(x), {std::tanh(-1.0f), 0.0f, std::tanh(2.0f)});
+    expect_data(ii::add_scalar(x, 10.0f), {9, 10, 12});
+    expect_data(ii::mul_scalar(x, -2.0f), {2, 0, -4});
+}
+
+TEST(Activations, SigmoidStableLargeNegative) {
+    // exp(+inf) не должен давать NaN: sigmoid(-100) ~ 0, sigmoid(100) ~ 1.
+    Tensor x(Shape{2}, std::vector<float>{-100.0f, 100.0f});
+    Tensor y = ii::sigmoid(x);
+    EXPECT_NEAR(y.data[0], 0.0f, 1e-6f);
+    EXPECT_NEAR(y.data[1], 1.0f, 1e-6f);
+    EXPECT_FALSE(std::isnan(y.data[0]));
+}
+
+TEST(Activations, ClipOneSidedInfinity) {
+    Tensor x(Shape{4}, std::vector<float>{-5, -1, 1, 5});
+    // только нижняя граница (как Clip с min, без max).
+    expect_data(ii::clip(x, 0.0f, INFINITY), {0, 0, 1, 5});
+    // только верхняя граница.
+    expect_data(ii::clip(x, -INFINITY, 0.0f), {-5, -1, 0, 0});
+}
+
+// ---- softmax: строчный (strided) путь и ошибка оси ------------------------
+
+TEST(Softmax, MiddleAxisStrided) {
+    // (2,2), softmax по оси 0 -> inner==2, ходим по входу с шагом.
+    Tensor x(Shape{2, 2}, std::vector<float>{1, 2, 3, 4});
+    Tensor y = ii::softmax(x, 0);
+    float a = std::exp(-2.0f), b = 1.0f, s = a + b;  // столбец [v, v+2]
+    expect_data(y, {a / s, a / s, b / s, b / s});
+}
+
+TEST(Softmax, AxisOutOfRangeThrows) {
+    Tensor x(Shape{2, 3});
+    EXPECT_THROW(ii::softmax(x, 5), std::runtime_error);
+}
+
+// ---- layernorm: смещение и не-последняя ось -------------------------------
+
+TEST(LayerNorm, WithWeightAndBias) {
+    Tensor x(Shape{1, 4}, std::vector<float>{1, 2, 3, 4});
+    Tensor w(Shape{4}, std::vector<float>{2, 2, 2, 2});
+    Tensor b(Shape{4}, std::vector<float>{1, 1, 1, 1});
+    Tensor y = ii::layer_norm(x, w, b, -1, 1e-5f);
+    float inv = 1.0f / std::sqrt(1.25f + 1e-5f);
+    expect_data(y, {-1.5f * 2 * inv + 1, -0.5f * 2 * inv + 1,
+                    0.5f * 2 * inv + 1, 1.5f * 2 * inv + 1}, 1e-3f);
+}
+
+TEST(LayerNorm, NormalizesTailFromAxis) {
+    // axis=1 на (2,2): каждая строка нормируется отдельно по 2 элементам.
+    Tensor x(Shape{2, 2}, std::vector<float>{1, 3, 10, 14});
+    Tensor w(Shape{2}, std::vector<float>{1, 1});
+    Tensor b;
+    Tensor y = ii::layer_norm(x, w, b, 1, 0.0f);
+    // строка [1,3]: mean 2, var 1 -> [-1, 1]; строка [10,14]: mean 12, var 4 -> [-1, 1].
+    expect_data(y, {-1, 1, -1, 1}, 1e-4f);
+}
+
+TEST(LayerNorm, SizeMismatchThrows) {
+    Tensor x(Shape{1, 4}, std::vector<float>{1, 2, 3, 4});
+    Tensor w(Shape{3}, std::vector<float>{1, 1, 1});  // не совпадает с хвостом 4
+    Tensor b;
+    EXPECT_THROW(ii::layer_norm(x, w, b, -1, 1e-5f), std::runtime_error);
+}
+
+// ---- matmul / gemm: оставшиеся ветки --------------------------------------
+
+TEST(MatMul, MatrixTimesVector) {
+    // (2,3) x (3) -> (2): правый операнд 1-D промоутится к (3,1).
+    Tensor a(Shape{2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor b(Shape{3}, std::vector<float>{1, 1, 1});
+    Tensor y = ii::matmul(a, b);
+    EXPECT_EQ(y.shape, (Shape{2}));
+    expect_data(y, {6, 15});
+}
+
+TEST(MatMul, VectorDotVector) {
+    // (3) x (3) -> скаляр (оба 1-D схлопываются).
+    Tensor a(Shape{3}, std::vector<float>{1, 2, 3});
+    Tensor b(Shape{3}, std::vector<float>{4, 5, 6});
+    Tensor y = ii::matmul(a, b);
+    EXPECT_TRUE(y.shape.empty());
+    expect_data(y, {32});
+}
+
+TEST(MatMul, BatchedBroadcastLhs) {
+    // A:(2,2) единичная, B:(2,2,2) батч — broadcast A по батчу -> B без изменений.
+    Tensor a(Shape{2, 2}, std::vector<float>{1, 0, 0, 1});
+    Tensor b(Shape{2, 2, 2}, std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8});
+    Tensor y = ii::matmul(a, b);
+    EXPECT_EQ(y.shape, (Shape{2, 2, 2}));
+    expect_data(y, {1, 2, 3, 4, 5, 6, 7, 8});
+}
+
+TEST(MatMul, InnerMismatchThrows) {
+    Tensor a(Shape{2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor b(Shape{2, 2}, std::vector<float>{1, 2, 3, 4});
+    EXPECT_THROW(ii::matmul(a, b), std::runtime_error);
+}
+
+TEST(Gemm, AlphaBetaScaling) {
+    Tensor a(Shape{2, 2}, std::vector<float>{1, 2, 3, 4});
+    Tensor b(Shape{2, 2}, std::vector<float>{1, 0, 0, 1});  // единичная
+    Tensor c(Shape{2, 2}, std::vector<float>{1, 1, 1, 1});
+    // 2*A*I + 3*C = 2*[1,2,3,4] + [3,3,3,3].
+    expect_data(ii::gemm(a, b, c, 2.0f, 3.0f, false, false), {5, 7, 9, 11});
+}
+
+TEST(Gemm, TransBEqualsTransposedRhs) {
+    // B^T: B:(2,3) транспонируется к (3,2). A:(2,3) x B^T:(3,2) -> (2,2).
+    Tensor a(Shape{2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor b(Shape{2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor c;
+    expect_data(ii::gemm(a, b, c, 1.0f, 0.0f, false, true), {14, 32, 32, 77});
+}
+
+TEST(Gemm, KMismatchThrows) {
+    Tensor a(Shape{2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor b(Shape{2, 2}, std::vector<float>{1, 2, 3, 4});
+    Tensor c;
+    EXPECT_THROW(ii::gemm(a, b, c, 1.0f, 1.0f, false, false), std::runtime_error);
+}
+
+// ---- свёртка: оставшиеся пути (1x1, im2col Cg>1, дилатация, ошибки) --------
+
+TEST(Conv2D, Pointwise1x1MultiChannel) {
+    // 1x1-свёртка по 2 каналам, 2 фильтра-селектора (no_im2col-путь, Cg>1).
+    Tensor x(Shape{1, 2, 2, 2}, std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8});
+    Tensor w(Shape{2, 2, 1, 1}, std::vector<float>{1, 0, 0, 1});  // f0->ch0, f1->ch1
+    Tensor b;
+    Tensor y = ii::conv2d(x, w, b, {});
+    EXPECT_EQ(y.shape, (Shape{1, 2, 2, 2}));
+    expect_data(y, {1, 2, 3, 4, 5, 6, 7, 8});
+}
+
+TEST(Conv2D, MultiChannelIm2col) {
+    // 2 входных канала, ядро 2x2 единиц, без паддинга -> сумма всех 8 значений.
+    Tensor x(Shape{1, 2, 2, 2}, std::vector<float>{1, 2, 3, 4, 10, 20, 30, 40});
+    Tensor w(Shape{1, 2, 2, 2}, std::vector<float>(8, 1.0f));
+    Tensor b;
+    Tensor y = ii::conv2d(x, w, b, {});
+    EXPECT_EQ(y.shape, (Shape{1, 1, 1, 1}));
+    expect_data(y, {110});
+}
+
+TEST(Conv2D, Dilation) {
+    // depthwise-путь (1 канал) с дилатацией 2: ядро 2x2 «видит» углы 3x3.
+    Tensor x(Shape{1, 1, 3, 3}, std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8, 9});
+    Tensor w(Shape{1, 1, 2, 2}, std::vector<float>{1, 1, 1, 1});
+    Tensor b;
+    ii::Conv2DParams p;
+    p.dilation = {2, 2};
+    Tensor y = ii::conv2d(x, w, b, p);  // OH=OW=1
+    EXPECT_EQ(y.shape, (Shape{1, 1, 1, 1}));
+    expect_data(y, {1 + 3 + 7 + 9});  // 20
+}
+
+TEST(Conv2D, MultiBatch) {
+    // Два изображения в батче, depthwise 1x1 умножение на 10.
+    Tensor x(Shape{2, 1, 1, 2}, std::vector<float>{1, 2, 3, 4});
+    Tensor w(Shape{1, 1, 1, 1}, std::vector<float>{10});
+    Tensor b;
+    Tensor y = ii::conv2d(x, w, b, {});
+    EXPECT_EQ(y.shape, (Shape{2, 1, 1, 2}));
+    expect_data(y, {10, 20, 30, 40});
+}
+
+TEST(Conv2D, BadShapeThrows) {
+    Tensor x2d(Shape{2, 2}, std::vector<float>{1, 2, 3, 4});
+    Tensor w(Shape{1, 1, 2, 2}, std::vector<float>{1, 1, 1, 1});
+    Tensor b;
+    EXPECT_THROW(ii::conv2d(x2d, w, b, {}), std::runtime_error);  // не 4-D
+
+    // каналы входа не согласованы с весами/группами.
+    Tensor x(Shape{1, 3, 2, 2}, std::vector<float>(12, 1.0f));
+    Tensor wbad(Shape{1, 2, 1, 1}, std::vector<float>{1, 1});  // ждёт C=2
+    EXPECT_THROW(ii::conv2d(x, wbad, b, {}), std::runtime_error);
+}
+
+// ---- пулинг: паддинг и count_include_pad ----------------------------------
+
+TEST(Pool, AvgCountIncludePad) {
+    // Один пиксель, окно 2x2 с паддингом справа/снизу: 1 валидный + 3 «нулевых».
+    Tensor x(Shape{1, 1, 1, 1}, std::vector<float>{4});
+    ii::PoolParams p;
+    p.kernel = {2, 2};
+    p.stride = {1, 1};
+    p.pad = {0, 0, 1, 1};  // bottom, right
+    p.count_include_pad = false;
+    expect_data(ii::avgpool2d(x, p), {4});       // среднее только по валидным
+    p.count_include_pad = true;
+    expect_data(ii::avgpool2d(x, p), {1});       // (4+0+0+0)/4
+}
+
+TEST(Pool, MaxWithPadding) {
+    // Паддинг не влияет на max (нули-паддинги не учитываются в окне).
+    Tensor x(Shape{1, 1, 2, 2}, std::vector<float>{1, 2, 3, 4});
+    ii::PoolParams p;
+    p.kernel = {2, 2};
+    p.stride = {1, 1};
+    p.pad = {1, 1, 0, 0};  // top, left
+    Tensor y = ii::maxpool2d(x, p);
+    EXPECT_EQ(y.shape, (Shape{1, 1, 2, 2}));
+    // верхний-левый выход «видит» только x[0,0]=1; центр -> max всех = 4.
+    EXPECT_NEAR(y.data[0], 1.0f, 1e-4f);
+    EXPECT_NEAR(y.data[3], 4.0f, 1e-4f);
+}
+
+// ---- concat: 3 входа и ошибки несовместимости -----------------------------
+
+TEST(Concat, ThreeInputsAndMismatch) {
+    Tensor a(Shape{2, 1}, std::vector<float>{1, 4});
+    Tensor b(Shape{2, 2}, std::vector<float>{2, 3, 5, 6});
+    Tensor c(Shape{2, 1}, std::vector<float>{7, 8});
+    Tensor y = ii::concat({&a, &b, &c}, 1);
+    EXPECT_EQ(y.shape, (Shape{2, 4}));
+    expect_data(y, {1, 2, 3, 7, 4, 5, 6, 8});
+
+    Tensor bad(Shape{3, 1}, std::vector<float>{0, 0, 0});  // расходится по оси 0
+    EXPECT_THROW(ii::concat({&a, &bad}, 1), std::runtime_error);
+    Tensor diffnd(Shape{2}, std::vector<float>{0, 0});
+    EXPECT_THROW(ii::concat({&a, &diffnd}, 1), std::runtime_error);
+}
+
+// ---- transpose: проверка данных 3-D ---------------------------------------
+
+TEST(Transpose, ThreeDimData) {
+    Tensor x(Shape{2, 2, 2}, std::vector<float>{0, 1, 2, 3, 4, 5, 6, 7});
+    Tensor y = ii::transpose(x, {1, 0, 2});  // меняем местами две внешние оси
+    EXPECT_EQ(y.shape, (Shape{2, 2, 2}));
+    expect_data(y, {0, 1, 4, 5, 2, 3, 6, 7});
+    EXPECT_THROW(ii::transpose(x, {0, 1}), std::runtime_error);  // длина perm != ndim
+}
+
+// ---- resize: оставшиеся режимы nearest ------------------------------------
+
+TEST(Resize, NearestFloorDownscale) {
+    // scale 0.5, asymmetric, floor: [10,20,30,40] -> [10,30].
+    Tensor x(Shape{4}, std::vector<float>{10, 20, 30, 40});
+    Tensor y = ii::resize(x, {0.5f}, ii::ResizeMode::Nearest,
+                          ii::ResizeCoord::Asymmetric, ii::ResizeNearest::Floor);
+    EXPECT_EQ(y.shape, (Shape{2}));
+    expect_data(y, {10, 30});
+}
+
+TEST(Resize, NearestCeilUpscale) {
+    Tensor x(Shape{2}, std::vector<float>{10, 20});
+    Tensor y = ii::resize(x, {1.5f}, ii::ResizeMode::Nearest,
+                          ii::ResizeCoord::Asymmetric, ii::ResizeNearest::Ceil);
+    EXPECT_EQ(y.shape, (Shape{3}));      // floor(2*1.5)
+    expect_data(y, {10, 20, 20});        // o=0->0; o=1->ceil(.667)=1; o=2->ceil(1.333)=2->clamp1
+}
+
+// ---- slice / split / gather: оставшиеся ветки и ошибки ---------------------
+
+TEST(Slice, ExplicitAxis) {
+    Tensor x(Shape{2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor y = ii::slice(x, {0}, {1}, {0}, {});  // первая строка по оси 0
+    EXPECT_EQ(y.shape, (Shape{1, 3}));
+    expect_data(y, {1, 2, 3});
+}
+
+TEST(Slice, ZeroStepThrows) {
+    Tensor x(Shape{4}, std::vector<float>{1, 2, 3, 4});
+    EXPECT_THROW(ii::slice(x, {0}, {4}, {0}, {0}), std::runtime_error);
+}
+
+TEST(Split, SumMismatchThrows) {
+    Tensor x(Shape{2, 4}, std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8});
+    EXPECT_THROW(ii::split(x, 1, {2, 1}), std::runtime_error);  // 3 != 4
+}
+
+TEST(Gather, Axis1Negative) {
+    Tensor x(Shape{2, 3}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor idx(Shape{2}, std::vector<float>{-1, 0});  // последний и первый столбцы
+    Tensor y = ii::gather(x, idx, 1);
+    EXPECT_EQ(y.shape, (Shape{2, 2}));
+    expect_data(y, {3, 1, 6, 4});
+}
+
+TEST(Gather, IndexOutOfRangeThrows) {
+    Tensor x(Shape{3, 2}, std::vector<float>{1, 2, 3, 4, 5, 6});
+    Tensor idx(Shape{1}, std::vector<float>{5});  // вне [0,3)
+    EXPECT_THROW(ii::gather(x, idx, 0), std::runtime_error);
+}
