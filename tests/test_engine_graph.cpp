@@ -312,6 +312,87 @@ TEST(Executor, ConvUnsupportedAutoPadFails) {
     EXPECT_FALSE(ex.run(in));
 }
 
+// Erf — поэлементная функция ошибки (встречается в явных формулах GELU).
+// Форма сохраняется, значения сверяем с std::erf вручную.
+TEST(Executor, Erf) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"y"};
+    g.nodes.push_back(mk("Erf", {"x"}, {"y"}));
+    Executor ex(g);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{2, 2}, std::vector<float>{0.0f, 1.0f, -1.0f, 0.5f});
+    ASSERT_TRUE(ex.run(in));
+    const Tensor* y = ex.output(0);
+    ASSERT_NE(y, nullptr);
+    EXPECT_EQ(y->shape, (Shape{2, 2}));
+    EXPECT_NEAR(y->data[0], 0.0f, 1e-5f);
+    EXPECT_NEAR(y->data[1], 0.8427008f, 1e-5f);
+    EXPECT_NEAR(y->data[2], -0.8427008f, 1e-5f);
+    EXPECT_NEAR(y->data[3], 0.5204999f, 1e-5f);
+}
+
+// Flatten со значением атрибута axis по умолчанию (axis=1): [2,3,4] -> [2,12].
+// Данные идут row-major, поэтому порядок не меняется — только форма.
+TEST(Executor, FlattenDefaultAxis) {
+    Graph g;
+    g.input_names = {"x"};
+    g.output_names = {"y"};
+    g.nodes.push_back(mk("Flatten", {"x"}, {"y"}));
+    Executor ex(g);
+    std::vector<float> vals(24);
+    for (int i = 0; i < 24; ++i) vals[i] = static_cast<float>(i);
+    std::unordered_map<std::string, Tensor> in;
+    in["x"] = Tensor(Shape{2, 3, 4}, vals);
+    ASSERT_TRUE(ex.run(in));
+    const Tensor* y = ex.output(0);
+    ASSERT_NE(y, nullptr);
+    EXPECT_EQ(y->shape, (Shape{2, 12}));
+    EXPECT_EQ(y->data, vals);
+}
+
+// Flatten с явными axis=2 и axis=0 (граничные значения): меняется только
+// разбивка outer/inner, число элементов и порядок сохраняются.
+TEST(Executor, FlattenExplicitAxis) {
+    std::vector<float> vals(24);
+    for (int i = 0; i < 24; ++i) vals[i] = static_cast<float>(i);
+
+    // axis=2: outer=2*3=6, inner=4 -> [6,4].
+    {
+        Graph g;
+        g.input_names = {"x"};
+        g.output_names = {"y"};
+        Node f = mk("Flatten", {"x"}, {"y"});
+        f.attrs["axis"] = Attribute{{2}, {}, ""};
+        g.nodes.push_back(f);
+        Executor ex(g);
+        std::unordered_map<std::string, Tensor> in;
+        in["x"] = Tensor(Shape{2, 3, 4}, vals);
+        ASSERT_TRUE(ex.run(in));
+        const Tensor* y = ex.output(0);
+        ASSERT_NE(y, nullptr);
+        EXPECT_EQ(y->shape, (Shape{6, 4}));
+        EXPECT_EQ(y->data, vals);
+    }
+    // axis=0: outer=1, inner=24 -> [1,24].
+    {
+        Graph g;
+        g.input_names = {"x"};
+        g.output_names = {"y"};
+        Node f = mk("Flatten", {"x"}, {"y"});
+        f.attrs["axis"] = Attribute{{0}, {}, ""};
+        g.nodes.push_back(f);
+        Executor ex(g);
+        std::unordered_map<std::string, Tensor> in;
+        in["x"] = Tensor(Shape{2, 3, 4}, vals);
+        ASSERT_TRUE(ex.run(in));
+        const Tensor* y = ex.output(0);
+        ASSERT_NE(y, nullptr);
+        EXPECT_EQ(y->shape, (Shape{1, 24}));
+        EXPECT_EQ(y->data, vals);
+    }
+}
+
 // Реестр ядер расширяем извне: регистрируем свой слой и используем его.
 TEST(Registry, CustomKernel) {
     ii::register_op("Doubler", [](auto& in, const Node&) {
