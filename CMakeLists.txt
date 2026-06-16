@@ -111,7 +111,8 @@ add_library(ii_core STATIC
     ${II_SRC_DIR}/delegate.cpp
     ${II_SRC_DIR}/image_proc.cpp
     ${II_SRC_DIR}/tile.cpp
-    ${II_SRC_DIR}/parallel.cpp)
+    ${II_SRC_DIR}/parallel.cpp
+    ${II_SRC_DIR}/pipeline.cpp)
 
 # Заголовки лежат рядом с исходниками — src/ доступен и потребителям
 # библиотеки (бинарь, тесты, встраивающее приложение), поэтому PUBLIC.

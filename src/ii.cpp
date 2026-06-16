@@ -60,6 +60,7 @@
 #include "image_proc.h"
 #include "inference.h"
 #include "parallel.h"
+#include "pipeline.h"
 #include "preprocess.h"
 #include "stats.h"
 #include "sysmon.h"
@@ -731,6 +732,27 @@ int main(int argc, char** argv) {
     ii::TileCanvas       tile_canvas;
     ii::OutputImage      tile_buf;    // scratch под декод одного тайла (только blend)
     std::vector<uint8_t> src_gray;    // яркость всего кадра (gray-fast путь)
+
+    // ---- Конвейер NPU↕CPU для tile-режима --------------------------------
+    // invoke тайла (NPU, главный поток) перекрывается с decode+composite
+    // предыдущего тайла (CPU, фоновый поток) — см. src/pipeline.h. Когда
+    // invoke и постобработка сопоставимы (типичный SR-tiling), это сводит
+    // время кадра к max(Σinvoke, Σdecode) вместо суммы.
+    //
+    // Слот = копия СЫРОГО выхода одного тайла + его позиция. Копия
+    // обязательна: eng->output_data() указывает в арену движка и
+    // затирается следующим invoke, поэтому продюсер копирует выход до того,
+    // как займётся следующим тайлом. tile_slots переживают кадры —
+    // .assign() переиспользует ёмкость (steady-state без realloc).
+    struct TileSlot {
+        std::vector<uint8_t> raw;   // байты eng->output_data(image_output_idx)
+        int x0 = 0, y0 = 0;         // позиция тайла в input-space
+        int i = 0, j = 0;           // индексы в сетке (для feathering-ramp)
+    };
+    const int pipe_depth = std::max(1, args.tile_pipeline_depth);
+    ii::Pipeline          tile_pipe(pipe_depth);
+    std::vector<TileSlot> tile_slots(pipe_depth);
+
     auto run_tile_pass = [&](const uint8_t* src_rgb,
                              int src_w, int src_h) -> bool {
         if (image_output_idx < 0) return false;
@@ -742,62 +764,81 @@ int main(int argc, char** argv) {
         tile_canvas.reset(src_w * scale_x, src_h * scale_y);
         const std::size_t canvas_stride = (std::size_t)tile_canvas.width * 3;
         const auto& tile_info = out_info[image_output_idx];
+        const int   nx = layout.nx();
+        const int   n  = layout.count();
 
         // Gray-fast путь (NHWC C=1, типичный FSRCNN-Y и денойз по яркости):
         // переводим ВЕСЬ кадр в яркость один раз параллельно, вместо BT.601
         // на каждый тайл (24× по перекрывающимся областям на одном ядре).
         // Дальше per-tile — лишь дешёвый вырез gray-тайла + квантизация.
+        // Делаем это на главном потоке до запуска конвейера — фоновый
+        // (consumer) поток в этот момент простаивает, гонок за src_gray нет.
         const bool gray_fast =
             (in_c == 1 && in_layout == ImageLayout::NHWC);
         if (gray_fast)
             rgb_to_gray(src_rgb, (size_t)src_w * src_h, src_gray);
 
-        for (int j = 0; j < layout.ny(); ++j) {
-            for (int i = 0; i < layout.nx(); ++i) {
-                const int x0 = layout.x0[i];
-                const int y0 = layout.y0[j];
-                if (gray_fast) {
-                    ii::extract_tile(src_gray.data(), src_w, src_h, x0, y0,
-                                       in_w, in_h, input_gray, /*channels=*/1);
-                    if (!fill_input(input_gray, in_info[0], in_t)) return false;
-                } else {
-                    ii::extract_tile(src_rgb, src_w, src_h, x0, y0,
-                                       in_w, in_h, input_rgb, 3);
-                    if (!fill_model_from_rgb()) return false;
-                }
-                if (!safe_invoke(*eng)) return false;
-                const void* tdata = eng->output_data(image_output_idx);
-                if (blend) {
-                    // Декод во временный буфер, затем over-composite на
-                    // canvas. Растушёвка только по ведущим краям: левый
-                    // край ramp’ится при i>0 (есть уже нарисованный сосед
-                    // слева), верхний — при j>0; первый столбец/строка
-                    // непрозрачны.
-                    if (!ii::decode_image_output(
-                            tile_info, tdata, dec_opts, tile_buf,
-                            &dec_cache)) {
-                        continue;
-                    }
-                    tile_canvas.composite(tile_buf,
-                                          x0 * scale_x, y0 * scale_y,
-                                          i > 0 ? ramp_x : 0,
-                                          j > 0 ? ramp_y : 0);
-                } else {
-                    // Overwrite-режим: пишем декодированный тайл сразу
-                    // в нужную позицию canvas’а — никаких промежуточных
-                    // буферов и memcpy. Тайл целиком помещается в canvas
-                    // (plan_tiles снэпает последний к краю), поэтому
-                    // дополнительного клиппинга не требуется.
-                    if (!ii::decode_image_output_to(
-                            tile_info, tdata, dec_opts,
-                            tile_canvas.rgb.data(), canvas_stride,
-                            x0 * scale_x, y0 * scale_y,
-                            &dec_cache)) {
-                        continue;
-                    }
-                }
+        // produce(t): главный поток — вырез тайла, заливка входа, invoke,
+        // копия выхода в слот t. Фатальная ошибка (заливка/invoke) → false,
+        // конвейер останавливается, run() вернёт false (как старый return).
+        auto produce = [&](int t) -> bool {
+            const int i = t % nx, j = t / nx;
+            TileSlot& s = tile_slots[t % pipe_depth];
+            s.i  = i; s.j = j;
+            s.x0 = layout.x0[i];
+            s.y0 = layout.y0[j];
+            if (gray_fast) {
+                ii::extract_tile(src_gray.data(), src_w, src_h, s.x0, s.y0,
+                                   in_w, in_h, input_gray, /*channels=*/1);
+                if (!fill_input(input_gray, in_info[0], in_t)) return false;
+            } else {
+                ii::extract_tile(src_rgb, src_w, src_h, s.x0, s.y0,
+                                   in_w, in_h, input_rgb, 3);
+                if (!fill_model_from_rgb()) return false;
             }
-        }
+            if (!safe_invoke(*eng)) return false;
+            // Копируем сырой выход из арены, иначе следующий invoke его затрёт.
+            const auto* td = static_cast<const uint8_t*>(
+                eng->output_data(image_output_idx));
+            s.raw.assign(td, td + tile_info.bytes);
+            return true;
+        };
+
+        // consume(t): ФОНОВЫЙ поток — декод слота t и вставка в canvas, строго
+        // в порядке t (composite опирается на уже нарисованных соседей).
+        // tile_buf / dec_cache / canvas трогает только этот поток, поэтому
+        // гонок нет. Несработавший декод одного тайла пропускаем (как старый
+        // continue) — один битый тайл не должен ронять кадр.
+        auto consume = [&](int t) {
+            const TileSlot& s = tile_slots[t % pipe_depth];
+            if (blend) {
+                // Декод во временный буфер, затем over-composite на canvas.
+                // Растушёвка только по ведущим краям: левый ramp’ится при
+                // i>0 (есть нарисованный сосед слева), верхний — при j>0.
+                if (!ii::decode_image_output(
+                        tile_info, s.raw.data(), dec_opts, tile_buf,
+                        &dec_cache)) {
+                    return;
+                }
+                tile_canvas.composite(tile_buf,
+                                      s.x0 * scale_x, s.y0 * scale_y,
+                                      s.i > 0 ? ramp_x : 0,
+                                      s.j > 0 ? ramp_y : 0);
+            } else {
+                // Overwrite-режим: пишем декодированный тайл сразу в нужную
+                // позицию canvas’а — без промежуточного буфера и memcpy.
+                // Тайл целиком помещается в canvas (plan_tiles снэпает
+                // последний к краю), доп. клиппинга не требуется.
+                ii::decode_image_output_to(
+                    tile_info, s.raw.data(), dec_opts,
+                    tile_canvas.rgb.data(), canvas_stride,
+                    s.x0 * scale_x, s.y0 * scale_y,
+                    &dec_cache);
+            }
+        };
+
+        if (!tile_pipe.run(n, produce, consume)) return false;
+
         // Перекидываем итог в out_img через swap (O(1), вместо copy ~8 МБ
         // для 1996×1332). out_img и tile_canvas.rgb — оба полноразмерные,
         // поэтому swap ping-pong’ает два буфера одного размера и следующий

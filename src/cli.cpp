@@ -69,6 +69,10 @@ void print_usage(const char* prog) {
         "                      (по умолчанию 0). >0 включает линейное\n"
         "                      feathering — швы становятся незаметны, ценой\n"
         "                      ~16 байт/пиксель canvas'а на float-буферы.\n"
+        "  --tile-pipeline-depth <N>  глубина конвейера tile-режима (default 2):\n"
+        "                      invoke тайла на NPU перекрывается с decode+\n"
+        "                      composite предыдущего на CPU. 1 = выключить\n"
+        "                      (последовательно, для A/B-замеров).\n"
         "  --random-input      использовать случайный входной буфер вместо\n"
         "                      изображения; работает с одиночным инференсом,\n"
         "                      --benchmark, --loop, --compare* (картинку можно\n"
@@ -140,6 +144,7 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--save-output"   && i + 1 < argc) a.save_output_path = argv[++i];
         else if (s == "--tile")                          a.tile_mode    = true;
         else if (s == "--tile-overlap"  && i + 1 < argc) a.tile_overlap = std::atoi(argv[++i]);
+        else if (s == "--tile-pipeline-depth" && i + 1 < argc) a.tile_pipeline_depth = std::atoi(argv[++i]);
         else if (s == "--random-input"
               || s == "--compare-random")              a.random_input = true;
         else if ((s == "--random-runs" || s == "--compare-runs")

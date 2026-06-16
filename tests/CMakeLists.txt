@@ -29,6 +29,7 @@ add_executable(ii_tests
     ${CMAKE_CURRENT_SOURCE_DIR}/test_preprocess.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_image_proc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_tile.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_engine_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_engine_graph.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_engine_onnx.cpp
