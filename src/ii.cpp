@@ -279,6 +279,9 @@ int main(int argc, char** argv) {
             std::printf("Мониторинг CPU/памяти включён "
                         "(ядер в системе: %d, интервал %d мс)\n",
                         sysmon.num_cpus(), args.sysmon_interval_ms);
+            std::string accel = sysmon.accel_summary();
+            if (!accel.empty())
+                std::printf("Ускорители для мониторинга: %s\n", accel.c_str());
         }
     }
     // Открываем оба CSV (per-sample и summary) лениво по факту первого
@@ -444,10 +447,17 @@ int main(int argc, char** argv) {
         if (!open_export(sysmon_csv, "sysmon", "sysmon")) return false;
         sysmon_csv.meta("interval_ms", "%d", args.sysmon_interval_ms);
         sysmon_csv.meta("num_cpus",    "%d", sysmon.num_cpus());
+        {
+            std::string accel = sysmon.accel_summary();
+            if (!accel.empty()) sysmon_csv.meta("accelerators", "%s",
+                                                accel.c_str());
+        }
+        // gpu_util_pct / npu_util_pct: % загрузки ускорителя или -1, если
+        // на платформе такого зонда нет (report.py отфильтрует <0).
         sysmon_csv.header(
             "t_ms,phase,cpu_proc_pct,sys_cpu_pct,"
             "rss_kb,vsz_kb,peak_rss_kb,swap_kb,threads,"
-            "mem_total_kb,mem_avail_kb,wall_ms");
+            "mem_total_kb,mem_avail_kb,gpu_util_pct,npu_util_pct,wall_ms");
         return true;
     };
 
@@ -469,11 +479,12 @@ int main(int argc, char** argv) {
                 sysmon_csv.writef(
                     "%.3f,%s,%.3f,%.3f,"
                     "%ld,%ld,%ld,%ld,%d,"
-                    "%ld,%ld,%.3f",
+                    "%ld,%ld,%.3f,%.3f,%.3f",
                     now_ms() - sysmon_t0, "final",
                     s.cpu_proc_pct, s.sys_cpu_pct,
                     s.rss_kb, s.vsz_kb, s.peak_rss_kb, s.swap_kb, s.threads,
-                    s.mem_total_kb, s.mem_avail_kb, s.wall_ms);
+                    s.mem_total_kb, s.mem_avail_kb,
+                    s.gpu_util(), s.npu_util(), s.wall_ms);
             }
         }
         if (sysmon_acc.empty()) return;
@@ -486,21 +497,38 @@ int main(int argc, char** argv) {
             sysmon_acc.sys_cpu_avg(),  sysmon_acc.sys_cpu_max,
             sysmon_acc.rss_max, sysmon_acc.peak_rss,
             sysmon_acc.threads_max);
+        if (sysmon_acc.has_gpu())
+            std::printf("[sysmon summary] GPU avg=%.1f%% max=%.1f%% "
+                        "(семплов %d)\n",
+                        sysmon_acc.gpu_avg(), sysmon_acc.gpu_max,
+                        sysmon_acc.gpu_n);
+        if (sysmon_acc.has_npu())
+            std::printf("[sysmon summary] NPU avg=%.1f%% max=%.1f%% "
+                        "(семплов %d)\n",
+                        sysmon_acc.npu_avg(), sysmon_acc.npu_max,
+                        sysmon_acc.npu_n);
         if (!args.export_prefix.empty()) {
             CsvExport ss;
             if (open_export(ss, "sysmon.summary", "sysmon_summary")) {
                 ss.meta("interval_ms", "%d", args.sysmon_interval_ms);
                 ss.meta("num_cpus",    "%d", sysmon.num_cpus());
+                // gpu_*/npu_*: -1, если соответствующего зонда не было.
                 ss.header(
                     "samples,cpu_proc_avg_pct,cpu_proc_max_pct,"
                     "sys_cpu_avg_pct,sys_cpu_max_pct,"
-                    "rss_max_kb,vsz_max_kb,peak_rss_kb,threads_max");
-                ss.writef("%d,%.3f,%.3f,%.3f,%.3f,%ld,%ld,%ld,%d",
+                    "rss_max_kb,vsz_max_kb,peak_rss_kb,threads_max,"
+                    "gpu_avg_pct,gpu_max_pct,npu_avg_pct,npu_max_pct");
+                ss.writef("%d,%.3f,%.3f,%.3f,%.3f,%ld,%ld,%ld,%d,"
+                          "%.3f,%.3f,%.3f,%.3f",
                           sysmon_acc.n,
                           sysmon_acc.cpu_proc_avg(), sysmon_acc.cpu_proc_max,
                           sysmon_acc.sys_cpu_avg(),  sysmon_acc.sys_cpu_max,
                           sysmon_acc.rss_max, sysmon_acc.vsz_max,
-                          sysmon_acc.peak_rss, sysmon_acc.threads_max);
+                          sysmon_acc.peak_rss, sysmon_acc.threads_max,
+                          sysmon_acc.has_gpu() ? sysmon_acc.gpu_avg() : -1.0,
+                          sysmon_acc.has_gpu() ? sysmon_acc.gpu_max  : -1.0,
+                          sysmon_acc.has_npu() ? sysmon_acc.npu_avg() : -1.0,
+                          sysmon_acc.has_npu() ? sysmon_acc.npu_max  : -1.0);
             }
         }
         if (sysmon_csv.is_open()) sysmon_csv.flush();
@@ -520,11 +548,12 @@ int main(int argc, char** argv) {
             sysmon_csv.writef(
                 "%.3f,%s,%.3f,%.3f,"
                 "%ld,%ld,%ld,%ld,%d,"
-                "%ld,%ld,%.3f",
+                "%ld,%ld,%.3f,%.3f,%.3f",
                 now_ms() - sysmon_t0, phase,
                 s.cpu_proc_pct, s.sys_cpu_pct,
                 s.rss_kb, s.vsz_kb, s.peak_rss_kb, s.swap_kb, s.threads,
-                s.mem_total_kb, s.mem_avail_kb, s.wall_ms);
+                s.mem_total_kb, s.mem_avail_kb,
+                s.gpu_util(), s.npu_util(), s.wall_ms);
         }
     };
     // NHWC [1,H,W,1|3] — типовой формат для путей с изображением:
