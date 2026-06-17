@@ -778,6 +778,8 @@ int main(int argc, char** argv) {
             gpu_tile_desc.zero_point = ti.zero_point;
             // OutputRange: Unit=0, Signed=1, Byte=2 — совпадает с TileFrameDesc.
             gpu_tile_desc.range      = (int)output_range;
+            // overlap=0 → pure overwrite (без alpha-blend и чтения dst).
+            gpu_tile_desc.blend      = (args.tile_overlap > 0) ? 1 : 0;
         }
     }
     // Активен ли GPU-путь для данного дисплея (нужен показ выхода).

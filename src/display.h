@@ -53,6 +53,9 @@ struct TileFrameDesc {
     float scale    = 1.0f;             // квант-scale модели (> 0)
     int   zero_point = 0;
     int   range    = 0;                // 0=unit 1=signed 2=byte (OutputRange)
+    int   blend    = 0;                // 1 — alpha-blend швов (overlap>0);
+                                       // 0 — pure overwrite (без чтения dst
+                                       //     блендером на каждый пиксель)
 };
 
 struct Display {

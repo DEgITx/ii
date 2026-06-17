@@ -902,8 +902,15 @@ bool WaylandDisplay::tile_frame_begin(const TileFrameDesc& d) {
     glUniform1f(c_u_channels_,(float)d.channels);
     glUniform1f(c_u_dtype_,   (float)d.dtype);
     glUniform1f(c_u_range_,   (float)d.range);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // overlap>0 — alpha-blend швов; overlap=0 — pure overwrite (блендер не
+    // читает dst на каждый пиксель). Шейдер всё равно кладёт α в gl_FragColor,
+    // но при выключенном blend она просто игнорируется.
+    if (d.blend) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    } else {
+        glDisable(GL_BLEND);
+    }
     return true;
 }
 

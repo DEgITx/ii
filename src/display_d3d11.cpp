@@ -1112,7 +1112,9 @@ bool D3D11Display::tile_frame_begin(const TileFrameDesc& d) {
     ctx_->VSSetConstantBuffers(0, 1, &cmp_cb_);
     ctx_->PSSetConstantBuffers(0, 1, &cmp_cb_);
     ctx_->PSSetSamplers(0, 1, &cmp_sampler_);
-    ctx_->OMSetBlendState(blend_, nullptr, 0xffffffff);  // SRC_ALPHA/INV
+    // overlap>0 — alpha-blend швов; overlap=0 — pure overwrite (без чтения
+    // dst блендером). nullptr = непрозрачная запись.
+    ctx_->OMSetBlendState(d.blend ? blend_ : nullptr, nullptr, 0xffffffff);
     return true;
 }
 
