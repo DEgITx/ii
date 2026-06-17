@@ -1281,8 +1281,12 @@ int main(int argc, char** argv) {
     // display-блок ниже (там создаётся disp): и показ, и --save-output (через
     // readback собранной цели) идут единым GPU-путём. Здесь CPU-прогон тогда
     // пропускаем, чтобы не гонять инференс дважды.
+    // ВАЖНО: только без --loop. С --loop кадры гонит run_video_loop (он сам
+    // выберет GPU-сборку через run_tile_pass(disp)); иначе одиночный GPU-блок
+    // ниже показал бы один кадр и встал в wait(), не дойдя до цикла (кадр
+    // «замирал» бы, а --no-vsync/FPS не работали).
     const bool single_tile_gpu_deferred =
-        do_single_invoke && args.tile_mode && args.display
+        do_single_invoke && !args.loop && args.tile_mode && args.display
         && args.show_output && gpu_tile_dtype_ok;
     if (do_single_invoke && !single_tile_gpu_deferred) {
         t0 = now_ms();
