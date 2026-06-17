@@ -53,6 +53,15 @@ public:
         boxes_ = boxes;
     }
 
+    // ---- GPU-сборка кадра из тайлов (см. display.h) ----
+    bool supports_tile_frame() const override { return tile_supported_; }
+    bool tile_frame_begin(const TileFrameDesc& desc) override;
+    void tile_frame_add(const void* raw, int dst_x, int dst_y,
+                        int ramp_x, int ramp_y) override;
+    bool tile_frame_present() override;
+    bool tile_frame_readback(std::vector<uint8_t>& rgb,
+                             int& w, int& h) override;
+
     // ---- Wayland-callback’и (трамплины из C-API) ----
     // Публичные, потому что используются listener-структурами в namespace
     // scope и должны быть видны как обычные функции для C-кода Wayland.
@@ -87,6 +96,9 @@ private:
     bool init_egl();
     bool init_gl();
     bool init_text();
+    bool init_compose();                       // GPU-сборка тайлов: шейдер+FBO
+    bool ensure_compose_target(int w, int h);  // offscreen RGBA8 размером canvas
+    GLuint ensure_tile_tex(int idx);           // кольцо текстур тайлов
     void render();
     void render_overlay();
     void render_boxes();
@@ -142,6 +154,32 @@ private:
     // рамки + подложка под подпись + сам текст) пересоздаётся каждый
     // кадр — детекций мало (десятки), это копейки.
     std::vector<DisplayBox> boxes_;
+
+    // ---- GPU-сборка тайлов (tile-режим, см. display.h) ----
+    // compose-шейдер деквантует int8/uint8 тайлы и накладывает их (over-
+    // composite с растушёвкой по ведущим краям) в offscreen RGBA8-текстуру
+    // размером canvas; затем обычный render() рисует её как кадр (letterbox
+    // + боксы + оверлей). Это снимает CPU-decode из горячего пути.
+    bool   tile_supported_ = false;
+    GLuint compose_prog_   = 0;
+    GLuint fbo_            = 0;
+    GLuint compose_tex_    = 0;     // offscreen RGBA8, размер canvas
+    int    compose_w_      = 0;
+    int    compose_h_      = 0;
+    GLuint cur_frame_tex_  = 0;     // что рисует render(): 0 → texture_
+    GLuint compose_vbo_    = 0;     // динамический квад (canvas xy + uv)
+    GLint  c_a_canvas_ = -1, c_a_uv_ = -1;
+    GLint  c_u_canvas_ = -1, c_u_tilesz_ = -1, c_u_tex_ = -1;
+    GLint  c_u_scale_  = -1, c_u_zp_ = -1, c_u_channels_ = -1;
+    GLint  c_u_dtype_  = -1, c_u_range_ = -1, c_u_ramp_ = -1;
+    // Кольцо текстур тайлов: по одной на тайл в кадре, переиспользуются
+    // между кадрами (запись-после-чтения на одной текстуре дала бы стол
+    // на tile-based GPU — поэтому отдельная текстура на тайл).
+    std::vector<GLuint> tile_texs_;
+    int    tile_tex_w_ = 0, tile_tex_h_ = 0;
+    GLenum tile_tex_fmt_ = 0;       // GL_LUMINANCE (C=1) | GL_RGB (C=3)
+    int    tile_add_idx_ = 0;       // индекс текущего тайла в кадре
+    TileFrameDesc tile_desc_{};
 };
 
 // Listener-структуры. Используем designated initializers (C++20),
@@ -475,6 +513,9 @@ bool WaylandDisplay::init(int w, int h, const char* title, bool vsync) {
     if (!init_egl())  return false;
     if (!init_gl())   return false;
     if (!init_text()) return false;
+    // GPU-сборка тайлов — опциональна: если шейдер/FBO не поднялись,
+    // tile_supported_ остаётся false и раннер использует CPU-путь.
+    init_compose();
 
     // Пустой первый кадр, чтобы окно появилось до первого show_rgb().
     glViewport(0, 0, win_w_, win_h_);
@@ -528,7 +569,9 @@ void WaylandDisplay::render() {
 
     glUseProgram(program_);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, texture_);
+    // cur_frame_tex_ != 0 — рисуем собранную compose-цель (tile-режим),
+    // иначе обычную залитую с CPU текстуру кадра.
+    glBindTexture(GL_TEXTURE_2D, cur_frame_tex_ ? cur_frame_tex_ : texture_);
     glUniform1i(u_tex_, 0);
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
@@ -679,6 +722,263 @@ void WaylandDisplay::render_boxes() {
     glDisable(GL_BLEND);
 }
 
+// ---- GPU-сборка кадра из тайлов -----------------------------------------
+
+bool WaylandDisplay::init_compose() {
+    // VS: позиция тайла задаётся в canvas-пикселях, переводим в NDC.
+    // ВАЖНО (ориентация): без y-flip — canvas_y=0 (верх кадра) → ndc.y=-1
+    // → низ FBO → texel row0 compose-текстуры. Так row0 = верх кадра, что
+    // совпадает с конвенцией CPU-залитой texture_ (её v-flip’ает display-VS),
+    // и glReadPixels отдаёт row0=верх без переворота.
+    static const char* kVS =
+        "attribute vec2 a_canvas;\n"
+        "attribute vec2 a_uv;\n"
+        "uniform vec2 u_canvas;\n"
+        "uniform vec2 u_tilesz;\n"
+        "varying vec2 v_uv;\n"
+        "varying vec2 v_local;\n"
+        "void main(){\n"
+        "  vec2 ndc = (a_canvas / u_canvas) * 2.0 - 1.0;\n"
+        "  gl_Position = vec4(ndc, 0.0, 1.0);\n"
+        "  v_uv = a_uv;\n"
+        "  v_local = a_uv * u_tilesz;\n"   // локальные px внутри тайла (для ramp)
+        "}\n";
+    // FS: highp обязателен — восстанавливаем точный байт из R8 UNORM
+    // (b = round(s*255)) и деквантуем как decode_kernel в image_proc.cpp.
+    static const char* kFS =
+        "precision highp float;\n"
+        "varying vec2 v_uv;\n"
+        "varying vec2 v_local;\n"
+        "uniform sampler2D u_tex;\n"
+        "uniform float u_scale;\n"
+        "uniform float u_zp;\n"
+        "uniform float u_channels;\n"   // 1.0 (Y) | 3.0 (RGB)
+        "uniform float u_dtype;\n"      // 0=int8 (bit-pattern), 1=uint8
+        "uniform float u_range;\n"      // 0=unit 1=signed 2=byte
+        "uniform vec2  u_ramp;\n"       // ширина растушёвки по левому/верхнему краю
+        "float lead_alpha(float d, float r){\n"
+        "  if (r <= 0.0) return 1.0;\n"
+        "  if (d >= r) return 1.0;\n"
+        "  return clamp((2.0*d + 1.0) / (2.0*r), 0.0, 1.0);\n"
+        "}\n"
+        "float deq(float s){\n"
+        "  float b = floor(s * 255.0 + 0.5);\n"
+        "  float q = b;\n"
+        "  if (u_dtype < 0.5 && b > 127.5) q = b - 256.0;\n"   // int8
+        "  float val = u_scale * (q - u_zp);\n"
+        "  if (u_range > 1.5) val = val / 255.0;\n"            // byte
+        "  else if (u_range > 0.5) val = val * 0.5 + 0.5;\n"   // signed
+        "  return clamp(val, 0.0, 1.0);\n"
+        "}\n"
+        "void main(){\n"
+        "  vec3 rgb;\n"
+        "  if (u_channels < 1.5) {\n"
+        "    float y = deq(texture2D(u_tex, v_uv).r);\n"
+        "    rgb = vec3(y);\n"
+        "  } else {\n"
+        "    vec3 c = texture2D(u_tex, v_uv).rgb;\n"
+        "    rgb = vec3(deq(c.r), deq(c.g), deq(c.b));\n"
+        "  }\n"
+        "  float a = lead_alpha(v_local.x, u_ramp.x)\n"
+        "          * lead_alpha(v_local.y, u_ramp.y);\n"
+        "  gl_FragColor = vec4(rgb, a);\n"
+        "}\n";
+
+    GLuint vs = compile_shader(GL_VERTEX_SHADER,   kVS);
+    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, kFS);
+    if (!vs || !fs) return false;
+    compose_prog_ = glCreateProgram();
+    glAttachShader(compose_prog_, vs);
+    glAttachShader(compose_prog_, fs);
+    glLinkProgram(compose_prog_);
+    glDeleteShader(vs);
+    glDeleteShader(fs);
+    GLint ok = 0;
+    glGetProgramiv(compose_prog_, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512] = {};
+        glGetProgramInfoLog(compose_prog_, sizeof(log), nullptr, log);
+        std::fprintf(stderr, "GLSL: compose link error: %s\n", log);
+        return false;
+    }
+    c_a_canvas_   = glGetAttribLocation(compose_prog_,  "a_canvas");
+    c_a_uv_       = glGetAttribLocation(compose_prog_,  "a_uv");
+    c_u_canvas_   = glGetUniformLocation(compose_prog_, "u_canvas");
+    c_u_tilesz_   = glGetUniformLocation(compose_prog_, "u_tilesz");
+    c_u_tex_      = glGetUniformLocation(compose_prog_, "u_tex");
+    c_u_scale_    = glGetUniformLocation(compose_prog_, "u_scale");
+    c_u_zp_       = glGetUniformLocation(compose_prog_, "u_zp");
+    c_u_channels_ = glGetUniformLocation(compose_prog_, "u_channels");
+    c_u_dtype_    = glGetUniformLocation(compose_prog_, "u_dtype");
+    c_u_range_    = glGetUniformLocation(compose_prog_, "u_range");
+    c_u_ramp_     = glGetUniformLocation(compose_prog_, "u_ramp");
+
+    glGenBuffers(1, &compose_vbo_);
+    glGenFramebuffers(1, &fbo_);
+    tile_supported_ = true;
+    return true;
+}
+
+bool WaylandDisplay::ensure_compose_target(int w, int h) {
+    if (compose_tex_ && w == compose_w_ && h == compose_h_) return true;
+    if (!compose_tex_) glGenTextures(1, &compose_tex_);
+    glBindTexture(GL_TEXTURE_2D, compose_tex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    compose_w_ = w;
+    compose_h_ = h;
+
+    // Проверяем полноту FBO один раз при (ре)аллокации. GL_RGBA/UNSIGNED_BYTE
+    // как color-attachment поддержан не каждым ES2-драйвером (формально нужен
+    // OES_rgb8_rgba8) — на неполном FBO гасим GPU-путь, раннер откатится на CPU.
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, compose_tex_, 0);
+    GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (st != GL_FRAMEBUFFER_COMPLETE) {
+        std::fprintf(stderr,
+            "GL: FBO неполон (0x%x) — GPU-сборка тайлов отключена, CPU-путь.\n",
+            (unsigned)st);
+        tile_supported_ = false;
+        return false;
+    }
+    return true;
+}
+
+GLuint WaylandDisplay::ensure_tile_tex(int idx) {
+    while ((int)tile_texs_.size() <= idx) {
+        GLuint t = 0;
+        glGenTextures(1, &t);
+        glBindTexture(GL_TEXTURE_2D, t);
+        glTexImage2D(GL_TEXTURE_2D, 0, tile_tex_fmt_, tile_tex_w_, tile_tex_h_,
+                     0, tile_tex_fmt_, GL_UNSIGNED_BYTE, nullptr);
+        // NEAREST: квад 1:1 с текселями тайла (canvas-px == tile-px), плюс
+        // точное восстановление байта во фрагменте требует точного семпла.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        tile_texs_.push_back(t);
+    }
+    return tile_texs_[idx];
+}
+
+bool WaylandDisplay::tile_frame_begin(const TileFrameDesc& d) {
+    if (!tile_supported_ || closed_) return false;
+    tile_desc_ = d;
+
+    const GLenum fmt = (d.channels == 1) ? GL_LUMINANCE : GL_RGB;
+    if (fmt != tile_tex_fmt_ || d.tile_w != tile_tex_w_
+        || d.tile_h != tile_tex_h_) {
+        if (!tile_texs_.empty()) {
+            glDeleteTextures((GLsizei)tile_texs_.size(), tile_texs_.data());
+            tile_texs_.clear();
+        }
+        tile_tex_fmt_ = fmt;
+        tile_tex_w_   = d.tile_w;
+        tile_tex_h_   = d.tile_h;
+    }
+    if (!ensure_compose_target(d.canvas_w, d.canvas_h)) return false;
+    tile_add_idx_ = 0;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, compose_tex_, 0);
+    glViewport(0, 0, compose_w_, compose_h_);
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glUseProgram(compose_prog_);
+    glUniform1i(c_u_tex_, 0);
+    glUniform2f(c_u_canvas_,  (float)compose_w_, (float)compose_h_);
+    glUniform2f(c_u_tilesz_,  (float)d.tile_w,   (float)d.tile_h);
+    glUniform1f(c_u_scale_,   d.scale);
+    glUniform1f(c_u_zp_,      (float)d.zero_point);
+    glUniform1f(c_u_channels_,(float)d.channels);
+    glUniform1f(c_u_dtype_,   (float)d.dtype);
+    glUniform1f(c_u_range_,   (float)d.range);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    return true;
+}
+
+void WaylandDisplay::tile_frame_add(const void* raw, int dst_x, int dst_y,
+                                    int ramp_x, int ramp_y) {
+    if (!tile_supported_ || !raw) return;
+    const GLuint tex = ensure_tile_tex(tile_add_idx_++);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tile_tex_w_, tile_tex_h_,
+                    tile_tex_fmt_, GL_UNSIGNED_BYTE, raw);
+
+    // Квад в canvas-координатах + uv по тайлу (uv.y=0 — верх тайла).
+    const float x0 = (float)dst_x;
+    const float y0 = (float)dst_y;
+    const float x1 = (float)(dst_x + tile_tex_w_);
+    const float y1 = (float)(dst_y + tile_tex_h_);
+    const float verts[] = {
+        // a_canvas      a_uv
+        x0, y0,   0.f, 0.f,   // TL
+        x1, y0,   1.f, 0.f,   // TR
+        x0, y1,   0.f, 1.f,   // BL
+        x1, y1,   1.f, 1.f,   // BR
+    };
+    glUniform2f(c_u_ramp_, (float)ramp_x, (float)ramp_y);
+    glBindBuffer(GL_ARRAY_BUFFER, compose_vbo_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(c_a_canvas_);
+    glVertexAttribPointer(c_a_canvas_, 2, GL_FLOAT, GL_FALSE,
+                          4 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(c_a_uv_);
+    glVertexAttribPointer(c_a_uv_, 2, GL_FLOAT, GL_FALSE,
+                          4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+}
+
+bool WaylandDisplay::tile_frame_present() {
+    if (closed_) return false;
+    if (!tile_supported_ || !compose_tex_) return false;
+    // Возврат к оконному фреймбуферу; собранную цель рисуем как обычный кадр.
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDisable(GL_BLEND);
+    tex_w_ = compose_w_;
+    tex_h_ = compose_h_;
+    cur_frame_tex_ = compose_tex_;
+    render();              // letterbox + боксы + оверлей + eglSwapBuffers
+    cur_frame_tex_ = 0;
+    poll();
+    return !closed_;
+}
+
+bool WaylandDisplay::tile_frame_readback(std::vector<uint8_t>& rgb,
+                                         int& w, int& h) {
+    if (!tile_supported_ || !compose_tex_) return false;
+    w = compose_w_;
+    h = compose_h_;
+    std::vector<uint8_t> rgba((std::size_t)w * h * 4);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, compose_tex_, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // glReadPixels(y=0) = низ FBO = texel row0 = верх кадра (см. ориентацию
+    // в init_compose) — переворот не нужен. RGBA → RGB.
+    rgb.resize((std::size_t)w * h * 3);
+    for (std::size_t i = 0, n = (std::size_t)w * h; i < n; ++i) {
+        rgb[i * 3 + 0] = rgba[i * 4 + 0];
+        rgb[i * 3 + 1] = rgba[i * 4 + 1];
+        rgb[i * 3 + 2] = rgba[i * 4 + 2];
+    }
+    return true;
+}
+
 bool WaylandDisplay::poll() {
     if (closed_) return false;
 
@@ -757,9 +1057,15 @@ void WaylandDisplay::cleanup() {
                        EGL_NO_CONTEXT);
         if (program_)      glDeleteProgram(program_);
         if (text_program_) glDeleteProgram(text_program_);
+        if (compose_prog_) glDeleteProgram(compose_prog_);
         if (vbo_)          glDeleteBuffers(1, &vbo_);
         if (text_vbo_)     glDeleteBuffers(1, &text_vbo_);
+        if (compose_vbo_)  glDeleteBuffers(1, &compose_vbo_);
         if (texture_)      glDeleteTextures(1, &texture_);
+        if (compose_tex_)  glDeleteTextures(1, &compose_tex_);
+        if (!tile_texs_.empty())
+            glDeleteTextures((GLsizei)tile_texs_.size(), tile_texs_.data());
+        if (fbo_)          glDeleteFramebuffers(1, &fbo_);
         if (egl_surface_ != EGL_NO_SURFACE)
             eglDestroySurface(egl_display_, egl_surface_);
         if (egl_context_ != EGL_NO_CONTEXT)

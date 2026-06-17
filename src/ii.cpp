@@ -753,16 +753,50 @@ int main(int argc, char** argv) {
     ii::Pipeline          tile_pipe(pipe_depth);
     std::vector<TileSlot> tile_slots(pipe_depth);
 
+    // ---- GPU-сборка кадра из тайлов (быстрый путь для живого экрана) -----
+    // Когда дисплей-бэкенд умеет собирать кадр из сырых int8/uint8 тайлов на
+    // GPU (decode+composite в шейдере), tile-режим с --show-output идёт по
+    // быстрому пути: NPU-выходы заливаются маленькими текстурами, а
+    // деквантизация/наложение/заливка canvas происходят на GPU. Главный
+    // CPU-bottleneck (decode ~10 МБ/кадр) уходит из горячего пути. Иначе —
+    // прежний CPU-путь (decode в canvas + show_rgb). Включается только для
+    // квантованных int8/uint8 выходов со скаляр-scale (per-channel → CPU).
+    TileFrameDesc gpu_tile_desc{};
+    bool          gpu_tile_dtype_ok = false;
+    if (args.tile_mode && image_output_idx >= 0) {
+        const auto& ti = out_info[image_output_idx];
+        int tdt = -1;
+        if      (ti.dtype == ii::DType::Int8)  tdt = TILE_DT_INT8;
+        else if (ti.dtype == ii::DType::UInt8) tdt = TILE_DT_UINT8;
+        if (tdt >= 0 && ti.shape.size() == 4 && ti.scale > 0.0f) {
+            gpu_tile_dtype_ok        = true;
+            gpu_tile_desc.tile_h     = ti.shape[1];
+            gpu_tile_desc.tile_w     = ti.shape[2];
+            gpu_tile_desc.channels   = ti.shape[3];
+            gpu_tile_desc.dtype      = tdt;
+            gpu_tile_desc.scale      = ti.scale;
+            gpu_tile_desc.zero_point = ti.zero_point;
+            // OutputRange: Unit=0, Signed=1, Byte=2 — совпадает с TileFrameDesc.
+            gpu_tile_desc.range      = (int)output_range;
+        }
+    }
+    // Активен ли GPU-путь для данного дисплея (нужен показ выхода).
+    auto gpu_tiles_active = [&](Display* disp) -> bool {
+        return args.show_output && gpu_tile_dtype_ok && disp
+            && disp->supports_tile_frame();
+    };
+    // Текущий кадр собран на GPU? (тогда present вместо show_rgb).
+    bool tile_frame_on_gpu = false;
+
     auto run_tile_pass = [&](const uint8_t* src_rgb,
-                             int src_w, int src_h) -> bool {
+                             int src_w, int src_h,
+                             Display* disp = nullptr) -> bool {
         if (image_output_idx < 0) return false;
         const auto layout = ii::plan_tiles(
             src_w, src_h, in_w, in_h, args.tile_overlap);
         const bool blend  = (args.tile_overlap > 0);
         const int  ramp_x = args.tile_overlap * scale_x;
         const int  ramp_y = args.tile_overlap * scale_y;
-        tile_canvas.reset(src_w * scale_x, src_h * scale_y);
-        const std::size_t canvas_stride = (std::size_t)tile_canvas.width * 3;
         const auto& tile_info = out_info[image_output_idx];
         const int   nx = layout.nx();
         const int   n  = layout.count();
@@ -778,6 +812,52 @@ int main(int argc, char** argv) {
         if (gray_fast)
             rgb_to_gray(src_rgb, (size_t)src_w * src_h, src_gray);
 
+        // Вырез тайла (i,j) + заливка входа модели. Общий код GPU/CPU-путей.
+        auto fill_tile = [&](int i, int j) -> bool {
+            const int x0 = layout.x0[i], y0 = layout.y0[j];
+            if (gray_fast) {
+                ii::extract_tile(src_gray.data(), src_w, src_h, x0, y0,
+                                   in_w, in_h, input_gray, /*channels=*/1);
+                return fill_input(input_gray, in_info[0], in_t);
+            }
+            ii::extract_tile(src_rgb, src_w, src_h, x0, y0,
+                               in_w, in_h, input_rgb, 3);
+            return fill_model_from_rgb();
+        };
+
+        // ---- GPU-путь: сборка кадра на дисплее --------------------------
+        // Конвейер produce/consume не используется (его consumer и был
+        // CPU-decode): главный поток гонит extract→fill→invoke→upload
+        // серийно, а деквантизация/наложение/заливка canvas — в шейдере.
+        // present делает вызывающая сторона (после set_boxes/overlay).
+        tile_frame_on_gpu = false;
+        if (gpu_tiles_active(disp)) {
+            gpu_tile_desc.canvas_w = src_w * scale_x;
+            gpu_tile_desc.canvas_h = src_h * scale_y;
+            if (disp->tile_frame_begin(gpu_tile_desc)) {
+                for (int t = 0; t < n; ++t) {
+                    const int i = t % nx, j = t / nx;
+                    if (!fill_tile(i, j)) return false;
+                    if (!safe_invoke(*eng)) return false;
+                    // output_data валиден до следующего invoke; upload
+                    // (glTexSubImage2D/Map) копирует данные тут же.
+                    const void* td = eng->output_data(image_output_idx);
+                    disp->tile_frame_add(td,
+                                         layout.x0[i] * scale_x,
+                                         layout.y0[j] * scale_y,
+                                         i > 0 ? ramp_x : 0,
+                                         j > 0 ? ramp_y : 0);
+                }
+                tile_frame_on_gpu = true;
+                return true;  // present — снаружи (tile_frame_present)
+            }
+            // tile_frame_begin не удался — тихий откат на CPU-путь.
+        }
+
+        // ---- CPU-путь (как прежде): конвейер produce/consume ------------
+        tile_canvas.reset(src_w * scale_x, src_h * scale_y);
+        const std::size_t canvas_stride = (std::size_t)tile_canvas.width * 3;
+
         // produce(t): главный поток — вырез тайла, заливка входа, invoke,
         // копия выхода в слот t. Фатальная ошибка (заливка/invoke) → false,
         // конвейер останавливается, run() вернёт false (как старый return).
@@ -787,15 +867,7 @@ int main(int argc, char** argv) {
             s.i  = i; s.j = j;
             s.x0 = layout.x0[i];
             s.y0 = layout.y0[j];
-            if (gray_fast) {
-                ii::extract_tile(src_gray.data(), src_w, src_h, s.x0, s.y0,
-                                   in_w, in_h, input_gray, /*channels=*/1);
-                if (!fill_input(input_gray, in_info[0], in_t)) return false;
-            } else {
-                ii::extract_tile(src_rgb, src_w, src_h, s.x0, s.y0,
-                                   in_w, in_h, input_rgb, 3);
-                if (!fill_model_from_rgb()) return false;
-            }
+            if (!fill_tile(i, j)) return false;
             if (!safe_invoke(*eng)) return false;
             // Копируем сырой выход из арены, иначе следующий invoke его затрёт.
             const auto* td = static_cast<const uint8_t*>(
@@ -951,8 +1023,11 @@ int main(int argc, char** argv) {
                 if (args.tile_mode) {
                     // Tile-pass совмещает preprocess+fill+invoke+decode на
                     // уровне отдельных тайлов. Один FPS-«тик» цикла =
-                    // один полный кадр, как пользователь и ожидает.
-                    if (!run_tile_pass(frame, fw, fh)) break;
+                    // один полный кадр, как пользователь и ожидает. disp
+                    // передаём, чтобы при поддержке пошёл GPU-путь сборки
+                    // (тогда tile_frame_on_gpu=true и кадр презентуется ниже
+                    // через tile_frame_present вместо show_rgb).
+                    if (!run_tile_pass(frame, fw, fh, disp)) break;
                 } else if (needs_preprocess) {
                     letterbox(frame, fw, fh, in_w, in_h, input_rgb);
                     if (!fill_model_from_rgb()) break;
@@ -1073,7 +1148,11 @@ int main(int argc, char** argv) {
                 }
             }
 
-            if (disp && frame) {
+            if (disp && tile_frame_on_gpu) {
+                // Кадр уже собран на GPU внутри run_tile_pass — презентуем
+                // его (compose-цель → окно + боксы + оверлей), без show_rgb.
+                if (!disp->tile_frame_present()) break;
+            } else if (disp && frame) {
                 // Приоритет: --show-output > --show-input > исходный кадр.
                 // Для --show-output берём актуально-декодированный буфер;
                 // если он пуст (ошибка decode на этом кадре) — фолбэк на
@@ -1198,7 +1277,14 @@ int main(int argc, char** argv) {
     // одиночного прогона нет вовсе — кадры идут в собственном цикле ниже.
     const bool do_single_invoke = !has_camera && (has_image
         || (args.random_input && !args.compare_cpu && args.compare_model.empty()));
-    if (do_single_invoke) {
+    // Одиночный tile-кадр с дисплеем и доступной GPU-сборкой откладываем в
+    // display-блок ниже (там создаётся disp): и показ, и --save-output (через
+    // readback собранной цели) идут единым GPU-путём. Здесь CPU-прогон тогда
+    // пропускаем, чтобы не гонять инференс дважды.
+    const bool single_tile_gpu_deferred =
+        do_single_invoke && args.tile_mode && args.display
+        && args.show_output && gpu_tile_dtype_ok;
+    if (do_single_invoke && !single_tile_gpu_deferred) {
         t0 = now_ms();
         if (args.tile_mode) {
             // Один полный pass по тайлам: внутри run_tile_pass — N инфёров,
@@ -1789,6 +1875,52 @@ int main(int argc, char** argv) {
         std::printf("Display: окно %dx%d, vsync=%s\n",
                     args.win_w, args.win_h,
                     args.vsync ? "on" : "off");
+
+        // ---- Одиночный tile-кадр на GPU (deferred из do_single_invoke) ----
+        // Собираем кадр в шейдере, при --save-output читаем результат обратно
+        // (единый decode-путь), показываем и ждём закрытия. Если GPU-сборка
+        // недоступна на этом бэкенде — откатываемся на CPU tile-pass и идём
+        // дальше общим путём (show_rgb из out_img).
+        if (single_tile_gpu_deferred) {
+            // Один прогон: run_tile_pass сам выберет GPU (disp поддержал) или
+            // CPU (откат). tile_frame_on_gpu различает исход — без повторного
+            // инференса.
+            if (!run_tile_pass(img.rgb.data(), img.w, img.h, disp.get())) {
+                std::fprintf(stderr, "Tile pass упал.\n");
+                sysmon_finalize();
+                return 6;
+            }
+            if (tile_frame_on_gpu) {
+                std::printf("Инференс: tile-pass на GPU (сборка в шейдере)\n");
+                if (!args.save_output_path.empty()) {
+                    int rw = 0, rh = 0;
+                    if (disp->tile_frame_readback(out_img.rgb, rw, rh)) {
+                        out_img.width        = rw;
+                        out_img.height       = rh;
+                        out_img.channels_src = 3;
+                        std::printf("Декодирован выход (GPU readback): %dx%d\n",
+                                    rw, rh);
+                        if (ii::save_png(out_img, args.save_output_path))
+                            std::printf("Сохранено: %s\n",
+                                        args.save_output_path.c_str());
+                    }
+                }
+                if (args.stats) disp->set_overlay_text("tile GPU");
+                sysmon_log("invoke");
+                if (!disp->tile_frame_present()) { sysmon_finalize(); return 0; }
+                std::printf("Окно открыто. Закройте его, чтобы выйти.\n");
+                while (disp->wait()) {}
+                sysmon_finalize();
+                return 0;
+            }
+            // disp не поддержал GPU — run_tile_pass отработал CPU, out_img
+            // готов. Сохраняем (как в do_single_invoke) и идём общим путём.
+            if (decode_output_needed && !out_img.rgb.empty()
+                && !args.save_output_path.empty()
+                && ii::save_png(out_img, args.save_output_path)) {
+                std::printf("Сохранено: %s\n", args.save_output_path.c_str());
+            }
+        }
 
         const uint8_t* frame;
         int fw, fh;
