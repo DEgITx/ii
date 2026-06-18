@@ -70,7 +70,9 @@
 #include "yolo_render.h"
 
 #include <atomic>
+#include <chrono>
 #include <csignal>
+#include <thread>
 #ifndef _WIN32
 #include <signal.h>   // pthread_sigmask
 #else
@@ -125,6 +127,53 @@ int main(int argc, char** argv) {
 #endif
     Args args;
     if (!parse_args(argc, argv, args)) return 1;
+
+    // ---- Параллельный (многоэкземплярный) бенчмарк: ранняя нормализация ----
+    // Включается флагом --parallel N>1 или непустым --parallel-models. Это
+    // отдельный мир: N независимых Engine в N потоках (Engine не thread-safe),
+    // вход всегда случайный. Здесь только приводим args к согласованному виду
+    // (бэкфилл модели, форс random-input, дефолт --threads=1, отсев
+    // несовместимых режимов); сам прогон — в блоке parallel_benchmark ниже.
+    const bool parallel_mode =
+        args.parallel > 1 || !args.parallel_models.empty();
+    if (parallel_mode) {
+        // Позиционный model мог быть опущен (`ii --parallel-models a,b,c ...`).
+        // Берём первую модель списка как «основную»: она грузится сверху и
+        // служит экземпляром №0 параллельного прогона.
+        if (!args.parallel_models.empty() && args.model.empty()) {
+            auto comma = args.parallel_models.find(',');
+            args.model = args.parallel_models.substr(0, comma);
+        }
+        if (args.model.empty()) {
+            std::fprintf(stderr,
+                "Параллельный режим: не задана модель (ни позиционно, ни в "
+                "--parallel-models).\n");
+            return 1;
+        }
+        // Throughput не зависит от содержимого входа, а у разнородных моделей
+        // разные shape — поэтому всегда случайный вход, картинку игнорируем.
+        args.random_input = true;
+        args.image.clear();
+        // Несовместимые режимы: параллельный бенчмарк — это «голый» замер
+        // invoke, без окна/камеры/постобработки/сравнения/видео-цикла.
+        if (args.display || !args.camera_device.empty() || args.yolo
+            || args.tile_mode || args.compare_cpu
+            || !args.compare_model.empty() || args.loop) {
+            std::fprintf(stderr,
+                "Параллельный режим несовместим с --display/--camera/--yolo/"
+                "--tile/--compare*/--loop.\n");
+            return 1;
+        }
+        // N движков, каждый со своим интер-оп пулом: если оставить --threads 0
+        // (= все ядра), N×ядра потоков начнут конкурировать и замер
+        // деградирует. Дефолтим в 1, если пользователь не задал явно >0.
+        if (args.threads <= 0) {
+            args.threads = 1;
+            std::printf(
+                "Параллельный режим: --threads не задан, форсирую интер-оп "
+                "параллелизм = 1 (иначе N движков × все ядра конкурируют).\n");
+        }
+    }
 
     // Источников входа три: картинка, --random-input, --camera. Хотя бы
     // один обязателен. --camera (если задана) перебивает остальные:
@@ -681,6 +730,316 @@ int main(int argc, char** argv) {
     // этой точки, поэтому отражают активность во время AllocateTensors /
     // подготовки делегата.
     sysmon_log("init");
+
+    // ============ Параллельный (многоэкземплярный) бенчмарк ============
+    // N независимых Engine (Engine не thread-safe → по экземпляру на поток),
+    // каждый со своими буферами. Меряем: чистый single-instance baseline
+    // (без конкуренции) → N-way concurrency со старт-гейтом → scaling
+    // efficiency. Это прямой ответ «сериализует ли NPU/делегат одновременные
+    // запросы». Экземпляр №0 переиспользует уже загруженный main eng.
+    if (parallel_mode) {
+        // ---- Список моделей по экземплярам ----
+        std::vector<std::string> models;
+        if (!args.parallel_models.empty()) {
+            const std::string& src = args.parallel_models;
+            size_t pos = 0;
+            while (pos <= src.size()) {
+                size_t c = src.find(',', pos);
+                if (c == std::string::npos) c = src.size();
+                std::string tok = src.substr(pos, c - pos);
+                size_t b = tok.find_first_not_of(" \t");
+                size_t e = tok.find_last_not_of(" \t");
+                if (b != std::string::npos)
+                    models.push_back(tok.substr(b, e - b + 1));
+                pos = c + 1;
+            }
+        } else {
+            models.assign((size_t)args.parallel, args.model);
+        }
+        const int N = (int)models.size();
+        if (N < 1) {
+            std::fprintf(stderr, "Параллельный режим: пустой список моделей.\n");
+            sysmon_finalize();
+            return 8;
+        }
+
+        std::printf(
+            "\n=== Параллельный бенчмарк: %d экземпляр(ов), бэкенд %s, "
+            "threads/инстанс=%d, runs=%d, warmup=%d ===\n",
+            N, eng->backend_name(), args.threads, args.runs, args.warmup);
+
+        // basename для компактных логов/CSV (без каталога).
+        auto basename = [](const std::string& p) -> std::string {
+            size_t s = p.find_last_of("/\\");
+            return s == std::string::npos ? p : p.substr(s + 1);
+        };
+
+        // Загрузчик одного экземпляра — повторяет выбор бэкенда из main:
+        // авто-выбор (load_best_engine) либо явный --backend.
+        auto load_instance =
+            [&](const std::string& path) -> std::unique_ptr<ii::Engine> {
+            std::unique_ptr<ii::Engine> e;
+            if (args.backend.empty()) {
+                e = ii::load_best_engine(path, eopts);
+            } else {
+                e = ii::make_engine(args.backend);
+                if (e && !e->load(path, eopts)) e.reset();
+            }
+            return e;
+        };
+
+        // Детерминированная заливка случайного входа во ВСЕ входы экземпляра.
+        // Содержимое на throughput не влияет — важно лишь, что буфер валиден.
+        auto fill_random = [&](ii::Engine& e, uint32_t seed) -> bool {
+            const auto& ins = e.inputs();
+            if (ins.empty()) return false;
+            bool ok = true;
+            for (size_t k = 0; k < ins.size(); ++k) {
+                const size_t n = numel(ins[k].shape);
+                if (n == 0) { ok = false; continue; }
+                std::vector<uint8_t> buf(n);
+                std::mt19937 rng(seed + (uint32_t)k);
+                std::uniform_int_distribution<int> dist(0, 255);
+                for (auto& v : buf) v = (uint8_t)dist(rng);
+                if (!fill_input(buf, ins[k], e.input_data((int)k))) ok = false;
+            }
+            return ok;
+        };
+
+        // Перцентиль по КОПИИ (исходный вектор латентностей остаётся
+        // хронологическим — он уходит в per-run CSV как есть).
+        auto pct = [](std::vector<double> v, double q) -> double {
+            if (v.empty()) return 0.0;
+            std::sort(v.begin(), v.end());
+            size_t k = (size_t)std::lround(q * (double)(v.size() - 1));
+            if (k >= v.size()) k = v.size() - 1;
+            return v[k];
+        };
+
+        // ---- Экземпляр №0 — переиспользуем уже загруженный main eng ----
+        std::vector<std::unique_ptr<ii::Engine>> workers;
+        workers.reserve(N);
+        workers.push_back(std::move(eng));   // eng далее использовать нельзя
+        const uint32_t base_seed =
+            args.random_seed ? args.random_seed : 12345u;
+        if (!fill_random(*workers[0], base_seed)) {
+            std::fprintf(stderr,
+                "Параллельный режим: не удалось залить вход экземпляра 0 "
+                "(динамический shape входа?).\n");
+            sysmon_finalize();
+            return 8;
+        }
+
+        // ---- Baseline без конкуренции (один экземпляр, главный поток) ----
+        // Эталон «идеальной» производительности: single_fps, относительно
+        // которого считаем scaling efficiency. Меряем ДО загрузки остальных,
+        // чтобы их память/инициализация не влияли на baseline.
+        {
+            SigintGuard g;
+            for (int w = 0; w < args.warmup; ++w) workers[0]->invoke();
+        }
+        double single_avg_ms = 0.0;
+        {
+            SigintGuard g;
+            const double s0 = now_ms();
+            int done = 0;
+            for (int r = 0; r < args.runs && !g_interrupted; ++r) {
+                if (!workers[0]->invoke()) break;
+                ++done;
+            }
+            const double s1 = now_ms();
+            if (done > 0) single_avg_ms = (s1 - s0) / done;
+        }
+        const double single_fps =
+            single_avg_ms > 0.0 ? 1000.0 / single_avg_ms : 0.0;
+        std::printf(
+            "Baseline (1 экземпляр, без конкуренции): %.3f мс, %.1f инф/с\n",
+            single_avg_ms, single_fps);
+        sysmon_log("baseline");
+
+        // ---- Загрузка остальных экземпляров ----
+        for (int i = 1; i < N; ++i) {
+            auto e = load_instance(models[i]);
+            if (!e) {
+                std::fprintf(stderr,
+                    "Параллельный режим: экземпляр %d (модель %s) не "
+                    "загрузился. Возможно, бэкенд/делегат не допускает "
+                    "несколько одновременных контекстов в одном процессе — "
+                    "это само по себе результат теста.\n",
+                    i, models[i].c_str());
+                sysmon_finalize();
+                return 8;
+            }
+            if (!fill_random(*e, base_seed + (uint32_t)(i + 1) * 1000u)) {
+                std::fprintf(stderr,
+                    "Параллельный режим: не удалось залить вход "
+                    "экземпляра %d.\n", i);
+                sysmon_finalize();
+                return 8;
+            }
+            workers.push_back(std::move(e));
+        }
+        std::printf("Загружено экземпляров: %d (память ~×%d от одиночного).\n",
+                    N, N);
+        sysmon_log("parallel_load");
+
+        // ---- Результаты по экземплярам ----
+        struct InstResult {
+            std::vector<double> lat;     // латентность каждого invoke, мс
+            bool                failed = false;
+        };
+        std::vector<InstResult> results(N);
+
+        // Старт-гейт + барьер прибытия: каждый поток прогревается, сообщает
+        // о готовности (arrived++) и ждёт go. Главный поток, дождавшись всех,
+        // фиксирует wall_t0 и отпускает go — таймируемая секция у всех N
+        // экземпляров стартует одновременно (истинная конкуренция, а не
+        // «один ещё греется, пока другой меряет»). finished++ в конце —
+        // чтобы главный поток мог семплить sysmon, не блокируясь на join.
+        std::atomic<int>  arrived{0};
+        std::atomic<int>  finished{0};
+        std::atomic<bool> go{false};
+        std::signal(SIGINT, on_sigint);
+
+        auto worker_fn = [&](int idx) {
+            SigintGuard guard;        // SIGINT ловит только главный поток
+            ii::Engine& e = *workers[idx];
+            auto& L = results[idx].lat;
+            L.reserve((size_t)args.runs);
+            for (int w = 0; w < args.warmup; ++w) {
+                if (!e.invoke()) { results[idx].failed = true; break; }
+            }
+            arrived.fetch_add(1, std::memory_order_acq_rel);
+            while (!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            for (int r = 0; r < args.runs && !g_interrupted; ++r) {
+                const double tb = now_ms();
+                if (!e.invoke()) { results[idx].failed = true; break; }
+                L.push_back(now_ms() - tb);
+            }
+            finished.fetch_add(1, std::memory_order_acq_rel);
+        };
+
+        std::vector<std::thread> pool;
+        pool.reserve(N);
+        for (int i = 0; i < N; ++i) pool.emplace_back(worker_fn, i);
+
+        // Ждём, пока все прогреются и встанут на гейт.
+        while (arrived.load(std::memory_order_acquire) < N && !g_interrupted)
+            std::this_thread::yield();
+        const double wall_t0 = now_ms();
+        go.store(true, std::memory_order_release);
+
+        // Пока экземпляры молотят — периодически семплим sysmon (на длинных
+        // runs увидим троттлинг/контеншн). Главный поток почти спит
+        // (sleep 2 мс), чтобы не отнимать ядро у рабочих.
+        const bool sysmon_periodic = args.sysmon && sysmon.initialized()
+            && args.sysmon_interval_ms > 0;
+        double last_sm = now_ms();
+        while (finished.load(std::memory_order_acquire) < N) {
+            if (sysmon_periodic
+                && now_ms() - last_sm >= (double)args.sysmon_interval_ms) {
+                sysmon_log("parallel_run");
+                last_sm = now_ms();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            if (g_interrupted) break;
+        }
+        for (auto& t : pool) t.join();
+        const double wall_t1 = now_ms();
+        sysmon_log("parallel_run");
+
+        // ---- Сводка ----
+        size_t total_invokes = 0;
+        bool   any_failed    = false;
+        for (auto& r : results) {
+            total_invokes += r.lat.size();
+            any_failed    |= r.failed;
+        }
+        const double wall_ms = wall_t1 - wall_t0;
+        const double aggregate_fps =
+            wall_ms > 0.0 ? 1000.0 * (double)total_invokes / wall_ms : 0.0;
+        const double ideal_fps  = single_fps * (double)N;
+        const double efficiency = ideal_fps > 0.0 ? aggregate_fps / ideal_fps : 0.0;
+
+        std::printf("\n--- Результаты по экземплярам ---\n");
+        for (int i = 0; i < N; ++i) {
+            const auto& L = results[i].lat;
+            double sum = 0.0;
+            for (double v : L) sum += v;
+            const double avg = L.empty() ? 0.0 : sum / (double)L.size();
+            const double fps = avg > 0.0 ? 1000.0 / avg : 0.0;
+            std::printf(
+                "  [%d] %-26s invokes=%zu avg=%.3f мс p50=%.3f p95=%.3f "
+                "%.1f инф/с%s\n",
+                i, basename(models[i]).c_str(), L.size(), avg,
+                pct(L, 0.50), pct(L, 0.95), fps,
+                results[i].failed ? "  [ОШИБКА invoke]" : "");
+        }
+
+        std::printf("\n--- Сводно ---\n");
+        std::printf("Baseline single-instance : %.1f инф/с (%.3f мс)\n",
+                    single_fps, single_avg_ms);
+        std::printf("Суммарный throughput     : %.1f инф/с "
+                    "(%zu invoke за %.1f мс)\n",
+                    aggregate_fps, total_invokes, wall_ms);
+        std::printf("Идеальный (N×single)     : %.1f инф/с\n", ideal_fps);
+        std::printf("Speedup vs 1 экземпляр   : %.2f×\n",
+                    single_fps > 0.0 ? aggregate_fps / single_fps : 0.0);
+        std::printf("Scaling efficiency       : %.1f%%  (%s)\n",
+                    efficiency * 100.0,
+                    efficiency >= 0.85 ? "масштабируется ~линейно"
+                    : efficiency >= 0.5 ? "частичная конкуренция за ускоритель"
+                    : "ускоритель сериализует запросы");
+        if (any_failed)
+            std::printf("ВНИМАНИЕ: часть invoke завершилась ошибкой — "
+                        "см. метки [ОШИБКА invoke] выше.\n");
+
+        // ---- CSV-экспорт ----
+        if (!args.export_prefix.empty()) {
+            CsvExport pc;
+            if (open_export(pc, "parallel", "parallel")) {
+                pc.meta("instances", "%d", N);
+                pc.meta("runs",      "%d", args.runs);
+                pc.meta("warmup",    "%d", args.warmup);
+                pc.header("instance,model,run,ms");
+                for (int i = 0; i < N; ++i)
+                    for (size_t r = 0; r < results[i].lat.size(); ++r)
+                        pc.writef("%d,%s,%zu,%.6f", i,
+                                  csv_escape(basename(models[i])).c_str(),
+                                  r, results[i].lat[r]);
+                pc.flush();
+            }
+            CsvExport ps;
+            if (open_export(ps, "parallel.summary", "parallel_summary")) {
+                ps.meta("instances",      "%d", N);
+                ps.meta("runs",           "%d", args.runs);
+                ps.meta("single_fps",     "%.3f", single_fps);
+                ps.meta("aggregate_fps",  "%.3f", aggregate_fps);
+                ps.meta("speedup",        "%.4f",
+                        single_fps > 0.0 ? aggregate_fps / single_fps : 0.0);
+                ps.meta("efficiency",     "%.4f", efficiency);
+                ps.meta("wall_ms",        "%.3f", wall_ms);
+                ps.header("instance,model,invokes,avg_ms,p50_ms,p95_ms,"
+                          "fps,failed");
+                for (int i = 0; i < N; ++i) {
+                    const auto& L = results[i].lat;
+                    double sum = 0.0;
+                    for (double v : L) sum += v;
+                    const double avg = L.empty() ? 0.0 : sum / (double)L.size();
+                    const double fps = avg > 0.0 ? 1000.0 / avg : 0.0;
+                    ps.writef("%d,%s,%zu,%.6f,%.6f,%.6f,%.3f,%d", i,
+                              csv_escape(basename(models[i])).c_str(),
+                              L.size(), avg, pct(L, 0.50), pct(L, 0.95),
+                              fps, results[i].failed ? 1 : 0);
+                }
+                ps.flush();
+            }
+        }
+
+        sysmon_finalize();
+        return any_failed ? 9 : 0;
+    }
 
     // ---- YOLO: предварительная подготовка ----
     // Детектируем голову один раз (формат [1, C, A] vs [1, A, C]) до

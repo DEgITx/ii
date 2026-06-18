@@ -98,21 +98,39 @@ void print_usage(const char* prog) {
         "                      потоки, %% ядра) и системного CPU. Сводка\n"
         "                      в stdout + при --export пишется sysmon.csv\n"
         "  --sysmon-interval <ms> период семплирования sysmon внутри длинного\n"
-        "                      бенчмарка и видео-цикла (по умолчанию 1000)\n",
+        "                      бенчмарка и видео-цикла (по умолчанию 1000)\n"
+        "  --parallel <N>      параллельный бенчмарк: N независимых экземпляров\n"
+        "                      одной модели в N потоках. Проверяет, сериализует\n"
+        "                      ли NPU/делегат одновременные запросы и растёт ли\n"
+        "                      суммарный throughput. Меряет single-instance\n"
+        "                      baseline + N-way concurrency + scaling efficiency.\n"
+        "                      Вход случайный; несовместимо с --display/--camera/\n"
+        "                      --yolo/--tile/--compare*/--loop. При N>1 без явного\n"
+        "                      --threads интер-оп параллелизм форсится в 1.\n"
+        "  --parallel-models <a,b,c>  то же, но разнородный набор моделей\n"
+        "                      (multi-tenant), по одному потоку на модель.\n"
+        "                      Перебивает --parallel; позиционный model можно\n"
+        "                      не указывать (берётся первая из списка).\n",
         prog, backends_str.c_str(), def_delegate_show);
 }
 
 bool parse_args(int argc, char** argv, Args& a) {
     if (argc < 2) { print_usage(argv[0]); return false; }
-    a.model = argv[1];
-    // image — опциональный позиционный аргумент. Если argv[2] начинается
-    // с '-' (или его нет) — считаем, что картинку не передавали и весь
-    // остаток разбираем как флаги. Это нужно, чтобы --compare-random мог
-    // работать без изображения вообще.
-    int start = 2;
-    if (argc >= 3 && argv[2][0] != '-') {
-        a.image = argv[2];
-        start   = 3;
+    // model — первый позиционный аргумент, НО только если он не начинается
+    // с '-'. Иначе (например `ii --parallel-models a,b,c --random-input`)
+    // модель не задана позиционно: её бэкфиллит main из --parallel-models.
+    int start = 1;
+    if (argv[1][0] != '-') {
+        a.model = argv[1];
+        start   = 2;
+        // image — опциональный второй позиционный аргумент. Если argv[2]
+        // начинается с '-' (или его нет) — картинку не передавали и весь
+        // остаток разбираем как флаги (нужно, чтобы --random-input работал
+        // без изображения вообще).
+        if (argc >= 3 && argv[2][0] != '-') {
+            a.image = argv[2];
+            start   = 3;
+        }
     }
     for (int i = start; i < argc; ++i) {
         std::string s = argv[i];
@@ -175,6 +193,8 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--sysmon")                      a.sysmon       = true;
         else if (s == "--sysmon-interval" && i + 1 < argc)
                                                       a.sysmon_interval_ms = std::atoi(argv[++i]);
+        else if (s == "--parallel"    && i + 1 < argc) a.parallel    = std::atoi(argv[++i]);
+        else if (s == "--parallel-models" && i + 1 < argc) a.parallel_models = argv[++i];
         else if (s == "--win"         && i + 1 < argc) {
             // Принимаем формат "WxH" (например 1280x720).
             std::string v = argv[++i];
