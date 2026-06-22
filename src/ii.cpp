@@ -1453,6 +1453,10 @@ int main(int argc, char** argv) {
                         "canvas %dx%d\n",
                         layout.count(), layout.nx(), layout.ny(),
                         orig_w * scale_x, orig_h * scale_y);
+                    std::printf("Tiling: сборка кадра %s\n",
+                                gpu_tiles_active(disp)
+                                    ? "на GPU (шейдер)"
+                                    : "на CPU");
                 }
                 if (disp) {
                     // Та же логика приоритета, что и в show_rgb ниже.
@@ -2309,6 +2313,7 @@ int main(int argc, char** argv) {
             }
             // disp не поддержал GPU — run_tile_pass отработал CPU, out_img
             // готов. Сохраняем (как в do_single_invoke) и идём общим путём.
+            std::printf("Инференс: tile-pass на CPU\n");
             if (decode_output_needed && !out_img.rgb.empty()
                 && !args.save_output_path.empty()
                 && ii::save_png(out_img, args.save_output_path)) {
