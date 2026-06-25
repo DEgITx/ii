@@ -99,6 +99,9 @@ void print_usage(const char* prog) {
         "                      (внешний ffmpeg) | libav (линковка libav*) |\n"
         "                      gstreamer (HW-VPU через decodebin на устройстве).\n"
         "                      Доступность зависит от сборки (USE_VIDEO_*).\n"
+        "  --video-gl          (gstreamer) конверсия кадра через GL\n"
+        "                      (glupload!glcolorconvert!gldownload). Нужно, когда\n"
+        "                      VPU отдаёт только DMABuf/DMA_DRM; тянет EGL.\n"
         "  --ffmpeg <path>     путь к бинарю ffmpeg (только pipeline; def PATH)\n"
         "  --ffprobe <path>    путь к бинарю ffprobe (только pipeline; def PATH)\n"
         "  --export <prefix>   писать замеры в CSV: <prefix>.bench.csv (для\n"
@@ -204,6 +207,7 @@ bool parse_args(int argc, char** argv, Args& a) {
         else if (s == "--video"        && i + 1 < argc) a.video_path    = argv[++i];
         else if (s == "--video-loop")                   a.video_loop    = true;
         else if (s == "--video-decoder" && i + 1 < argc) a.video_decoder = argv[++i];
+        else if (s == "--video-gl")                     a.video_gl      = true;
         else if (s == "--ffmpeg"       && i + 1 < argc) a.ffmpeg_path   = argv[++i];
         else if (s == "--ffprobe"      && i + 1 < argc) a.ffprobe_path  = argv[++i];
         else if (s == "--export"      && i + 1 < argc) a.export_prefix = argv[++i];

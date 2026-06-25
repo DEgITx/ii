@@ -18,7 +18,7 @@ std::unique_ptr<VideoSource> make_ffmpeg_pipeline_video();
 std::unique_ptr<VideoSource> make_ffmpeg_libav_video();
 #endif
 #if VIDEO_HAS_GSTREAMER
-std::unique_ptr<VideoSource> make_gstreamer_video();
+std::unique_ptr<VideoSource> make_gstreamer_video(bool use_gl);
 #endif
 
 std::vector<std::string> available_video_decoders() {
@@ -38,7 +38,8 @@ std::vector<std::string> available_video_decoders() {
     return v;
 }
 
-std::unique_ptr<VideoSource> make_video(const std::string& decoder) {
+std::unique_ptr<VideoSource> make_video(const std::string& decoder,
+                                        [[maybe_unused]] bool gl) {
     std::string d = decoder;
     if (d.empty() || d == "auto") {
         // Авто: предпочесть libav (без процесса, точные параметры), затем
@@ -58,7 +59,7 @@ std::unique_ptr<VideoSource> make_video(const std::string& decoder) {
     if (d == "libav") return make_ffmpeg_libav_video();
 #endif
 #if VIDEO_HAS_GSTREAMER
-    if (d == "gstreamer") return make_gstreamer_video();
+    if (d == "gstreamer") return make_gstreamer_video(gl);
 #endif
 #if VIDEO_HAS_PIPELINE
     if (d == "pipeline") return make_ffmpeg_pipeline_video();

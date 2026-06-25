@@ -1697,7 +1697,7 @@ int main(int argc, char** argv) {
                 "видео-цикл).\n");
         }
 
-        auto vid = make_video(args.video_decoder);
+        auto vid = make_video(args.video_decoder, args.video_gl);
         if (!vid) {
             // make_video уже напечатал, что именно недоступно (или
             // USE_VIDEO=OFF / неизвестный --video-decoder).

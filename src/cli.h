@@ -106,6 +106,12 @@ struct Args {
     // ffmpeg + pipe; "libav" — линковка libav*; "gstreamer" — конвейер
     // GStreamer с аппаратным VPU-декодом на устройстве. См. video.h.
     std::string video_decoder;
+    // Только для gstreamer: собрать звено конверсии кадра через GL
+    // (glupload ! glcolorconvert ! gldownload) вместо videoconvert. Нужно на
+    // SoC, где аппаратный VPU отдаёт кадры только как DMABuf/DMA_DRM:
+    // обычный videoconvert такой буфер не принимает. Тянет EGL/Wayland —
+    // включать только там, где это так; на устройствах без GPU не нужно.
+    bool        video_gl     = false;
     std::string ffmpeg_path  = "ffmpeg";    // бинарь ffmpeg (только pipeline)
     std::string ffprobe_path = "ffprobe";   // бинарь ffprobe (только pipeline)
     // ---- Случайный вход вместо изображения ----

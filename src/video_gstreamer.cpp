@@ -1,22 +1,35 @@
 // Источник кадров из видеофайла через GStreamer — путь к АППАРАТНОМУ
-// декодированию на устройстве (i.MX95 и прочие SoC с VPU).
+// декодированию на устройстве (SoC с аппаратным VPU).
 //
 // Зачем третья реализация, когда уже есть pipeline (внешний ffmpeg) и
-// libav: на BSP от NXP именно GStreamer — родной мультимедийный стек, и
-// только через него `decodebin` автоматически подхватывает аппаратный
+// libav: на встраиваемых платформах именно GStreamer — родной мультимедийный
+// стек, и только через него `decodebin` автоматически подхватывает аппаратный
 // видеодекодер (v4l2-VPU: v4l2h264dec и т.п.) с zero-copy через DMABUF.
-// ffmpeg/libav на том же железе обычно уезжают в софтовый декод на ядрах
-// A55 и упираются в CPU раньше, чем в NPU. Здесь же тяжёлый H.264/H.265
+// ffmpeg/libav на том же железе обычно уезжают в софтовый декод на CPU и
+// упираются в него раньше, чем в NPU. Здесь же тяжёлый H.264/H.265
 // 1080p/4K снимается аппаратно, оставляя CPU под препроцессинг и NPU под
 // инференс. На dev-хосте GStreamer тоже работает (софтовый decodebin),
 // но смысла поверх libav не добавляет — поэтому реализация OFF по
-// умолчанию и включается под BSP-сборку (USE_VIDEO_GSTREAMER).
+// умолчанию и включается под целевую сборку (USE_VIDEO_GSTREAMER).
 //
-// Конвейер: filesrc ! decodebin ! videoconvert ! videoscale !
+// Конвейер: filesrc ! decodebin ! <звено конверсии> !
 //           video/x-raw,format=RGB ! appsink
 // decodebin сам выбирает наилучший доступный декодер (в т.ч. аппаратный),
-// videoconvert/videoscale приводят любой формат декодера к плотному RGB,
-// appsink в pull-режиме отдаёт кадры синхронно нашему grab().
+// звено конверсии приводит любой формат декодера к плотному RGB, appsink
+// в pull-режиме отдаёт кадры синхронно нашему grab().
+//
+// Звено конверсии — два варианта (выбор флагом --video-gl, см. build_convert_chain):
+//   * обычный (по умолчанию): videoconvert ! videoscale. Работает, когда
+//     декодер отдаёт кадры в СИСТЕМНОЙ памяти — софтовый decodebin на
+//     dev-хосте, большинство USB/CSI-конвейеров. Никаких лишних зависимостей.
+//   * GL (--video-gl): glupload ! glcolorconvert ! gldownload. Нужен на SoC,
+//     где аппаратный VPU отдаёт кадры ТОЛЬКО как DMABuf в опаковом формате
+//     DMA_DRM (напр. v4l2h264dec на GStreamer 1.26): ни videoconvert, ни
+//     imxvideoconvert_g2d такой буфер не принимают (not-negotiated), а
+//     glupload импортирует его через EGL по DRM-модификатору, glcolorconvert
+//     делает YUV->RGB на GPU, gldownload возвращает RGB в системную память.
+//     Включается ЯВНО, потому что тянет EGL/Wayland-контекст, который есть не
+//     на всех целях — на устройствах без GPU обычный путь как раз и нужен.
 //
 // ВАЖНО: конвейер строится вручную (а не через gst_parse_launch), потому
 // что decodebin отдаёт ДИНАМИЧЕСКИЕ pad'ы, причём у файла с аудиодорожкой
@@ -57,6 +70,7 @@ void ensure_gst_init() {
 
 class GstVideo : public VideoSource {
 public:
+    explicit GstVideo(bool use_gl) : use_gl_(use_gl) {}
     ~GstVideo() override { close(); }
 
     bool open(const std::string& path, const std::string& /*ffmpeg*/,
@@ -65,20 +79,18 @@ public:
         ensure_gst_init();
 
         pipeline_ = gst_pipeline_new("ii-video");
-        GstElement* src   = gst_element_factory_make("filesrc",      "src");
-        GstElement* dec   = gst_element_factory_make("decodebin",    "dec");
-        conv_             = gst_element_factory_make("videoconvert", "conv");
-        GstElement* scale = gst_element_factory_make("videoscale",   "scale");
-        GstElement* capsf = gst_element_factory_make("capsfilter",   "capsf");
-        sink_             = gst_element_factory_make("appsink",      "iisink");
-        if (!pipeline_ || !src || !dec || !conv_ || !scale || !capsf || !sink_)
+        GstElement* src   = gst_element_factory_make("filesrc",    "src");
+        GstElement* dec   = gst_element_factory_make("decodebin",  "dec");
+        GstElement* capsf = gst_element_factory_make("capsfilter", "capsf");
+        sink_             = gst_element_factory_make("appsink",     "iisink");
+        if (!pipeline_ || !src || !dec || !capsf || !sink_)
             return fail("не создать элементы конвейера (нет плагинов GStreamer?)");
 
         g_object_set(src, "location", path.c_str(), nullptr);
 
-        // appsink принимает только плотный RGB; videoconvert/videoscale
-        // догоняют до него любой формат декодера. Resize кадра не просим —
-        // letterbox в нативном разрешении делает раннер.
+        // appsink принимает только плотный RGB; звено конверсии (см.
+        // build_convert_chain) догоняет до него любой формат декодера.
+        // Resize кадра не просим — letterbox в нативном разрешении делает раннер.
         GstCaps* rgb = gst_caps_new_simple("video/x-raw",
                                            "format", G_TYPE_STRING, "RGB", nullptr);
         g_object_set(capsf, "caps", rgb, nullptr);
@@ -91,15 +103,15 @@ public:
         // Кладём все элементы в pipeline (bin берёт на себя владение
         // floating-ссылками — отдельно освобождать не нужно, всё снимет
         // gst_object_unref(pipeline_)).
-        gst_bin_add_many(GST_BIN(pipeline_), src, dec, conv_, scale, capsf,
-                         sink_, nullptr);
-        // Статическая часть линкуется сразу. Стык decodebin -> videoconvert
-        // динамический: decodebin создаёт pad'ы по ходу разбора контейнера,
-        // поэтому линкуем его в обработчике pad-added (см. on_pad_added).
+        gst_bin_add_many(GST_BIN(pipeline_), src, dec, capsf, sink_, nullptr);
         if (!gst_element_link(src, dec))
             return fail("не слинковать filesrc -> decodebin");
-        if (!gst_element_link_many(conv_, scale, capsf, sink_, nullptr))
-            return fail("не слинковать videoconvert -> appsink");
+        // Звено конверсии (обычное или GL — см. build_convert_chain) собираем
+        // и линкуем в capsf ! appsink; голову звена кладём в convert_head_.
+        if (!build_convert_chain(capsf, sink_))
+            return false;  // причину уже напечатали
+        // Стык decodebin -> голова звена ДИНАМИЧЕСКИЙ: decodebin создаёт pad'ы
+        // по ходу разбора контейнера, поэтому линкуем его в pad-added.
         g_signal_connect(dec, "pad-added", G_CALLBACK(&GstVideo::on_pad_added),
                          this);
 
@@ -162,13 +174,13 @@ public:
         gst_element_set_state(pipeline_, GST_STATE_NULL);
         gst_object_unref(pipeline_);   // снимает и все дочерние элементы
         pipeline_ = nullptr;
-        conv_ = sink_ = nullptr;       // принадлежали pipeline_, уже сняты
+        convert_head_ = sink_ = nullptr;  // принадлежали pipeline_, уже сняты
     }
 
 private:
-    // decodebin отдал новый декодированный pad. Видео — в videoconvert (один,
-    // первый), всё прочее (аудио/субтитры/лишнее видео) — в fakesink, чтобы
-    // демуксер не блокировался на неподключённом выходе.
+    // decodebin отдал новый декодированный pad. Видео — в голову звена
+    // конверсии (один, первый), всё прочее (аудио/субтитры/лишнее видео) —
+    // в fakesink, чтобы демуксер не блокировался на неподключённом выходе.
     static void on_pad_added(GstElement* /*dec*/, GstPad* pad, gpointer user) {
         auto* self = static_cast<GstVideo*>(user);
 
@@ -180,15 +192,45 @@ private:
         const bool is_video = name && g_str_has_prefix(name, "video/");
         if (caps) gst_caps_unref(caps);
 
-        // Первую видеодорожку — в videoconvert, вторую (если есть) и не-видео
-        // pad'ы — в fakesink.
+        // Первую видеодорожку — в звено конверсии, вторую (если есть) и
+        // не-видео pad'ы — в fakesink.
         GstPad* sinkpad = is_video
-            ? gst_element_get_static_pad(self->conv_, "sink") : nullptr;
+            ? gst_element_get_static_pad(self->convert_head_, "sink") : nullptr;
         if (sinkpad && !gst_pad_is_linked(sinkpad))
             gst_pad_link(pad, sinkpad);
         else
             self->attach_fakesink(pad);
         if (sinkpad) gst_object_unref(sinkpad);
+    }
+
+    // Собрать звено конверсии "декодер -> плотный RGB" и слинковать его в
+    // capsf ! sink. Голову звена (цель линковки видео-pad'а декодера в
+    // on_pad_added) запоминаем в convert_head_. Выбор реализации — use_gl_.
+    bool build_convert_chain(GstElement* capsf, GstElement* sink) {
+        if (use_gl_) {
+            // glupload ! glcolorconvert ! gldownload: единственный путь к RGB,
+            // когда VPU отдаёт DMABuf/DMA_DRM (см. шапку файла).
+            GstElement* up = gst_element_factory_make("glupload",       "glup");
+            GstElement* cc = gst_element_factory_make("glcolorconvert", "glcc");
+            GstElement* dl = gst_element_factory_make("gldownload",     "gldl");
+            if (!up || !cc || !dl)
+                return fail("не создать GL-звено (нет плагинов gstreamer-gl?)");
+            gst_bin_add_many(GST_BIN(pipeline_), up, cc, dl, nullptr);
+            if (!gst_element_link_many(up, cc, dl, capsf, sink, nullptr))
+                return fail("не слинковать glupload -> ... -> appsink");
+            convert_head_ = up;
+        } else {
+            // videoconvert ! videoscale: декодер отдаёт системную память.
+            GstElement* conv  = gst_element_factory_make("videoconvert", "conv");
+            GstElement* scale = gst_element_factory_make("videoscale",  "scale");
+            if (!conv || !scale)
+                return fail("не создать videoconvert/videoscale");
+            gst_bin_add_many(GST_BIN(pipeline_), conv, scale, nullptr);
+            if (!gst_element_link_many(conv, scale, capsf, sink, nullptr))
+                return fail("не слинковать videoconvert -> appsink");
+            convert_head_ = conv;
+        }
+        return true;
     }
 
     // Подключить pad к свежему fakesink (sync=false/async=false — просто
@@ -277,12 +319,14 @@ private:
         return false;
     }
 
-    GstElement* pipeline_ = nullptr;
-    GstElement* conv_     = nullptr;  // videoconvert: цель линковки видео-pad'а
-    GstElement* sink_     = nullptr;
+    GstElement* pipeline_     = nullptr;
+    GstElement* convert_head_ = nullptr;  // голова звена конверсии: цель
+                                          // линковки видео-pad'а декодера
+    GstElement* sink_         = nullptr;
     int  width_  = 0;
     int  height_ = 0;
     int  fps_    = 0;
+    const bool use_gl_ = false;  // звено конверсии через GL (--video-gl)
     bool loop_         = false;
     bool eof_          = false;
     bool have_pending_ = false;  // первый кадр уже лежит в rgb_ (из open)
@@ -291,6 +335,6 @@ private:
 
 }  // namespace
 
-std::unique_ptr<VideoSource> make_gstreamer_video() {
-    return std::make_unique<GstVideo>();
+std::unique_ptr<VideoSource> make_gstreamer_video(bool use_gl) {
+    return std::make_unique<GstVideo>(use_gl);
 }

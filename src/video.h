@@ -10,8 +10,8 @@
 //     libswscale напрямую. Полноценный декодер: без накладных расходов на
 //     процесс, точные fps/длительность, seek/loop средствами библиотеки.
 //   * "gstreamer" (video_gstreamer.cpp) — конвейер filesrc ! decodebin !
-//     videoconvert ! appsink. На устройстве (i.MX95) decodebin подхватывает
-//     АППАРАТНЫЙ VPU-декодер — путь к hardware-decode на BSP.
+//     videoconvert ! appsink. На встраиваемых платформах decodebin
+//     подхватывает АППАРАТНЫЙ VPU-декодер — путь к hardware-decode.
 // Отсюда обобщённое имя интерфейса VideoSource, не привязанное к способу
 // декодирования.
 //
@@ -74,9 +74,14 @@ struct VideoSource {
 //   decoder == "" / "auto"            — выбрать наилучшую из собранных
 //       (приоритет libav -> gstreamer -> pipeline);
 //   "pipeline" / "libav" / "gstreamer" — конкретная реализация.
+//   gl — только для "gstreamer": собрать звено конверсии через GL
+//       (glupload ! glcolorconvert ! gldownload) вместо videoconvert.
+//       Нужно на SoC, где VPU отдаёт кадры только как DMABuf/DMA_DRM;
+//       тянет EGL/Wayland-контекст. Прочие реализации игнорируют.
 // Возвращает nullptr, если запрошенная реализация не собрана (или
 // USE_VIDEO=OFF).
-std::unique_ptr<VideoSource> make_video(const std::string& decoder = "");
+std::unique_ptr<VideoSource> make_video(const std::string& decoder = "",
+                                        bool gl = false);
 
 // Список собранных реализаций видеодекодера ("libav", "gstreamer",
 // "pipeline"). Пуст при USE_VIDEO=OFF. Порядок = приоритет авто-выбора.
