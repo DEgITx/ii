@@ -67,6 +67,13 @@ else()
     option(USE_CAMERA  "Сборка с V4L2 backend'ом для захвата с камеры"          OFF)
 endif()
 
+# Видеофайл на входе (--video). Реализация — внешний ffmpeg + pipe
+# (video_ffmpeg_pipeline.cpp): линк-зависимостей нет, нужен лишь бинарь
+# ffmpeg/ffprobe в рантайме, поэтому опция кроссплатформенная и ON по
+# умолчанию (сборка всегда успешна; при отсутствии ffmpeg --video просто
+# падает в рантайме с понятным сообщением).
+option(USE_VIDEO "Сборка с поддержкой видеофайла на входе (ffmpeg pipe)" ON)
+
 # Бэкенды инференса. Все внешние бэкенды по умолчанию OFF: каждый требует
 # своего SDK (TFLite — libtensorflowlite + заголовки, TensorRT — CUDA+nvinfer,
 # DirectML — ONNX Runtime), и отсутствие любого из них не должно блокировать
@@ -412,6 +419,16 @@ else()
     target_sources(ii_core PRIVATE ${II_SRC_DIR}/camera_stub.cpp)
 endif()
 
+# ---- Backend для видеофайла ----------------------------------------------
+# Кроссплатформенный: внешний процесс ffmpeg + pipe (video_ffmpeg_pipeline.cpp);
+# USE_VIDEO=OFF -> заглушка (make_video() возвращает nullptr).
+if(USE_VIDEO)
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_ffmpeg_pipeline.cpp)
+    target_compile_definitions(ii_core PRIVATE NPU_HAS_VIDEO=1)
+else()
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_stub.cpp)
+endif()
+
 # ---- Backend для отображения ---------------------------------------------
 # Linux -> Wayland/EGL/GLES2 (display_wayland.cpp);
 # Windows -> Win32/Direct3D 11 (display_d3d11.cpp);
@@ -485,4 +502,5 @@ message(STATUS "  DirectML : ${USE_DIRECTML}")
 message(STATUS "  DelegMod : ${USE_NEUTRON_DELEGATE}")
 message(STATUS "  Display  : ${USE_DISPLAY}")
 message(STATUS "  Camera   : ${USE_CAMERA}")
+message(STATUS "  Video    : ${USE_VIDEO}")
 message(STATUS "  Tests    : ${BUILD_TESTS}")

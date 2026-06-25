@@ -89,6 +89,14 @@ void print_usage(const char* prog) {
         "                      --display, --yolo, --stats, --show-input.\n"
         "  --camera-size WxH   запрашиваемое разрешение камеры (def 640x480)\n"
         "  --camera-fps <N>    запрашиваемая частота кадров камеры (def 30)\n"
+        "  --video <file>      видеофайл на входе (декодируется внешним\n"
+        "                      ffmpeg в pipe; нужен ffmpeg/ffprobe в PATH).\n"
+        "                      Запускает общий видео-цикл; image и\n"
+        "                      --random-input игнорируются. Совместимо с\n"
+        "                      --display, --yolo, --tile, --show-output, --stats.\n"
+        "  --video-loop        зациклить воспроизведение файла по концу\n"
+        "  --ffmpeg <path>     путь к бинарю ffmpeg (def \"ffmpeg\" из PATH)\n"
+        "  --ffprobe <path>    путь к бинарю ffprobe (def \"ffprobe\" из PATH)\n"
         "  --export <prefix>   писать замеры в CSV: <prefix>.bench.csv (для\n"
         "                      --benchmark), <prefix>.fps.csv (для видео-\n"
         "                      цикла со --stats), <prefix>.compare.csv (для\n"
@@ -189,6 +197,10 @@ bool parse_args(int argc, char** argv, Args& a) {
             a.camera_h = std::atoi(v.substr(x + 1).c_str());
         }
         else if (s == "--camera-fps"  && i + 1 < argc) a.camera_fps  = std::atoi(argv[++i]);
+        else if (s == "--video"       && i + 1 < argc) a.video_path   = argv[++i];
+        else if (s == "--video-loop")                  a.video_loop   = true;
+        else if (s == "--ffmpeg"      && i + 1 < argc) a.ffmpeg_path  = argv[++i];
+        else if (s == "--ffprobe"     && i + 1 < argc) a.ffprobe_path = argv[++i];
         else if (s == "--export"      && i + 1 < argc) a.export_prefix = argv[++i];
         else if (s == "--sysmon")                      a.sysmon       = true;
         else if (s == "--sysmon-interval" && i + 1 < argc)

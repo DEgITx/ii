@@ -12,6 +12,11 @@
 // таймаут камеры). Цикл при этом проверит флаг прерывания и пойдёт
 // ждать следующий кадр.
 //
+// Источник может ещё и ЗАКОНЧИТЬСЯ (видеофайл дошёл до конца) — про это
+// сообщает ended(). Это не то же самое, что next()==nullptr: камера
+// «пустой» итерацией лишь просит подождать кадр, а у файла конец потока
+// окончателен. Цикл проверяет ended(), чтобы выйти по EOF.
+//
 // Классы тривиальны (тонкие обёртки) — модуль header-only.
 
 #pragma once
@@ -19,6 +24,7 @@
 #include <cstdint>
 
 #include "camera.h"
+#include "video.h"
 
 namespace ii {
 
@@ -26,6 +32,9 @@ struct FrameSource {
     virtual ~FrameSource() = default;
     virtual const uint8_t* next(int& out_w, int& out_h,
                                 bool& out_needs_preprocess) = 0;
+    // true — источник исчерпан (конец видеофайла). Живые источники
+    // (камера) и статическая картинка не заканчиваются, поэтому дефолт false.
+    virtual bool ended() const { return false; }
 };
 
 class CameraFrameSource : public FrameSource {
@@ -41,6 +50,22 @@ public:
 private:
     Camera& cam_;
     int     timeout_ms_;
+};
+
+// Источник кадров из видеофайла — такая же тонкая обёртка, как
+// CameraFrameSource, но конечная: ended() прокидывает VideoSource::eof().
+class VideoFrameSource : public FrameSource {
+public:
+    explicit VideoFrameSource(VideoSource& vid) : vid_(vid) {}
+    const uint8_t* next(int& w, int& h, bool& needs_preprocess) override {
+        w = vid_.width();
+        h = vid_.height();
+        needs_preprocess = true;       // живой источник: новый кадр каждый раз
+        return vid_.grab();
+    }
+    bool ended() const override { return vid_.eof(); }
+private:
+    VideoSource& vid_;
 };
 
 class StaticFrameSource : public FrameSource {

@@ -156,12 +156,12 @@ int main(int argc, char** argv) {
         args.image.clear();
         // Несовместимые режимы: параллельный бенчмарк — это «голый» замер
         // invoke, без окна/камеры/постобработки/сравнения/видео-цикла.
-        if (args.display || !args.camera_device.empty() || args.yolo
-            || args.tile_mode || args.compare_cpu
+        if (args.display || !args.camera_device.empty() || !args.video_path.empty()
+            || args.yolo || args.tile_mode || args.compare_cpu
             || !args.compare_model.empty() || args.loop) {
             std::fprintf(stderr,
-                "Параллельный режим несовместим с --display/--camera/--yolo/"
-                "--tile/--compare*/--loop.\n");
+                "Параллельный режим несовместим с --display/--camera/--video/"
+                "--yolo/--tile/--compare*/--loop.\n");
             return 1;
         }
         // N движков, каждый со своим интер-оп пулом: если оставить --threads 0
@@ -175,15 +175,17 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Источников входа три: картинка, --random-input, --camera. Хотя бы
-    // один обязателен. --camera (если задана) перебивает остальные:
-    // получает контроль над основным циклом и игнорирует image/random.
+    // Источников входа четыре: картинка, --random-input, --camera,
+    // --video. Хотя бы один обязателен. Приоритет «живых» источников:
+    // --camera перебивает --video, оба перебивают image/random — они
+    // получают контроль над основным циклом (run_video_loop).
     const bool has_camera = !args.camera_device.empty();
-    const bool has_image  = !args.image.empty() && !has_camera;
-    if (!has_image && !args.random_input && !has_camera) {
+    const bool has_video  = !args.video_path.empty() && !has_camera;
+    const bool has_image  = !args.image.empty() && !has_camera && !has_video;
+    if (!has_image && !args.random_input && !has_camera && !has_video) {
         std::fprintf(stderr,
             "Не указан источник входа. Передайте image, либо "
-            "--random-input, либо --camera.\n");
+            "--random-input, либо --camera, либо --video.\n");
         print_usage(argv[0]);
         return 1;
     }
@@ -195,16 +197,21 @@ int main(int argc, char** argv) {
     // но с --show-output есть что: декодированный выход модели от случайного
     // входа — полезно для sanity-чека SR/enhance на dev-хосте.
     if (args.random_input && args.display && !has_image && !has_camera
-        && !args.show_output) {
+        && !has_video && !args.show_output) {
         std::fprintf(stderr,
-            "--display требует источник кадров (image или --camera) либо "
-            "--show-output; при чистом --random-input нечего показывать.\n");
+            "--display требует источник кадров (image / --camera / --video) "
+            "либо --show-output; при чистом --random-input нечего показывать.\n");
         return 1;
     }
     if (has_camera && !args.image.empty()) {
         std::fprintf(stderr,
             "Внимание: image=%s проигнорирован, активен --camera %s.\n",
             args.image.c_str(), args.camera_device.c_str());
+    }
+    if (has_video && !args.image.empty()) {
+        std::fprintf(stderr,
+            "Внимание: image=%s проигнорирован, активен --video %s.\n",
+            args.image.c_str(), args.video_path.c_str());
     }
     // --show-output (декодирование выхода как картинки) и --yolo (декодирование
     // выхода как боксов) — взаимоисключающие интерпретации одного и того же
@@ -222,10 +229,10 @@ int main(int argc, char** argv) {
             args.output_range_str.c_str());
         return 1;
     }
-    if (!args.save_output_path.empty() && (args.loop || has_camera)) {
+    if (!args.save_output_path.empty() && (args.loop || has_camera || has_video)) {
         std::fprintf(stderr,
-            "Внимание: --save-output игнорируется в режиме --loop/--camera "
-            "(имеет смысл только для одиночного инференса).\n");
+            "Внимание: --save-output игнорируется в режиме --loop/--camera/"
+            "--video (имеет смысл только для одиночного инференса).\n");
     }
     // Валидация --tile: режим осмыслен только для image-to-image моделей с
     // реальным источником кадров и без альтернативных интерпретаций выхода.
@@ -248,9 +255,9 @@ int main(int argc, char** argv) {
                 "разбиения на тайлы.\n");
             return 1;
         }
-        if (!has_image && !has_camera) {
+        if (!has_image && !has_camera && !has_video) {
             std::fprintf(stderr,
-                "--tile требует источник кадров: image или --camera.\n");
+                "--tile требует источник кадров: image, --camera или --video.\n");
             return 1;
         }
         if (args.tile_overlap < 0) {
@@ -664,22 +671,28 @@ int main(int argc, char** argv) {
         }
         return fill_input(input_rgb, in_info[0], in_t);
     };
-    if (has_camera) {
-        // Для камеры ждём первый кадр уже в основном цикле — здесь лишь
-        // проверяем, что вход модели совместим (NHWC/NCHW картинка).
+    if (has_camera || has_video) {
+        // Для камеры/видео ждём первый кадр уже в основном цикле — здесь
+        // лишь проверяем, что вход модели совместим (NHWC/NCHW картинка).
         if (!is_img) {
             std::fprintf(stderr,
-                "Для --camera нужен вход-картинка NHWC [1,H,W,1|3] или "
+                "Для --%s нужен вход-картинка NHWC [1,H,W,1|3] или "
                 "NCHW [1,1|3,H,W], получено %s.\n",
-                shape_to_str(s).c_str());
+                has_camera ? "camera" : "video", shape_to_str(s).c_str());
             return 4;
         }
-        std::printf(
-            "Камера: устройство=%s, запрошено %dx%d @ %d fps, "
-            "вход модели %dx%dx%d\n",
-            args.camera_device.c_str(),
-            args.camera_w, args.camera_h, args.camera_fps,
-            in_w, in_h, in_c);
+        if (has_camera) {
+            std::printf(
+                "Камера: устройство=%s, запрошено %dx%d @ %d fps, "
+                "вход модели %dx%dx%d\n",
+                args.camera_device.c_str(),
+                args.camera_w, args.camera_h, args.camera_fps,
+                in_w, in_h, in_c);
+        } else {
+            std::printf(
+                "Видео: файл=%s, вход модели %dx%dx%d\n",
+                args.video_path.c_str(), in_w, in_h, in_c);
+        }
     } else if (has_image) {
         if (!load_image(args.image, img)) return 4;
         if (args.tile_mode) {
@@ -1047,9 +1060,9 @@ int main(int argc, char** argv) {
     YoloHead yolo_head;
     YoloPostOptions yolo_opts;
     if (args.yolo) {
-        if (!has_image && !has_camera) {
+        if (!has_image && !has_camera && !has_video) {
             std::fprintf(stderr,
-                "--yolo требует источник кадров (image или --camera).\n");
+                "--yolo требует источник кадров (image, --camera или --video).\n");
             return 6;
         }
         if (!detect_yolo_head(out_info, args.yolo_output, yolo_head)) return 6;
@@ -1371,7 +1384,8 @@ int main(int argc, char** argv) {
             fps_csv.meta("vsync",           "%s",
                          args.vsync ? "on" : "off");
             fps_csv.meta("source",          "%s",
-                         src ? (has_camera ? "camera" : "static")
+                         src ? (has_camera ? "camera"
+                                           : has_video ? "video" : "static")
                              : "none");
             fps_csv.header("t_ms,frame,fps,dt_avg_ms,dt_min_ms,"
                            "dt_max_ms,jitter_ms");
@@ -1403,9 +1417,10 @@ int main(int argc, char** argv) {
                 int  fw = 0, fh = 0;
                 frame = src->next(fw, fh, needs_preprocess);
                 if (!frame) {
-                    // Источник не отдал кадр (таймаут камеры / skip) —
-                    // даём циклу шанс заметить SIGINT и идём дальше.
-                    if (g_interrupted) break;
+                    // Источник не отдал кадр. Для видеофайла это может быть
+                    // конец потока (ended()) — тогда выходим; для камеры —
+                    // лишь таймаут/skip, продолжаем (дав шанс заметить SIGINT).
+                    if (g_interrupted || src->ended()) break;
                     continue;
                 }
                 orig_w = fw;
@@ -1443,7 +1458,9 @@ int main(int argc, char** argv) {
                 if (src) {
                     std::printf("Источник кадров: %dx%d%s\n",
                                 orig_w, orig_h,
-                                has_camera ? " (камера)" : " (статический)");
+                                has_camera ? " (камера)"
+                                           : has_video ? " (видео)"
+                                                       : " (статический)");
                 }
                 if (args.tile_mode && src) {
                     const auto layout = ii::plan_tiles(
@@ -1585,7 +1602,9 @@ int main(int argc, char** argv) {
             CsvExport fs;
             if (open_export(fs, "fps.summary", "video_loop_summary")) {
                 fs.meta("source", "%s",
-                        src ? (has_camera ? "camera" : "static") : "none");
+                        src ? (has_camera ? "camera"
+                                          : has_video ? "video" : "static")
+                            : "none");
                 fs.meta("vsync",  "%s", args.vsync ? "on" : "off");
                 fs.header("frames,wall_s,avg_fps,"
                           "dt_avg_ms,dt_min_ms,dt_max_ms,jitter_ms");
@@ -1664,12 +1683,72 @@ int main(int argc, char** argv) {
         return rc;
     }
 
+    // ---- Режим --video: видеофайл через общий видео-цикл --------------------
+    // Симметрично --camera: открываем VideoSource (внешний ffmpeg + pipe),
+    // оборачиваем в VideoFrameSource и отдаём управление run_video_loop.
+    // Отличие — конечность потока: цикл сам выйдет по VideoSource::eof()
+    // (через FrameSource::ended()).
+    if (has_video) {
+        if (args.benchmark || args.loop || args.compare_cpu
+            || !args.compare_model.empty() || args.random_input) {
+            std::fprintf(stderr,
+                "Внимание: --benchmark/--loop/--compare*/--random-input "
+                "игнорируются в режиме --video (используется общий "
+                "видео-цикл).\n");
+        }
+
+        auto vid = make_video();
+        if (!vid) {
+            std::fprintf(stderr,
+                "Поддержка видео не собрана (USE_VIDEO=OFF).\n");
+            return 7;
+        }
+        if (!vid->open(args.video_path, args.ffmpeg_path,
+                       args.ffprobe_path, args.video_loop)) {
+            return 7;
+        }
+
+        // Раскладка тайлов известна после open() — video сообщил
+        // фактические width()/height() файла. Печатаем как для камеры.
+        if (args.tile_mode) {
+            const auto layout = ii::plan_tiles(
+                vid->width(), vid->height(), in_w, in_h, args.tile_overlap);
+            std::printf(
+                "Видео: %dx%d -> tile %dx%d×%d тайлов "
+                "(scale=%dx, overlap=%d, выход %dx%d)%s\n",
+                vid->width(), vid->height(),
+                in_w, in_h, layout.count(), scale_x, args.tile_overlap,
+                vid->width() * scale_x, vid->height() * scale_y,
+                in_c == 1 ? " [RGB→luma BT.601 каждый тайл]" : "");
+        }
+
+        std::unique_ptr<Display> disp;
+        if (args.display) {
+            disp = make_display();
+            if (!disp) {
+                std::fprintf(stderr,
+                    "Поддержка дисплея не собрана (USE_DISPLAY=OFF).\n");
+                return 7;
+            }
+            if (!disp->init(args.win_w, args.win_h, "ii", args.vsync))
+                return 7;
+            std::printf("Display: окно %dx%d, vsync=%s\n",
+                        args.win_w, args.win_h,
+                        args.vsync ? "on" : "off");
+        }
+
+        VideoFrameSource src(*vid);
+        int rc = run_video_loop(&src, disp.get());
+        sysmon_finalize();
+        return rc;
+    }
+
     // ---- Один прогон ----
     // Делаем как только в input_t уже что-то залито (картинка или random).
     // В чистом --compare-random режиме вход для сравнения зальётся внутри
     // run_compare, поэтому одиночный прогон тут пропускаем. С камерой
     // одиночного прогона нет вовсе — кадры идут в собственном цикле ниже.
-    const bool do_single_invoke = !has_camera && (has_image
+    const bool do_single_invoke = !has_camera && !has_video && (has_image
         || (args.random_input && !args.compare_cpu && args.compare_model.empty()));
     // Одиночный tile-кадр с дисплеем и доступной GPU-сборкой откладываем в
     // display-блок ниже (там создаётся disp): и показ, и --save-output (через
