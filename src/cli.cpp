@@ -95,8 +95,11 @@ void print_usage(const char* prog) {
         "                      --random-input игнорируются. Совместимо с\n"
         "                      --display, --yolo, --tile, --show-output, --stats.\n"
         "  --video-loop        зациклить воспроизведение файла по концу\n"
-        "  --ffmpeg <path>     путь к бинарю ffmpeg (def \"ffmpeg\" из PATH)\n"
-        "  --ffprobe <path>    путь к бинарю ffprobe (def \"ffprobe\" из PATH)\n"
+        "  --video-decoder <d> реализация декодера: auto (def) | pipeline\n"
+        "                      (внешний ffmpeg) | libav (линковка libav*).\n"
+        "                      Доступность зависит от сборки (USE_VIDEO_*).\n"
+        "  --ffmpeg <path>     путь к бинарю ffmpeg (только pipeline; def PATH)\n"
+        "  --ffprobe <path>    путь к бинарю ffprobe (только pipeline; def PATH)\n"
         "  --export <prefix>   писать замеры в CSV: <prefix>.bench.csv (для\n"
         "                      --benchmark), <prefix>.fps.csv (для видео-\n"
         "                      цикла со --stats), <prefix>.compare.csv (для\n"
@@ -197,10 +200,11 @@ bool parse_args(int argc, char** argv, Args& a) {
             a.camera_h = std::atoi(v.substr(x + 1).c_str());
         }
         else if (s == "--camera-fps"  && i + 1 < argc) a.camera_fps  = std::atoi(argv[++i]);
-        else if (s == "--video"       && i + 1 < argc) a.video_path   = argv[++i];
-        else if (s == "--video-loop")                  a.video_loop   = true;
-        else if (s == "--ffmpeg"      && i + 1 < argc) a.ffmpeg_path  = argv[++i];
-        else if (s == "--ffprobe"     && i + 1 < argc) a.ffprobe_path = argv[++i];
+        else if (s == "--video"        && i + 1 < argc) a.video_path    = argv[++i];
+        else if (s == "--video-loop")                   a.video_loop    = true;
+        else if (s == "--video-decoder" && i + 1 < argc) a.video_decoder = argv[++i];
+        else if (s == "--ffmpeg"       && i + 1 < argc) a.ffmpeg_path   = argv[++i];
+        else if (s == "--ffprobe"      && i + 1 < argc) a.ffprobe_path  = argv[++i];
         else if (s == "--export"      && i + 1 < argc) a.export_prefix = argv[++i];
         else if (s == "--sysmon")                      a.sysmon       = true;
         else if (s == "--sysmon-interval" && i + 1 < argc)

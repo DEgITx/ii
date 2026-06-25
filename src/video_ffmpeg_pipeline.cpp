@@ -18,7 +18,8 @@
 //
 // Кроссплатформенно за счёт popen/_popen — отдельных реализаций под
 // Linux/Windows не требуется (в отличие от camera.*, где захват завязан
-// на ОС-API). Будущая libav-реализация встанет рядом отдельным файлом.
+// на ОС-API). Библиотечная (libav) реализация живёт рядом в
+// video_ffmpeg_libav.cpp; выбор между ними — make_video() в video.cpp.
 
 #include "video.h"
 
@@ -40,6 +41,20 @@ namespace {
   #define II_PCLOSE pclose
   static const char* kPopenMode = "r";
 #endif
+
+// На Windows _popen запускает команду через `cmd.exe /c`. Если строка
+// одновременно НАЧИНАЕТСЯ с кавычки (мы кавычим имя бинаря) и содержит
+// другие кавычки (вокруг пути), cmd.exe съедает первую и последнюю
+// кавычку всей строки, ломая и имя программы, и путь. Лечение —
+// обернуть всю команду в ещё одну пару кавычек: cmd снимет внешнюю,
+// внутренние дойдут до ffmpeg/ffprobe целыми. На POSIX — без изменений.
+std::string shellify(const std::string& cmd) {
+#ifdef _WIN32
+    return "\"" + cmd + "\"";
+#else
+    return cmd;
+#endif
+}
 
 // Прочитать ровно n байт из pipe. fread на pipe вправе вернуть меньше
 // запрошенного (граница кадра, планировщик), поэтому дочитываем в цикле.
@@ -78,7 +93,7 @@ public:
         if (loop_) cmd += " -stream_loop -1";
         cmd += " -i " + quote(path)
              + " -f rawvideo -pix_fmt rgb24 -loglevel quiet -";
-        pipe_ = II_POPEN(cmd.c_str(), kPopenMode);
+        pipe_ = II_POPEN(shellify(cmd).c_str(), kPopenMode);
         if (!pipe_) {
             std::fprintf(stderr, "Video: не запустить ffmpeg: %s\n",
                          cmd.c_str());
@@ -128,7 +143,7 @@ private:
             + " -v error -select_streams v:0"
               " -show_entries stream=width,height,r_frame_rate"
               " -of csv=p=0 " + quote(path);
-        FILE* p = II_POPEN(cmd.c_str(), kPopenMode);
+        FILE* p = II_POPEN(shellify(cmd).c_str(), kPopenMode);
         if (!p) return false;
         char line[256] = {0};
         char* got = std::fgets(line, sizeof(line), p);
@@ -160,6 +175,6 @@ private:
 
 }  // namespace
 
-std::unique_ptr<VideoSource> make_video() {
+std::unique_ptr<VideoSource> make_ffmpeg_pipeline_video() {
     return std::make_unique<FfmpegPipeVideo>();
 }

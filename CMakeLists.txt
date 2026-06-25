@@ -420,11 +420,63 @@ else()
 endif()
 
 # ---- Backend для видеофайла ----------------------------------------------
-# Кроссплатформенный: внешний процесс ffmpeg + pipe (video_ffmpeg_pipeline.cpp);
-# USE_VIDEO=OFF -> заглушка (make_video() возвращает nullptr).
+# Две взаимозаменяемые реализации (выбор в рантайме через --video-decoder):
+#   USE_VIDEO_PIPELINE — внешний ffmpeg + pipe (video_ffmpeg_pipeline.cpp),
+#                        без линк-зависимостей, ON по умолчанию;
+#   USE_VIDEO_LIBAV    — линковка libav* (video_ffmpeg_libav.cpp), нужны
+#                        dev-библиотеки FFmpeg, OFF по умолчанию.
+# Диспетчер make_video() (video.cpp) выбирает между ними по compile-time
+# флагам VIDEO_HAS_*. USE_VIDEO=OFF -> заглушка video_stub.cpp.
 if(USE_VIDEO)
-    target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_ffmpeg_pipeline.cpp)
+    option(USE_VIDEO_PIPELINE "Видео: реализация через внешний ffmpeg + pipe" ON)
+    option(USE_VIDEO_LIBAV    "Видео: реализация через линковку libav*"        OFF)
+
+    target_sources(ii_core PRIVATE ${II_SRC_DIR}/video.cpp)
     target_compile_definitions(ii_core PRIVATE NPU_HAS_VIDEO=1)
+
+    if(USE_VIDEO_PIPELINE)
+        target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_ffmpeg_pipeline.cpp)
+        target_compile_definitions(ii_core PRIVATE VIDEO_HAS_PIPELINE=1)
+    endif()
+
+    if(USE_VIDEO_LIBAV)
+        # Поиск libav*: сначала pkg-config (Linux/MSYS), затем ручной режим
+        # через -DFFMPEG_ROOT=<путь с include/ + lib/>.
+        set(_ff_found FALSE)
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(FFMPEG IMPORTED_TARGET
+                libavformat libavcodec libavutil libswscale)
+            if(FFMPEG_FOUND)
+                target_link_libraries(ii_core PUBLIC PkgConfig::FFMPEG)
+                set(_ff_found TRUE)
+            endif()
+        endif()
+        if(NOT _ff_found)
+            find_path(FFMPEG_INCLUDE_DIR libavcodec/avcodec.h
+                HINTS ${FFMPEG_ROOT} PATH_SUFFIXES include)
+            set(_ff_libs "")
+            foreach(_l avformat avcodec avutil swscale)
+                find_library(FFMPEG_${_l}_LIB ${_l}
+                    HINTS ${FFMPEG_ROOT} PATH_SUFFIXES lib bin)
+                list(APPEND _ff_libs ${FFMPEG_${_l}_LIB})
+            endforeach()
+            if(FFMPEG_INCLUDE_DIR AND FFMPEG_avcodec_LIB
+               AND FFMPEG_avformat_LIB AND FFMPEG_avutil_LIB
+               AND FFMPEG_swscale_LIB)
+                target_include_directories(ii_core PRIVATE ${FFMPEG_INCLUDE_DIR})
+                target_link_libraries(ii_core PUBLIC ${_ff_libs})
+                set(_ff_found TRUE)
+            endif()
+        endif()
+        if(NOT _ff_found)
+            message(FATAL_ERROR
+                "USE_VIDEO_LIBAV=ON, но libav* не найдены. Установите FFmpeg "
+                "dev (pkg-config) или задайте -DFFMPEG_ROOT=<путь к include/+lib/>.")
+        endif()
+        target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_ffmpeg_libav.cpp)
+        target_compile_definitions(ii_core PRIVATE VIDEO_HAS_LIBAV=1)
+    endif()
 else()
     target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_stub.cpp)
 endif()
@@ -502,5 +554,5 @@ message(STATUS "  DirectML : ${USE_DIRECTML}")
 message(STATUS "  DelegMod : ${USE_NEUTRON_DELEGATE}")
 message(STATUS "  Display  : ${USE_DISPLAY}")
 message(STATUS "  Camera   : ${USE_CAMERA}")
-message(STATUS "  Video    : ${USE_VIDEO}")
+message(STATUS "  Video    : ${USE_VIDEO} (pipeline=${USE_VIDEO_PIPELINE} libav=${USE_VIDEO_LIBAV})")
 message(STATUS "  Tests    : ${BUILD_TESTS}")

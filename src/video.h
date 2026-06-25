@@ -1,16 +1,20 @@
 // Абстрактный источник кадров из ВИДЕОФАЙЛА (в отличие от camera.* —
 // живого захвата с устройства).
 //
-// Первая и пока единственная реализация — video_ffmpeg_pipeline.cpp:
-// внешний процесс ffmpeg декодирует файл и отдаёт сырые RGB-кадры в
-// pipe, без линковки libav в бинарь (нужен лишь ffmpeg/ffprobe в
-// рантайме). В будущем рядом могут встать другие реализации (libav
-// напрямую, платформенные декодеры) — отсюда обобщённое имя интерфейса
-// VideoSource, не привязанное к ffmpeg.
+// Две взаимозаменяемые реализации, как у бэкендов инференса (выбор в
+// сборке через USE_VIDEO_*, диспетч в рантайме через make_video(name)):
+//   * "pipeline" (video_ffmpeg_pipeline.cpp) — внешний процесс ffmpeg
+//     отдаёт сырые RGB-кадры в pipe. Линк-зависимостей нет, нужен лишь
+//     бинарь ffmpeg/ffprobe в рантайме. Максимально портируемо.
+//   * "libav" (video_ffmpeg_libav.cpp) — линковка libavformat/libavcodec/
+//     libswscale напрямую. Полноценный декодер: без накладных расходов на
+//     процесс, точные fps/длительность, seek/loop средствами библиотеки.
+// Отсюда обобщённое имя интерфейса VideoSource, не привязанное к способу
+// декодирования.
 //
-// Если USE_VIDEO=OFF — подключается video_stub.cpp и make_video()
-// возвращает nullptr (клиентский код сообщит «поддержка видео не
-// собрана»).
+// Если USE_VIDEO=OFF — подключается video_stub.cpp, make_video() всегда
+// возвращает nullptr, available_video_decoders() пуст (клиентский код
+// сообщит «поддержка видео не собрана»).
 //
 // Контракт grab() намеренно совпадает с Camera::grab(): возвращает
 // указатель на ВНУТРЕННИЙ RGB888 HWC-буфер размером 3*width()*height(),
@@ -26,6 +30,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct VideoSource {
     virtual ~VideoSource() = default;
@@ -34,8 +39,11 @@ struct VideoSource {
     //   path     — путь к файлу.
     //   ffmpeg   — путь/имя бинаря ffmpeg ("ffmpeg" если в PATH, либо
     //              абсолютный путь, напр. "/opt/bin/ffmpeg" на устройстве).
-    //   ffprobe  — путь/имя ffprobe: им узнаём width/height/fps файла,
-    //              чтобы знать размер одного rgb24-кадра в байтах.
+    //              Используется только реализацией "pipeline"; "libav" его
+    //              игнорирует (декодирует библиотекой).
+    //   ffprobe  — путь/имя ffprobe: им узнаём width/height/fps файла
+    //              (тоже только "pipeline"; "libav" берёт параметры из
+    //              libavformat).
     //   loop     — true: зациклить воспроизведение (eof() никогда не true).
     // Реальные параметры читайте через width()/height()/fps().
     virtual bool open(const std::string& path,
@@ -59,6 +67,14 @@ struct VideoSource {
     virtual void close() = 0;
 };
 
-// Возвращает реализацию VideoSource для текущей сборки или nullptr,
-// если поддержка не собрана (USE_VIDEO=OFF).
-std::unique_ptr<VideoSource> make_video();
+// Создать источник видео заданной реализацией:
+//   decoder == "" / "auto" — выбрать наилучшую из собранных (libav, если
+//       есть, иначе pipeline);
+//   "pipeline" / "libav"   — конкретная реализация.
+// Возвращает nullptr, если запрошенная реализация не собрана (или
+// USE_VIDEO=OFF).
+std::unique_ptr<VideoSource> make_video(const std::string& decoder = "");
+
+// Список собранных реализаций видеодекодера ("libav", "pipeline").
+// Пуст при USE_VIDEO=OFF. Порядок = приоритет авто-выбора.
+std::vector<std::string> available_video_decoders();

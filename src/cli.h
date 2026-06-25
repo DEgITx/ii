@@ -101,8 +101,12 @@ struct Args {
     // делает тот же пайплайн, что и для камеры. См. video.h.
     std::string video_path;                 // путь к файлу; "" = видео выкл.
     bool        video_loop   = false;       // зациклить воспроизведение по EOF
-    std::string ffmpeg_path  = "ffmpeg";    // бинарь ffmpeg (PATH или абс. путь)
-    std::string ffprobe_path = "ffprobe";   // бинарь ffprobe (для W/H/fps)
+    // Реализация видеодекодера: "" / "auto" — наилучшая из собранных
+    // (libav, если есть, иначе pipeline); "pipeline" — внешний ffmpeg +
+    // pipe; "libav" — линковка libav*. См. video.h / make_video.
+    std::string video_decoder;
+    std::string ffmpeg_path  = "ffmpeg";    // бинарь ffmpeg (только pipeline)
+    std::string ffprobe_path = "ffprobe";   // бинарь ffprobe (только pipeline)
     // ---- Случайный вход вместо изображения ----
     // Когда включено, входной тензор главной (и при сравнении — эталонной)
     // модели заполняется случайным uint8-буфером. Картинка не нужна —

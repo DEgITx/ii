@@ -1697,10 +1697,10 @@ int main(int argc, char** argv) {
                 "видео-цикл).\n");
         }
 
-        auto vid = make_video();
+        auto vid = make_video(args.video_decoder);
         if (!vid) {
-            std::fprintf(stderr,
-                "Поддержка видео не собрана (USE_VIDEO=OFF).\n");
+            // make_video уже напечатал, что именно недоступно (или
+            // USE_VIDEO=OFF / неизвестный --video-decoder).
             return 7;
         }
         if (!vid->open(args.video_path, args.ffmpeg_path,
