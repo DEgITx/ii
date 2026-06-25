@@ -64,9 +64,10 @@ dependencies you don't use.
 - **Live video** — camera capture (V4L2 on Linux, Media Foundation on Windows)
   with on-the-fly inference and an on-screen FPS / jitter overlay.
 - **Video files** — run any model frame-by-frame over a video file (`--video`),
-  decoded either by an external `ffmpeg` process or by linked-in FFmpeg
-  libraries. Works with detection, image-to-image, tiling, display and FPS
-  stats, and can loop the file (`--video-loop`).
+  decoded by an external `ffmpeg` process, by linked-in FFmpeg libraries, or by a
+  GStreamer pipeline (hardware VPU on embedded targets). Works with detection,
+  image-to-image, tiling, display and FPS stats, and can loop the file
+  (`--video-loop`).
 - **On-screen display** — a zero-copy window (Wayland + EGL + GLES2 on Linux,
   Direct3D 11 on Windows) that letterboxes the frame and updates a single
   texture per frame.
@@ -179,14 +180,19 @@ stubbed. Useful for development and cross-backend regression.
 | `USE_CAMERA`      | ON¹     | Camera capture (V4L2 on Linux, Media Foundation on Windows).  |
 | `USE_VIDEO`       | ON      | Video-file input (`--video`). Always cross-platform.         |
 | `USE_VIDEO_LIBAV` | OFF     | Decode `--video` with linked-in FFmpeg libs (`-DFFMPEG_ROOT=...`). |
+| `USE_VIDEO_GSTREAMER` | OFF | Decode `--video` via GStreamer — hardware VPU on embedded targets. |
 
 ¹ `ON` on Linux and Windows, `OFF` elsewhere.
 
 The default video decoder (`USE_VIDEO_PIPELINE`, ON) shells out to an external
 `ffmpeg` and needs no build dependency — only the `ffmpeg`/`ffprobe` binaries at
 runtime. Enable `USE_VIDEO_LIBAV` to additionally link FFmpeg's libraries
-(`libavformat` / `libavcodec` / `libswscale`) and decode in-process; both can be
-built into one binary and selected at runtime with `--video-decoder`.
+(`libavformat` / `libavcodec` / `libswscale`) and decode in-process. Enable
+`USE_VIDEO_GSTREAMER` (needs `gstreamer-1.0` + `gstreamer-app-1.0` via
+pkg-config) to decode through a GStreamer `decodebin` pipeline — on embedded SoCs
+like the i.MX95 this auto-selects the **hardware VPU decoder**, keeping the CPU
+free for pre/post-processing. Any combination can be built into one binary and
+selected at runtime with `--video-decoder`.
 
 ## Quick start
 
@@ -243,9 +249,9 @@ binary.
 | `--save-output <p>`  | Save the decoded output to PNG.                       |
 | `--tile`             | Tiling / sliding window for small-input models.      |
 | `--camera [dev]`     | Camera capture (`/dev/videoN` on Linux, index on Windows). |
-| `--video <file>`     | Run inference over a video file (decoded via FFmpeg).  |
+| `--video <file>`     | Run inference over a video file (decoded via FFmpeg or GStreamer). |
 | `--video-loop`       | Loop the video file instead of stopping at the end.   |
-| `--video-decoder <d>`| Decoder: `auto` (default), `pipeline` (external `ffmpeg`), or `libav` (linked-in). |
+| `--video-decoder <d>`| Decoder: `auto` (default), `pipeline` (external `ffmpeg`), `libav` (linked-in), or `gstreamer` (HW VPU on device). |
 | `--compare <path>`   | Run a reference model and compare outputs.            |
 | `--export <prefix>`  | Write benchmark / FPS / comparison data to CSV.      |
 | `--sysmon`           | Monitor process & system CPU / memory (Linux).        |
@@ -306,9 +312,10 @@ independently:
   Windows, stub elsewhere).
 - **`camera.*` / `frame_source.*`** — abstract video source (V4L2 on Linux, Media
   Foundation on Windows, stub elsewhere) feeding a unified inference loop.
-- **`video.*` / `video_ffmpeg_*.cpp`** — video-file input as a third frame source,
-  with two interchangeable FFmpeg decoders (external process or linked-in
-  libraries) chosen at runtime via `--video-decoder`.
+- **`video.*` / `video_ffmpeg_*.cpp` / `video_gstreamer.cpp`** — video-file input
+  as a third frame source, with three interchangeable decoders (external `ffmpeg`
+  process, linked-in FFmpeg libraries, or a GStreamer pipeline that taps the
+  hardware VPU on embedded targets) chosen at runtime via `--video-decoder`.
 - **`delegate.*`** — selection of an optional external TFLite delegate, kept out
   of the inference core so the runner is not tied to any accelerator.
 - **`stats.* / sysmon.* / csv_export.*`** — FPS statistics, resource monitoring

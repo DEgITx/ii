@@ -1,7 +1,7 @@
 // Абстрактный источник кадров из ВИДЕОФАЙЛА (в отличие от camera.* —
 // живого захвата с устройства).
 //
-// Две взаимозаменяемые реализации, как у бэкендов инференса (выбор в
+// Три взаимозаменяемые реализации, как у бэкендов инференса (выбор в
 // сборке через USE_VIDEO_*, диспетч в рантайме через make_video(name)):
 //   * "pipeline" (video_ffmpeg_pipeline.cpp) — внешний процесс ffmpeg
 //     отдаёт сырые RGB-кадры в pipe. Линк-зависимостей нет, нужен лишь
@@ -9,6 +9,9 @@
 //   * "libav" (video_ffmpeg_libav.cpp) — линковка libavformat/libavcodec/
 //     libswscale напрямую. Полноценный декодер: без накладных расходов на
 //     процесс, точные fps/длительность, seek/loop средствами библиотеки.
+//   * "gstreamer" (video_gstreamer.cpp) — конвейер filesrc ! decodebin !
+//     videoconvert ! appsink. На устройстве (i.MX95) decodebin подхватывает
+//     АППАРАТНЫЙ VPU-декодер — путь к hardware-decode на BSP.
 // Отсюда обобщённое имя интерфейса VideoSource, не привязанное к способу
 // декодирования.
 //
@@ -68,13 +71,13 @@ struct VideoSource {
 };
 
 // Создать источник видео заданной реализацией:
-//   decoder == "" / "auto" — выбрать наилучшую из собранных (libav, если
-//       есть, иначе pipeline);
-//   "pipeline" / "libav"   — конкретная реализация.
+//   decoder == "" / "auto"            — выбрать наилучшую из собранных
+//       (приоритет libav -> gstreamer -> pipeline);
+//   "pipeline" / "libav" / "gstreamer" — конкретная реализация.
 // Возвращает nullptr, если запрошенная реализация не собрана (или
 // USE_VIDEO=OFF).
 std::unique_ptr<VideoSource> make_video(const std::string& decoder = "");
 
-// Список собранных реализаций видеодекодера ("libav", "pipeline").
-// Пуст при USE_VIDEO=OFF. Порядок = приоритет авто-выбора.
+// Список собранных реализаций видеодекодера ("libav", "gstreamer",
+// "pipeline"). Пуст при USE_VIDEO=OFF. Порядок = приоритет авто-выбора.
 std::vector<std::string> available_video_decoders();

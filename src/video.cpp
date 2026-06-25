@@ -17,12 +17,20 @@ std::unique_ptr<VideoSource> make_ffmpeg_pipeline_video();
 #if VIDEO_HAS_LIBAV
 std::unique_ptr<VideoSource> make_ffmpeg_libav_video();
 #endif
+#if VIDEO_HAS_GSTREAMER
+std::unique_ptr<VideoSource> make_gstreamer_video();
+#endif
 
 std::vector<std::string> available_video_decoders() {
     std::vector<std::string> v;
-    // Порядок = приоритет авто-выбора: libav (полноценный) важнее pipeline.
+    // Порядок = приоритет авто-выбора: libav (полноценный, точные параметры)
+    // важнее gstreamer (нужен на устройстве ради аппаратного VPU, но включается
+    // отдельно), тот в свою очередь важнее pipeline (внешний процесс).
 #if VIDEO_HAS_LIBAV
     v.push_back("libav");
+#endif
+#if VIDEO_HAS_GSTREAMER
+    v.push_back("gstreamer");
 #endif
 #if VIDEO_HAS_PIPELINE
     v.push_back("pipeline");
@@ -33,10 +41,12 @@ std::vector<std::string> available_video_decoders() {
 std::unique_ptr<VideoSource> make_video(const std::string& decoder) {
     std::string d = decoder;
     if (d.empty() || d == "auto") {
-        // Авто: предпочесть libav (без процесса, точные параметры),
-        // откатиться на pipeline.
+        // Авто: предпочесть libav (без процесса, точные параметры), затем
+        // gstreamer (аппаратный декод на устройстве), затем pipeline.
 #if VIDEO_HAS_LIBAV
         d = "libav";
+#elif VIDEO_HAS_GSTREAMER
+        d = "gstreamer";
 #elif VIDEO_HAS_PIPELINE
         d = "pipeline";
 #else
@@ -46,6 +56,9 @@ std::unique_ptr<VideoSource> make_video(const std::string& decoder) {
 
 #if VIDEO_HAS_LIBAV
     if (d == "libav") return make_ffmpeg_libav_video();
+#endif
+#if VIDEO_HAS_GSTREAMER
+    if (d == "gstreamer") return make_gstreamer_video();
 #endif
 #if VIDEO_HAS_PIPELINE
     if (d == "pipeline") return make_ffmpeg_pipeline_video();

@@ -102,8 +102,9 @@ struct Args {
     std::string video_path;                 // путь к файлу; "" = видео выкл.
     bool        video_loop   = false;       // зациклить воспроизведение по EOF
     // Реализация видеодекодера: "" / "auto" — наилучшая из собранных
-    // (libav, если есть, иначе pipeline); "pipeline" — внешний ffmpeg +
-    // pipe; "libav" — линковка libav*. См. video.h / make_video.
+    // (приоритет libav -> gstreamer -> pipeline); "pipeline" — внешний
+    // ffmpeg + pipe; "libav" — линковка libav*; "gstreamer" — конвейер
+    // GStreamer с аппаратным VPU-декодом на устройстве. См. video.h.
     std::string video_decoder;
     std::string ffmpeg_path  = "ffmpeg";    // бинарь ffmpeg (только pipeline)
     std::string ffprobe_path = "ffprobe";   // бинарь ffprobe (только pipeline)

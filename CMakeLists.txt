@@ -428,8 +428,9 @@ endif()
 # Диспетчер make_video() (video.cpp) выбирает между ними по compile-time
 # флагам VIDEO_HAS_*. USE_VIDEO=OFF -> заглушка video_stub.cpp.
 if(USE_VIDEO)
-    option(USE_VIDEO_PIPELINE "Видео: реализация через внешний ffmpeg + pipe" ON)
-    option(USE_VIDEO_LIBAV    "Видео: реализация через линковку libav*"        OFF)
+    option(USE_VIDEO_PIPELINE  "Видео: реализация через внешний ffmpeg + pipe" ON)
+    option(USE_VIDEO_LIBAV     "Видео: реализация через линковку libav*"        OFF)
+    option(USE_VIDEO_GSTREAMER "Видео: реализация через GStreamer (HW-VPU)"     OFF)
 
     target_sources(ii_core PRIVATE ${II_SRC_DIR}/video.cpp)
     target_compile_definitions(ii_core PRIVATE NPU_HAS_VIDEO=1)
@@ -476,6 +477,31 @@ if(USE_VIDEO)
         endif()
         target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_ffmpeg_libav.cpp)
         target_compile_definitions(ii_core PRIVATE VIDEO_HAS_LIBAV=1)
+    endif()
+
+    if(USE_VIDEO_GSTREAMER)
+        # GStreamer ищется только через pkg-config (родной механизм на BSP/
+        # Linux; на устройстве i.MX95 gstreamer-1.0 + plugins-base уже в
+        # sysroot). Нужны core (gstreamer-1.0) и app (gstreamer-app-1.0,
+        # даёт appsink). Аппаратный декодер подключит decodebin в рантайме.
+        find_package(PkgConfig QUIET)
+        set(_gst_found FALSE)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(GSTREAMER IMPORTED_TARGET
+                gstreamer-1.0 gstreamer-app-1.0)
+            if(GSTREAMER_FOUND)
+                target_link_libraries(ii_core PUBLIC PkgConfig::GSTREAMER)
+                set(_gst_found TRUE)
+            endif()
+        endif()
+        if(NOT _gst_found)
+            message(FATAL_ERROR
+                "USE_VIDEO_GSTREAMER=ON, но GStreamer не найден. Установите "
+                "libgstreamer1.0-dev + libgstreamer-plugins-base1.0-dev "
+                "(pkg-config: gstreamer-1.0, gstreamer-app-1.0).")
+        endif()
+        target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_gstreamer.cpp)
+        target_compile_definitions(ii_core PRIVATE VIDEO_HAS_GSTREAMER=1)
     endif()
 else()
     target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_stub.cpp)
@@ -554,5 +580,5 @@ message(STATUS "  DirectML : ${USE_DIRECTML}")
 message(STATUS "  DelegMod : ${USE_NEUTRON_DELEGATE}")
 message(STATUS "  Display  : ${USE_DISPLAY}")
 message(STATUS "  Camera   : ${USE_CAMERA}")
-message(STATUS "  Video    : ${USE_VIDEO} (pipeline=${USE_VIDEO_PIPELINE} libav=${USE_VIDEO_LIBAV})")
+message(STATUS "  Video    : ${USE_VIDEO} (pipeline=${USE_VIDEO_PIPELINE} libav=${USE_VIDEO_LIBAV} gstreamer=${USE_VIDEO_GSTREAMER})")
 message(STATUS "  Tests    : ${BUILD_TESTS}")
