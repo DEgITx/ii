@@ -482,13 +482,15 @@ if(USE_VIDEO)
     if(USE_VIDEO_GSTREAMER)
         # GStreamer ищется только через pkg-config (родной механизм на BSP/
         # Linux; на устройстве i.MX95 gstreamer-1.0 + plugins-base уже в
-        # sysroot). Нужны core (gstreamer-1.0) и app (gstreamer-app-1.0,
-        # даёт appsink). Аппаратный декодер подключит decodebin в рантайме.
+        # sysroot). Нужны core (gstreamer-1.0), app (gstreamer-app-1.0, даёт
+        # appsink) и video (gstreamer-video-1.0, даёт GstVideoInfo/
+        # gst_video_frame_map для построчного копирования с учётом stride).
+        # Аппаратный декодер подключит decodebin в рантайме.
         find_package(PkgConfig QUIET)
         set(_gst_found FALSE)
         if(PkgConfig_FOUND)
             pkg_check_modules(GSTREAMER IMPORTED_TARGET
-                gstreamer-1.0 gstreamer-app-1.0)
+                gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
             if(GSTREAMER_FOUND)
                 target_link_libraries(ii_core PUBLIC PkgConfig::GSTREAMER)
                 set(_gst_found TRUE)
@@ -498,7 +500,8 @@ if(USE_VIDEO)
             message(FATAL_ERROR
                 "USE_VIDEO_GSTREAMER=ON, но GStreamer не найден. Установите "
                 "libgstreamer1.0-dev + libgstreamer-plugins-base1.0-dev "
-                "(pkg-config: gstreamer-1.0, gstreamer-app-1.0).")
+                "(pkg-config: gstreamer-1.0, gstreamer-app-1.0, "
+                "gstreamer-video-1.0).")
         endif()
         target_sources(ii_core PRIVATE ${II_SRC_DIR}/video_gstreamer.cpp)
         target_compile_definitions(ii_core PRIVATE VIDEO_HAS_GSTREAMER=1)

@@ -18,6 +18,15 @@
 // videoconvert/videoscale приводят любой формат декодера к плотному RGB,
 // appsink в pull-режиме отдаёт кадры синхронно нашему grab().
 //
+// ВАЖНО: конвейер строится вручную (а не через gst_parse_launch), потому
+// что decodebin отдаёт ДИНАМИЧЕСКИЕ pad'ы, причём у файла с аудиодорожкой
+// их несколько (видео + аудио). Если аудио-pad оставить неподключённым,
+// демуксер блокируется на его незаполняемом выходе и тянет за собой весь
+// конвейер (preroll не завершается, grab() висит вечно). Поэтому в
+// обработчике pad-added видео-pad линкуется в videoconvert, а всё
+// остальное (аудио/субтитры/лишние видеодорожки) — в fakesink, который их
+// молча сливает, чтобы демуксер не вставал.
+//
 // Контракт grab() тот же, что у pipeline-/libav-реализаций и Camera::grab():
 // один RGB888 HWC-кадр в нативном разрешении файла, указатель валиден до
 // следующего grab()/close(). letterbox/RGB→luma делает общий C++-пайплайн.
@@ -34,6 +43,7 @@
 extern "C" {
 #include <gst/gst.h>
 #include <gst/app/gstappsink.h>
+#include <gst/video/video.h>
 }
 
 namespace {
@@ -45,19 +55,6 @@ void ensure_gst_init() {
     (void)inited;
 }
 
-// Экранирование пути для строки gst_parse_launch: значение свойства
-// location берём в кавычки, а спецсимволы (\ и ") внутри — гасим обратным
-// слэшем. Заодно корректно проходят windows-пути C:\... и пробелы/кириллица.
-std::string gst_escape(const std::string& s) {
-    std::string r;
-    r.reserve(s.size() + 8);
-    for (char c : s) {
-        if (c == '\\' || c == '"') r += '\\';
-        r += c;
-    }
-    return r;
-}
-
 class GstVideo : public VideoSource {
 public:
     ~GstVideo() override { close(); }
@@ -67,26 +64,44 @@ public:
         loop_ = loop;
         ensure_gst_init();
 
-        // decodebin автоплугинит аппаратный декодер, если он есть в системе;
-        // videoconvert+videoscale гарантируют плотный RGB на appsink.
-        const std::string desc =
-            "filesrc location=\"" + gst_escape(path) + "\" ! "
-            "decodebin ! videoconvert ! videoscale ! "
-            "video/x-raw,format=RGB ! "
-            "appsink name=iisink max-buffers=2 drop=false sync=false";
+        pipeline_ = gst_pipeline_new("ii-video");
+        GstElement* src   = gst_element_factory_make("filesrc",      "src");
+        GstElement* dec   = gst_element_factory_make("decodebin",    "dec");
+        conv_             = gst_element_factory_make("videoconvert", "conv");
+        GstElement* scale = gst_element_factory_make("videoscale",   "scale");
+        GstElement* capsf = gst_element_factory_make("capsfilter",   "capsf");
+        sink_             = gst_element_factory_make("appsink",      "iisink");
+        if (!pipeline_ || !src || !dec || !conv_ || !scale || !capsf || !sink_)
+            return fail("не создать элементы конвейера (нет плагинов GStreamer?)");
 
-        GError* err = nullptr;
-        pipeline_ = gst_parse_launch(desc.c_str(), &err);
-        if (!pipeline_) {
-            std::fprintf(stderr, "Video(gstreamer): gst_parse_launch: %s\n",
-                         err ? err->message : "не построить конвейер");
-            if (err) g_error_free(err);
-            return false;
-        }
-        if (err) g_error_free(err);   // ненулевой err при ненулевом pipeline_ = предупреждение
+        g_object_set(src, "location", path.c_str(), nullptr);
 
-        sink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "iisink");
-        if (!sink_) return fail("appsink не найден в конвейере");
+        // appsink принимает только плотный RGB; videoconvert/videoscale
+        // догоняют до него любой формат декодера. Resize кадра не просим —
+        // letterbox в нативном разрешении делает раннер.
+        GstCaps* rgb = gst_caps_new_simple("video/x-raw",
+                                           "format", G_TYPE_STRING, "RGB", nullptr);
+        g_object_set(capsf, "caps", rgb, nullptr);
+        gst_caps_unref(rgb);
+        // max-buffers=2, drop=FALSE, sync=FALSE: тянем кадры по мере деко-
+        // дирования, без привязки к часам конвейера и без лишней буферизации.
+        g_object_set(sink_, "max-buffers", (guint)2, "drop", FALSE,
+                     "sync", FALSE, nullptr);
+
+        // Кладём все элементы в pipeline (bin берёт на себя владение
+        // floating-ссылками — отдельно освобождать не нужно, всё снимет
+        // gst_object_unref(pipeline_)).
+        gst_bin_add_many(GST_BIN(pipeline_), src, dec, conv_, scale, capsf,
+                         sink_, nullptr);
+        // Статическая часть линкуется сразу. Стык decodebin -> videoconvert
+        // динамический: decodebin создаёт pad'ы по ходу разбора контейнера,
+        // поэтому линкуем его в обработчике pad-added (см. on_pad_added).
+        if (!gst_element_link(src, dec))
+            return fail("не слинковать filesrc -> decodebin");
+        if (!gst_element_link_many(conv_, scale, capsf, sink_, nullptr))
+            return fail("не слинковать videoconvert -> appsink");
+        g_signal_connect(dec, "pad-added", G_CALLBACK(&GstVideo::on_pad_added),
+                         this);
 
         if (gst_element_set_state(pipeline_, GST_STATE_PLAYING) ==
             GST_STATE_CHANGE_FAILURE) {
@@ -94,9 +109,9 @@ public:
             return fail("не запустить конвейер (PLAYING)");
         }
 
-        // Первый кадр забираем уже здесь: из его caps узнаём width/height/fps
-        // (нужны до первого grab()), а сам кадр откладываем как pending, чтобы
-        // не потерять его для раннера.
+        // Первый кадр тянем уже здесь: из его caps берём width/height/fps
+        // (нужны до первого grab()) и заодно убеждаемся, что декодер найден.
+        // Сам кадр не теряем — откладываем как pending для первого grab().
         GstSample* s = gst_app_sink_pull_sample(GST_APP_SINK(sink_));
         if (!s) {
             drain_bus_errors();
@@ -143,52 +158,91 @@ public:
     bool eof() const override { return eof_; }
 
     void close() override {
-        if (pipeline_) {
-            gst_element_set_state(pipeline_, GST_STATE_NULL);
-            if (sink_) { gst_object_unref(sink_); sink_ = nullptr; }
-            gst_object_unref(pipeline_);
-            pipeline_ = nullptr;
-        }
+        if (!pipeline_) return;
+        gst_element_set_state(pipeline_, GST_STATE_NULL);
+        gst_object_unref(pipeline_);   // снимает и все дочерние элементы
+        pipeline_ = nullptr;
+        conv_ = sink_ = nullptr;       // принадлежали pipeline_, уже сняты
     }
 
 private:
-    // Прочитать параметры из caps и скопировать буфер кадра в rgb_ плотно.
+    // decodebin отдал новый декодированный pad. Видео — в videoconvert (один,
+    // первый), всё прочее (аудио/субтитры/лишнее видео) — в fakesink, чтобы
+    // демуксер не блокировался на неподключённом выходе.
+    static void on_pad_added(GstElement* /*dec*/, GstPad* pad, gpointer user) {
+        auto* self = static_cast<GstVideo*>(user);
+
+        GstCaps* caps = gst_pad_get_current_caps(pad);
+        if (!caps) caps = gst_pad_query_caps(pad, nullptr);
+        const char* name = caps ? gst_structure_get_name(
+                                      gst_caps_get_structure(caps, 0))
+                                 : "";
+        const bool is_video = name && g_str_has_prefix(name, "video/");
+        if (caps) gst_caps_unref(caps);
+
+        // Первую видеодорожку — в videoconvert, вторую (если есть) и не-видео
+        // pad'ы — в fakesink.
+        GstPad* sinkpad = is_video
+            ? gst_element_get_static_pad(self->conv_, "sink") : nullptr;
+        if (sinkpad && !gst_pad_is_linked(sinkpad))
+            gst_pad_link(pad, sinkpad);
+        else
+            self->attach_fakesink(pad);
+        if (sinkpad) gst_object_unref(sinkpad);
+    }
+
+    // Подключить pad к свежему fakesink (sync=false/async=false — просто
+    // сливает буферы, не участвуя в preroll/часах), чтобы поток не вставал.
+    void attach_fakesink(GstPad* pad) {
+        GstElement* fs = gst_element_factory_make("fakesink", nullptr);
+        if (!fs) return;
+        g_object_set(fs, "sync", FALSE, "async", FALSE, nullptr);
+        gst_bin_add(GST_BIN(pipeline_), fs);
+        gst_element_sync_state_with_parent(fs);
+        GstPad* sp = gst_element_get_static_pad(fs, "sink");
+        gst_pad_link(pad, sp);
+        gst_object_unref(sp);
+    }
+
+    // Скопировать кадр из GstSample в плотный RGB888-буфер rgb_.
+    //
+    // Размеры/fps и, главное, РЕАЛЬНЫЙ stride строки берём из GstVideoInfo:
+    // gst_video_frame_map() читает выравнивание, заданное декодером
+    // (на VPU оно бывает 16/32/64 байта, а не дефолтные 4), поэтому гадать
+    // про padding не нужно — копируем построчно по фактическому src_stride.
     bool convert_sample(GstSample* s) {
         GstCaps* caps = gst_sample_get_caps(s);
-        if (caps) {
-            GstStructure* st = gst_caps_get_structure(caps, 0);
-            int w = 0, h = 0;
-            gst_structure_get_int(st, "width", &w);
-            gst_structure_get_int(st, "height", &h);
-            if (w > 0 && h > 0) { width_ = w; height_ = h; }
-            int fn = 0, fd = 0;
-            if (gst_structure_get_fraction(st, "framerate", &fn, &fd) && fd > 0)
-                fps_ = (int)((double)fn / fd + 0.5);
-        }
+        GstVideoInfo info;
+        if (!caps || !gst_video_info_from_caps(&info, caps)) return false;
+
+        width_  = GST_VIDEO_INFO_WIDTH(&info);
+        height_ = GST_VIDEO_INFO_HEIGHT(&info);
+        const int fn = GST_VIDEO_INFO_FPS_N(&info);
+        const int fd = GST_VIDEO_INFO_FPS_D(&info);
+        if (fd > 0) fps_ = (fn + fd / 2) / fd;   // округление к ближайшему
         if (width_ <= 0 || height_ <= 0) return false;
 
         GstBuffer* buf = gst_sample_get_buffer(s);
         if (!buf) return false;
-        GstMapInfo map;
-        if (!gst_buffer_map(buf, &map, GST_MAP_READ)) return false;
 
+        GstVideoFrame frame;
+        if (!gst_video_frame_map(&frame, &info, buf, GST_MAP_READ)) return false;
+        const uint8_t* src =
+            static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
+        const size_t src_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
         const size_t dst_stride = (size_t)width_ * 3;
-        // GStreamer по умолчанию выравнивает строки RGB на 4 байта, поэтому
-        // src-строка может быть шире dst — копируем построчно, отбрасывая
-        // padding. Если выравнивания нет (width*3 кратно 4) — один memcpy.
-        const size_t src_stride = (dst_stride + 3) & ~(size_t)3;
-        const size_t need = dst_stride * (size_t)height_;
-        if (rgb_.size() != need) rgb_.resize(need);
 
-        if (src_stride != dst_stride && map.size >= src_stride * (size_t)height_) {
+        if (rgb_.size() != dst_stride * (size_t)height_)
+            rgb_.resize(dst_stride * (size_t)height_);
+
+        if (src_stride == dst_stride) {
+            std::memcpy(rgb_.data(), src, dst_stride * (size_t)height_);
+        } else {                                 // строки с padding'ом
             for (int y = 0; y < height_; ++y)
                 std::memcpy(rgb_.data() + (size_t)y * dst_stride,
-                            map.data + (size_t)y * src_stride, dst_stride);
-        } else {
-            const size_t n = map.size < need ? (size_t)map.size : need;
-            std::memcpy(rgb_.data(), map.data, n);
+                            src + (size_t)y * src_stride, dst_stride);
         }
-        gst_buffer_unmap(buf, &map);
+        gst_video_frame_unmap(&frame);
         return true;
     }
 
@@ -224,6 +278,7 @@ private:
     }
 
     GstElement* pipeline_ = nullptr;
+    GstElement* conv_     = nullptr;  // videoconvert: цель линковки видео-pad'а
     GstElement* sink_     = nullptr;
     int  width_  = 0;
     int  height_ = 0;
