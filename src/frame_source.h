@@ -35,6 +35,10 @@ struct FrameSource {
     // true — источник исчерпан (конец видеофайла). Живые источники
     // (камера) и статическая картинка не заканчиваются, поэтому дефолт false.
     virtual bool ended() const { return false; }
+    // Число каналов кадра из next(): 3 — RGB (по умолчанию), 1 — GRAY8.
+    // Серый отдаёт только видеофайл для C=1 модели (см. VideoSource::channels);
+    // камера и статический буфер всегда RGB.
+    virtual int channels() const { return 3; }
 };
 
 class CameraFrameSource : public FrameSource {
@@ -64,6 +68,7 @@ public:
         return vid_.grab();
     }
     bool ended() const override { return vid_.eof(); }
+    int  channels() const override { return vid_.channels(); }
 private:
     VideoSource& vid_;
 };

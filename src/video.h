@@ -58,6 +58,13 @@ struct VideoSource {
     virtual int height() const = 0;
     virtual int fps()    const = 0;
 
+    // Число каналов кадра, который отдаёт grab(): 3 — RGB888 (по умолчанию),
+    // 1 — GRAY8 (luma). Серый кадр запрашивается только для одноканальной
+    // (C=1) модели и только реализацией, которая это умеет (gstreamer);
+    // прочие источники всегда RGB. Раннер по этому значению выбирает
+    // letterbox/заливку без лишней RGB→luma конвертации.
+    virtual int channels() const { return 3; }
+
     // Очередной кадр в RGB888 HWC. Возвращает указатель на внутренний
     // буфер (валиден до следующего grab()/close()) либо nullptr — конец
     // файла (тогда eof()==true) или ошибка чтения.
@@ -78,10 +85,14 @@ struct VideoSource {
 //       (glupload ! glcolorconvert ! gldownload) вместо videoconvert.
 //       Нужно на SoC, где VPU отдаёт кадры только как DMABuf/DMA_DRM;
 //       тянет EGL/Wayland-контекст. Прочие реализации игнорируют.
+//   gray — только для "gstreamer": отдавать кадры в GRAY8 (1 канал) вместо
+//       RGB. Имеет смысл для одноканальной (C=1) модели: декодер сразу даёт
+//       luma, минуя RGB→Y на нашей стороне и втрое меньше байт на readback.
+//       Прочие реализации игнорируют (channels() остаётся 3).
 // Возвращает nullptr, если запрошенная реализация не собрана (или
 // USE_VIDEO=OFF).
 std::unique_ptr<VideoSource> make_video(const std::string& decoder = "",
-                                        bool gl = false);
+                                        bool gl = false, bool gray = false);
 
 // Список собранных реализаций видеодекодера ("libav", "gstreamer",
 // "pipeline"). Пуст при USE_VIDEO=OFF. Порядок = приоритет авто-выбора.

@@ -7,6 +7,8 @@
 
 #include "video.h"
 
-std::unique_ptr<VideoSource> make_video(const std::string&) { return nullptr; }
+std::unique_ptr<VideoSource> make_video(const std::string&, bool, bool) {
+    return nullptr;
+}
 
 std::vector<std::string> available_video_decoders() { return {}; }

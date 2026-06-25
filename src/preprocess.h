@@ -39,6 +39,14 @@ inline void letterbox(const Image& src, int target_w, int target_h,
     letterbox(src.rgb.data(), src.w, src.h, target_w, target_h, dst, pad);
 }
 
+// То же, но для одноканального (grayscale/Y) источника: на вход HW-буфер
+// 1 байт/пиксель, на выходе тоже 1 канал. Нужен, когда видео-источник
+// отдаёт кадры сразу в GRAY8 для C=1 модели (минуя RGB→luma на нашей
+// стороне) — см. VideoSource::channels().
+void letterbox_gray(const uint8_t* src_gray, int src_w, int src_h,
+                    int target_w, int target_h,
+                    std::vector<uint8_t>& dst, uint8_t pad = 114);
+
 // RGB HWC → grayscale HW (BT.601 luma). Интовая аппроксимация:
 // Y = (77*R + 150*G + 29*B) / 256.
 void rgb_to_gray(const uint8_t* rgb, std::size_t pixels,

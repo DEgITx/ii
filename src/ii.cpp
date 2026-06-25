@@ -1369,6 +1369,9 @@ int main(int argc, char** argv) {
     auto run_video_loop = [&](FrameSource* src, Display* disp) -> int {
         std::signal(SIGINT, on_sigint);
         FpsCounter fps;
+        // Источник может отдавать кадры в GRAY8 (видео для C=1 модели) —
+        // тогда letterbox/заливка идут одноканальным путём, без RGB→luma.
+        const int src_ch = src ? src->channels() : 3;
         std::printf("Видео-цикл запущен. Ctrl+C%s для выхода.\n",
                     disp ? " или закрытие окна" : "");
 
@@ -1434,8 +1437,15 @@ int main(int argc, char** argv) {
                     // через tile_frame_present вместо show_rgb).
                     if (!run_tile_pass(frame, fw, fh, disp)) break;
                 } else if (needs_preprocess) {
-                    letterbox(frame, fw, fh, in_w, in_h, input_rgb);
-                    if (!fill_model_from_rgb()) break;
+                    if (src_ch == 1) {
+                        // Источник уже отдал luma (GRAY8): letterbox в 1 канал
+                        // прямо в input_gray и заливаем — RGB→luma не нужен.
+                        letterbox_gray(frame, fw, fh, in_w, in_h, input_gray);
+                        if (!fill_input(input_gray, in_info[0], in_t)) break;
+                    } else {
+                        letterbox(frame, fw, fh, in_w, in_h, input_rgb);
+                        if (!fill_model_from_rgb()) break;
+                    }
                 }
             }
 
@@ -1697,7 +1707,17 @@ int main(int argc, char** argv) {
                 "видео-цикл).\n");
         }
 
-        auto vid = make_video(args.video_decoder, args.video_gl);
+        // Серый путь имеет смысл только для C=1 модели и только когда
+        // RGB-кадр источника не нужен для показа (иначе пришлось бы
+        // разворачивать gray→RGB каждый кадр — ровно та работа, которую
+        // серый путь и экономит). Поэтому исключаем --show-input и показ
+        // самого кадра (есть окно, но нет --show-output), а также tile-режим
+        // (там C=1 обрабатывается своим путём из RGB-источника). Поддержку
+        // реально включает только gstreamer; прочие декодеры отдают RGB.
+        const bool want_gray = (in_c == 1) && !args.tile_mode
+                               && !args.show_input
+                               && (!args.display || args.show_output);
+        auto vid = make_video(args.video_decoder, args.video_gl, want_gray);
         if (!vid) {
             // make_video уже напечатал, что именно недоступно (или
             // USE_VIDEO=OFF / неизвестный --video-decoder).

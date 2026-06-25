@@ -32,9 +32,12 @@ bool load_image(const std::string& path, Image& out) {
     return true;
 }
 
-void letterbox(const uint8_t* src_rgb, int src_w, int src_h,
-               int target_w, int target_h,
-               std::vector<uint8_t>& dst, uint8_t pad) {
+// Общее ядро letterbox для C каналов (3 = RGB, 1 = grayscale/Y). Раскладка
+// пикселей плотная, поэтому отличие только в множителе байт на пиксель и в
+// pixel-layout для stb_image_resize (STBIR_RGB vs STBIR_1CHANNEL).
+static void letterbox_n(const uint8_t* src, int src_w, int src_h,
+                        int target_w, int target_h,
+                        std::vector<uint8_t>& dst, int ch, uint8_t pad) {
     float r = std::min((float)target_w / src_w, (float)target_h / src_h);
     int new_w = (int)std::round(src_w * r);
     int new_h = (int)std::round(src_h * r);
@@ -45,19 +48,31 @@ void letterbox(const uint8_t* src_rgb, int src_w, int src_h,
     // размера ресайза (например, при ресайзе камеры на лету). Для
     // стационарного видео-цикла память аллоцируется один раз.
     static thread_local std::vector<uint8_t> resized;
-    resized.resize((std::size_t)new_w * new_h * 3);
-    stbir_resize_uint8_linear(src_rgb, src_w, src_h, 0,
+    resized.resize((std::size_t)new_w * new_h * ch);
+    stbir_resize_uint8_linear(src, src_w, src_h, 0,
                               resized.data(), new_w, new_h, 0,
-                              STBIR_RGB);
+                              ch == 1 ? STBIR_1CHANNEL : STBIR_RGB);
 
-    dst.assign((std::size_t)target_w * target_h * 3, pad);
+    dst.assign((std::size_t)target_w * target_h * ch, pad);
     int dx = (target_w - new_w) / 2;
     int dy = (target_h - new_h) / 2;
     for (int y = 0; y < new_h; ++y) {
-        std::memcpy(&dst[((y + dy) * target_w + dx) * 3],
-                    &resized[(std::size_t)y * new_w * 3],
-                    (std::size_t)new_w * 3);
+        std::memcpy(&dst[((std::size_t)(y + dy) * target_w + dx) * ch],
+                    &resized[(std::size_t)y * new_w * ch],
+                    (std::size_t)new_w * ch);
     }
+}
+
+void letterbox(const uint8_t* src_rgb, int src_w, int src_h,
+               int target_w, int target_h,
+               std::vector<uint8_t>& dst, uint8_t pad) {
+    letterbox_n(src_rgb, src_w, src_h, target_w, target_h, dst, 3, pad);
+}
+
+void letterbox_gray(const uint8_t* src_gray, int src_w, int src_h,
+                    int target_w, int target_h,
+                    std::vector<uint8_t>& dst, uint8_t pad) {
+    letterbox_n(src_gray, src_w, src_h, target_w, target_h, dst, 1, pad);
 }
 
 // Y = (77*R + 150*G + 29*B) / 256. Сумма коэффициентов = 256 → сдвиг

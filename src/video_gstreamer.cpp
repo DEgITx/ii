@@ -25,9 +25,10 @@
 //   * GL (--video-gl): glupload ! glcolorconvert ! gldownload. Нужен на SoC,
 //     где аппаратный VPU отдаёт кадры ТОЛЬКО как DMABuf в опаковом формате
 //     DMA_DRM (напр. v4l2h264dec на GStreamer 1.26): ни videoconvert, ни
-//     imxvideoconvert_g2d такой буфер не принимают (not-negotiated), а
-//     glupload импортирует его через EGL по DRM-модификатору, glcolorconvert
-//     делает YUV->RGB на GPU, gldownload возвращает RGB в системную память.
+//     аппаратные конвертеры платформы такой буфер не принимают
+//     (not-negotiated), а glupload импортирует его через EGL по DRM-модифи-
+//     катору, glcolorconvert делает YUV->RGB на GPU, gldownload возвращает
+//     RGB в системную память.
 //     Включается ЯВНО, потому что тянет EGL/Wayland-контекст, который есть не
 //     на всех целях — на устройствах без GPU обычный путь как раз и нужен.
 //
@@ -70,7 +71,8 @@ void ensure_gst_init() {
 
 class GstVideo : public VideoSource {
 public:
-    explicit GstVideo(bool use_gl) : use_gl_(use_gl) {}
+    GstVideo(bool use_gl, bool want_gray)
+        : use_gl_(use_gl), want_gray_(want_gray) {}
     ~GstVideo() override { close(); }
 
     bool open(const std::string& path, const std::string& /*ffmpeg*/,
@@ -88,13 +90,15 @@ public:
 
         g_object_set(src, "location", path.c_str(), nullptr);
 
-        // appsink принимает только плотный RGB; звено конверсии (см.
+        // appsink принимает плотный RGB (или GRAY8 для C=1 модели — на
+        // 1 канал, минуя RGB→luma на нашей стороне); звено конверсии (см.
         // build_convert_chain) догоняет до него любой формат декодера.
         // Resize кадра не просим — letterbox в нативном разрешении делает раннер.
-        GstCaps* rgb = gst_caps_new_simple("video/x-raw",
-                                           "format", G_TYPE_STRING, "RGB", nullptr);
-        g_object_set(capsf, "caps", rgb, nullptr);
-        gst_caps_unref(rgb);
+        GstCaps* caps = gst_caps_new_simple(
+            "video/x-raw", "format", G_TYPE_STRING,
+            want_gray_ ? "GRAY8" : "RGB", nullptr);
+        g_object_set(capsf, "caps", caps, nullptr);
+        gst_caps_unref(caps);
         // max-buffers=2, drop=FALSE, sync=FALSE: тянем кадры по мере деко-
         // дирования, без привязки к часам конвейера и без лишней буферизации.
         g_object_set(sink_, "max-buffers", (guint)2, "drop", FALSE,
@@ -134,15 +138,16 @@ public:
         if (!ok) return fail("не сконвертировать первый кадр в RGB");
         have_pending_ = true;
 
-        std::printf("Video: %s  %dx%d @ %d fps%s (gstreamer, decodebin -> rgb24)\n",
+        std::printf("Video: %s  %dx%d @ %d fps%s (gstreamer, decodebin -> %s)\n",
                     path.c_str(), width_, height_, fps_,
-                    loop_ ? ", loop" : "");
+                    loop_ ? ", loop" : "", want_gray_ ? "gray8" : "rgb24");
         return true;
     }
 
     int width()  const override { return width_; }
     int height() const override { return height_; }
     int fps()    const override { return fps_; }
+    int channels() const override { return want_gray_ ? 1 : 3; }
 
     const uint8_t* grab() override {
         if (eof_) return nullptr;
@@ -246,7 +251,8 @@ private:
         gst_object_unref(sp);
     }
 
-    // Скопировать кадр из GstSample в плотный RGB888-буфер rgb_.
+    // Скопировать кадр из GstSample в плотный буфер rgb_ (RGB888 или, для
+    // GRAY8, 1 байт/пиксель).
     //
     // Размеры/fps и, главное, РЕАЛЬНЫЙ stride строки берём из GstVideoInfo:
     // gst_video_frame_map() читает выравнивание, заданное декодером
@@ -272,7 +278,7 @@ private:
         const uint8_t* src =
             static_cast<const uint8_t*>(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0));
         const size_t src_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0);
-        const size_t dst_stride = (size_t)width_ * 3;
+        const size_t dst_stride = (size_t)width_ * (want_gray_ ? 1 : 3);
 
         if (rgb_.size() != dst_stride * (size_t)height_)
             rgb_.resize(dst_stride * (size_t)height_);
@@ -326,7 +332,8 @@ private:
     int  width_  = 0;
     int  height_ = 0;
     int  fps_    = 0;
-    const bool use_gl_ = false;  // звено конверсии через GL (--video-gl)
+    const bool use_gl_    = false;  // звено конверсии через GL (--video-gl)
+    const bool want_gray_ = false;  // отдавать GRAY8 вместо RGB (C=1 модель)
     bool loop_         = false;
     bool eof_          = false;
     bool have_pending_ = false;  // первый кадр уже лежит в rgb_ (из open)
@@ -335,6 +342,6 @@ private:
 
 }  // namespace
 
-std::unique_ptr<VideoSource> make_gstreamer_video(bool use_gl) {
-    return std::make_unique<GstVideo>(use_gl);
+std::unique_ptr<VideoSource> make_gstreamer_video(bool use_gl, bool want_gray) {
+    return std::make_unique<GstVideo>(use_gl, want_gray);
 }
