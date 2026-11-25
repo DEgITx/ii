@@ -424,8 +424,8 @@ Result<bool> known_shape_op(NodeContext& c) {
     }
     if (op == "ConstantOfShape") {
         std::optional<KnownContents> shape = c.known_input(0);
-        if (!shape || shape->values.size() != 1 || !all_constant(shape->values) || shape->values[0].value() > 64 ||
-            !c.has_attribute("value")) {
+        if (!shape || shape->values.size() != 1 || !all_constant(shape->values) || shape->values[0].value() < 0 ||
+            shape->values[0].value() > 64 || !c.has_attribute("value")) {
             return false;
         }
         II_ASSIGN_OR_RETURN(const Tensor value, c.tensor_attr("value"));

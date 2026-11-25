@@ -445,6 +445,20 @@ TEST(OnnxImportTest, ReportsUnsupportedOperatorsAndMalformedFiles) {
     EXPECT_FALSE(Model::from_onnx(ii_test::test_context(), garbage).ok());
 }
 
+TEST(OnnxImportTest, RejectsNegativeConstantOfShapeDimensions) {
+    // Found by fuzz_onnx: a known negative dimension was used as a vector size.
+    pb::Writer value;
+    value.string(1, "value");
+    value.message(5, int_tensor("", {1}, {7}));
+    value.varint(20, 4);  // TENSOR
+    OnnxGraph g;
+    g.initializer(int_tensor("shape", {1}, {-3}))
+        .add_node(node("ConstantOfShape", {"shape"}, {"y"}, {value}))
+        .output(value_info("y", kInt64, {3}));
+    const Result<Model> model = Model::from_onnx(ii_test::test_context(), model_bytes(g));
+    EXPECT_FALSE(model.ok());
+}
+
 TEST(OnnxImportTest, ConstantInputsReplaceParameterInputs) {
     // Reshape takes its target shape as an input: unknown when loading unless given as a constant.
     OnnxGraph g;

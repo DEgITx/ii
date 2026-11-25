@@ -14,6 +14,7 @@ namespace {
 thread_local bool g_counting = false;
 thread_local std::int64_t g_count = 0;
 
+#if II_TEST_COUNT_ALLOCATIONS
 void* allocate_aligned(std::size_t size, std::size_t alignment) {
     if (size == 0) {
         size = 1;
@@ -58,6 +59,7 @@ void* counted_new_aligned(std::size_t size, std::align_val_t alignment) {
     }
     return ptr;
 }
+#endif  // II_TEST_COUNT_ALLOCATIONS
 
 }  // namespace
 
@@ -77,6 +79,7 @@ std::int64_t AllocationCounter::count() const noexcept {
 
 }  // namespace ii_test
 
+#if II_TEST_COUNT_ALLOCATIONS
 // NOLINTBEGIN(misc-new-delete-overloads, cert-dcl54-cpp)
 void* operator new(std::size_t size) {
     return counted_new(size);
@@ -156,3 +159,4 @@ void operator delete[](void* ptr, std::align_val_t, const std::nothrow_t&) noexc
     free_aligned(ptr);
 }
 // NOLINTEND(misc-new-delete-overloads, cert-dcl54-cpp)
+#endif  // II_TEST_COUNT_ALLOCATIONS

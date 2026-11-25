@@ -11,6 +11,11 @@ presets (see [ci.md](../ci.md)).
 | Linux | GCC 13+, Clang 17+ (with libstdc++ 13+) | CMake, Ninja |
 | macOS 13.3+ | Apple Clang (Xcode 15+) | CMake, Ninja |
 
+Known compiler problems: GCC 14.2 for aarch64 (Ubuntu 24.04's `g++-14`) crashes with an internal compiler error on
+the parameterized tests of `tests/unit/backends/cpu_backend_test.cpp` (the library builds); use GCC 13 or Clang there.
+With clang-cl, use the one installed with Visual Studio (`VC\Tools\Llvm\x64\bin`): a standalone LLVM may be older
+than the Visual Studio STL requires.
+
 The library itself has no third-party dependencies. Tests and benchmarks download GoogleTest and Google Benchmark
 (pinned versions, verified by SHA-256) unless `II_USE_SYSTEM_DEPS=ON`.
 

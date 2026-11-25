@@ -295,7 +295,7 @@ TEST(SessionTest, SteadyStateRunDoesNotAllocate) {
     ASSERT_TRUE(session.run().ok());  // first run plans memory
     const std::int64_t arena_allocations = allocator.allocations.load();
     {
-        ii_test::AllocationCounter allocations;
+        ii_test::AllocationCounter allocations;  // counts nothing under ThreadSanitizer (kCountsAllocations)
         for (int i = 0; i < 5; ++i) {
             ASSERT_TRUE(session.run().ok());
         }

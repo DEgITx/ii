@@ -60,11 +60,11 @@ A `changes` job (paths filter) lets docs-only changes skip build jobs while stil
 | OS image | Compiler | Configs |
 |----------|----------|---------|
 | `windows-2025` | MSVC (latest) | Debug, Release |
-| `windows-2025` | clang-cl | Release |
+| `windows-2025` | clang-cl (of Visual Studio) | Release |
 | `windows-2025` | MinGW-w64 GCC (MSYS2 UCRT64) | Release |
 | `ubuntu-24.04` | GCC 14 | Debug, Release |
 | `ubuntu-24.04` | Clang (latest stable) | Release |
-| `ubuntu-24.04-arm` | GCC 14, Clang | Release |
+| `ubuntu-24.04-arm` | GCC 13 (minimum supported), Clang | Release |
 | `macos-15` (ARM64) | Apple Clang | Debug, Release |
 | `macos-15-intel` (x86-64) | Apple Clang | Release |
 

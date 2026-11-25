@@ -9,7 +9,24 @@
 #include <atomic>
 #include <cstdint>
 
+// ThreadSanitizer replaces the global allocation functions itself: there allocations are not counted.
+#if !defined(II_TEST_COUNT_ALLOCATIONS)
+#if defined(__SANITIZE_THREAD__)
+#define II_TEST_COUNT_ALLOCATIONS 0
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define II_TEST_COUNT_ALLOCATIONS 0
+#endif
+#endif
+#endif
+#if !defined(II_TEST_COUNT_ALLOCATIONS)
+#define II_TEST_COUNT_ALLOCATIONS 1
+#endif
+
 namespace ii_test {
+
+/// Whether AllocationCounter counts (false under ThreadSanitizer, where count() is always 0).
+inline constexpr bool kCountsAllocations = II_TEST_COUNT_ALLOCATIONS != 0;
 
 /// Counts `operator new` calls on this thread while alive.
 class AllocationCounter {

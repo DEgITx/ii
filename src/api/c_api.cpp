@@ -3,6 +3,8 @@
 #include <ii/model.h>
 #include <ii/version.h>
 
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <new>
 #include <string>
@@ -59,12 +61,18 @@ ii_status guarded(Body&& body) noexcept {
     }
 }
 
+static_assert(sizeof(ii_dtype) == sizeof(std::int32_t));
+
 ii::Result<ii::Tensor> to_tensor(const ii_tensor* tensor) {
     if (tensor == nullptr || tensor->rank < 0 || tensor->rank > II_MAX_RANK || tensor->data == nullptr) {
         return ii::errors::invalid_argument("invalid ii_tensor");
     }
-    if (tensor->dtype <= II_DTYPE_INVALID || tensor->dtype > II_DTYPE_BOOL) {
-        return ii::errors::invalid_argument("invalid ii_tensor dtype {}", static_cast<int>(tensor->dtype));
+    // Read as an integer: a C caller may store any int in the enum, and loading a value outside the enum's range is
+    // undefined in C++.
+    std::int32_t dtype = 0;
+    std::memcpy(&dtype, &tensor->dtype, sizeof(dtype));
+    if (dtype <= II_DTYPE_INVALID || dtype > II_DTYPE_BOOL) {
+        return ii::errors::invalid_argument("invalid ii_tensor dtype {}", dtype);
     }
     ii::Shape shape;
     for (int32_t i = 0; i < tensor->rank; ++i) {
@@ -73,7 +81,7 @@ ii::Result<ii::Tensor> to_tensor(const ii_tensor* tensor) {
         }
         shape.push_back(tensor->shape[i]);
     }
-    return ii::Tensor::wrap(tensor->data, static_cast<ii::DType>(tensor->dtype), shape);
+    return ii::Tensor::wrap(tensor->data, static_cast<ii::DType>(dtype), shape);
 }
 
 }  // namespace

@@ -56,8 +56,9 @@ jobs:
           - { os: ubuntu-24.04, preset: linux-gcc-release, env: gcc14, generic-isa: true }
           - { os: ubuntu-24.04, preset: linux-gcc-shared-release, env: gcc14 }
           - { os: ubuntu-24.04, preset: linux-clang-release, env: gcc14 }
-          # Linux Arm64
-          - { os: ubuntu-24.04-arm, preset: linux-gcc-release, env: gcc14 }
+          # Linux Arm64. GCC 13 (the image's default, the minimum supported version): GCC 14.2 of Ubuntu 24.04 crashes
+          # (internal compiler error) on googletest's parameterized tests for aarch64.
+          - { os: ubuntu-24.04-arm, preset: linux-gcc-release, env: gcc13 }
           - { os: ubuntu-24.04-arm, preset: linux-clang-release, env: gcc14 }
           # macOS
           - { os: macos-15, preset: macos-clang-debug, env: none }
@@ -72,6 +73,16 @@ jobs:
       - name: MSVC developer environment
         if: matrix.env == 'msvc'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+
+      # The image's standalone LLVM (C:\Program Files\LLVM) can be older than the Visual Studio STL requires; the
+      # clang-cl of Visual Studio matches it.
+      - name: clang-cl of Visual Studio
+        if: contains(matrix.preset, 'clang-cl')
+        shell: bash
+        run: |
+          test -n "$llvmX64" && test -x "$llvmX64/clang-cl.exe"
+          echo "$llvmX64" >> "$GITHUB_PATH"
+          "$llvmX64/clang-cl.exe" --version
 
       - name: MSYS2 UCRT64 toolchain
         if: matrix.env == 'msys2'
