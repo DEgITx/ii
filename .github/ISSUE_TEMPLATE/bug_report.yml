@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MIT
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Commands, model (link), minimal code.
+    validations:
+      required: true
+  - type: textarea
+    id: info
+    attributes:
+      label: Output of `ii info --json`
+      render: json
+    validations:
+      required: true

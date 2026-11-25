@@ -1,0 +1,10 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: ii
+Description: @PROJECT_DESCRIPTION@
+Version: @PROJECT_VERSION@
+Cflags: -I${includedir} @II_PC_CFLAGS@
+Libs: -L${libdir} -lii
+Libs.private: -pthread

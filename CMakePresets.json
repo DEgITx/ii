@@ -1,0 +1,841 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+        "CMAKE_DEFAULT_BUILD_TYPE": "Debug",
+        "II_BUILD_TESTS": "ON",
+        "II_BUILD_BENCHMARKS": "ON",
+        "II_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc",
+      "displayName": "Windows, MSVC (run from a Visual Studio developer prompt)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "windows-msvc-shared",
+      "displayName": "Windows, MSVC, ii as a DLL",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "II_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "windows-msvc-asan",
+      "displayName": "Windows, MSVC with AddressSanitizer",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "II_SANITIZE": "address"
+      }
+    },
+    {
+      "name": "windows-clang-cl",
+      "displayName": "Windows, clang-cl (run from a Visual Studio developer prompt)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      }
+    },
+    {
+      "name": "windows-mingw-gcc",
+      "displayName": "Windows, MinGW-w64 GCC",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "windows-mingw-clang",
+      "displayName": "Windows, MinGW-w64 Clang",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "linux-gcc",
+      "displayName": "Linux, GCC",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++"
+      }
+    },
+    {
+      "name": "linux-gcc-shared",
+      "displayName": "Linux, GCC, ii as a shared library",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "II_BUILD_SHARED": "ON"
+      }
+    },
+    {
+      "name": "linux-clang",
+      "displayName": "Linux, Clang",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "linux-clang-asan",
+      "displayName": "Linux, Clang with AddressSanitizer + UndefinedBehaviorSanitizer",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "II_SANITIZE": "address;undefined"
+      }
+    },
+    {
+      "name": "linux-clang-tsan",
+      "displayName": "Linux, Clang with ThreadSanitizer",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "II_SANITIZE": "thread"
+      }
+    },
+    {
+      "name": "macos-clang",
+      "displayName": "macOS, Apple Clang",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-msvc-shared-release",
+      "configurePreset": "windows-msvc-shared",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-msvc-asan-relwithdebinfo",
+      "configurePreset": "windows-msvc-asan",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "windows-clang-cl-debug",
+      "configurePreset": "windows-clang-cl",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-clang-cl-release",
+      "configurePreset": "windows-clang-cl",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-mingw-gcc-debug",
+      "configurePreset": "windows-mingw-gcc",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-mingw-gcc-release",
+      "configurePreset": "windows-mingw-gcc",
+      "configuration": "Release"
+    },
+    {
+      "name": "windows-mingw-clang-debug",
+      "configurePreset": "windows-mingw-clang",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-mingw-clang-release",
+      "configurePreset": "windows-mingw-clang",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-gcc-debug",
+      "configurePreset": "linux-gcc",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-gcc-release",
+      "configurePreset": "linux-gcc",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-gcc-shared-release",
+      "configurePreset": "linux-gcc-shared",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-clang-debug",
+      "configurePreset": "linux-clang",
+      "configuration": "Debug"
+    },
+    {
+      "name": "linux-clang-release",
+      "configurePreset": "linux-clang",
+      "configuration": "Release"
+    },
+    {
+      "name": "linux-clang-asan-relwithdebinfo",
+      "configurePreset": "linux-clang-asan",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "linux-clang-tsan-relwithdebinfo",
+      "configurePreset": "linux-clang-tsan",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "macos-clang-debug",
+      "configurePreset": "macos-clang",
+      "configuration": "Debug"
+    },
+    {
+      "name": "macos-clang-release",
+      "configurePreset": "macos-clang",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "configurePreset": "windows-msvc",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-msvc-release",
+      "configurePreset": "windows-msvc",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-msvc-shared-release",
+      "configurePreset": "windows-msvc-shared",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-msvc-asan-relwithdebinfo",
+      "configurePreset": "windows-msvc-asan",
+      "configuration": "RelWithDebInfo",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      },
+      "environment": {
+        "ASAN_WIN_CONTINUE_ON_INTERCEPTION_FAILURE": "1"
+      }
+    },
+    {
+      "name": "windows-clang-cl-debug",
+      "configurePreset": "windows-clang-cl",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-clang-cl-release",
+      "configurePreset": "windows-clang-cl",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-mingw-gcc-debug",
+      "configurePreset": "windows-mingw-gcc",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-mingw-gcc-release",
+      "configurePreset": "windows-mingw-gcc",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-mingw-clang-debug",
+      "configurePreset": "windows-mingw-clang",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-mingw-clang-release",
+      "configurePreset": "windows-mingw-clang",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "linux-gcc-debug",
+      "configurePreset": "linux-gcc",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "linux-gcc-release",
+      "configurePreset": "linux-gcc",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "linux-gcc-shared-release",
+      "configurePreset": "linux-gcc-shared",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "linux-clang-debug",
+      "configurePreset": "linux-clang",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "linux-clang-release",
+      "configurePreset": "linux-clang",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "linux-clang-asan-relwithdebinfo",
+      "configurePreset": "linux-clang-asan",
+      "configuration": "RelWithDebInfo",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:abort_on_error=1:strict_string_checks=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "linux-clang-tsan-relwithdebinfo",
+      "configurePreset": "linux-clang-tsan",
+      "configuration": "RelWithDebInfo",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      },
+      "environment": {
+        "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1"
+      }
+    },
+    {
+      "name": "macos-clang-debug",
+      "configurePreset": "macos-clang",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "macos-clang-release",
+      "configurePreset": "macos-clang",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "windows-msvc-debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-msvc"
+        },
+        {
+          "type": "build",
+          "name": "windows-msvc-debug"
+        },
+        {
+          "type": "test",
+          "name": "windows-msvc-debug"
+        }
+      ]
+    },
+    {
+      "name": "windows-msvc-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-msvc"
+        },
+        {
+          "type": "build",
+          "name": "windows-msvc-release"
+        },
+        {
+          "type": "test",
+          "name": "windows-msvc-release"
+        }
+      ]
+    },
+    {
+      "name": "windows-msvc-shared-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-msvc-shared"
+        },
+        {
+          "type": "build",
+          "name": "windows-msvc-shared-release"
+        },
+        {
+          "type": "test",
+          "name": "windows-msvc-shared-release"
+        }
+      ]
+    },
+    {
+      "name": "windows-msvc-asan-relwithdebinfo",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-msvc-asan"
+        },
+        {
+          "type": "build",
+          "name": "windows-msvc-asan-relwithdebinfo"
+        },
+        {
+          "type": "test",
+          "name": "windows-msvc-asan-relwithdebinfo"
+        }
+      ]
+    },
+    {
+      "name": "windows-clang-cl-debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-clang-cl"
+        },
+        {
+          "type": "build",
+          "name": "windows-clang-cl-debug"
+        },
+        {
+          "type": "test",
+          "name": "windows-clang-cl-debug"
+        }
+      ]
+    },
+    {
+      "name": "windows-clang-cl-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-clang-cl"
+        },
+        {
+          "type": "build",
+          "name": "windows-clang-cl-release"
+        },
+        {
+          "type": "test",
+          "name": "windows-clang-cl-release"
+        }
+      ]
+    },
+    {
+      "name": "windows-mingw-gcc-debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-mingw-gcc"
+        },
+        {
+          "type": "build",
+          "name": "windows-mingw-gcc-debug"
+        },
+        {
+          "type": "test",
+          "name": "windows-mingw-gcc-debug"
+        }
+      ]
+    },
+    {
+      "name": "windows-mingw-gcc-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-mingw-gcc"
+        },
+        {
+          "type": "build",
+          "name": "windows-mingw-gcc-release"
+        },
+        {
+          "type": "test",
+          "name": "windows-mingw-gcc-release"
+        }
+      ]
+    },
+    {
+      "name": "windows-mingw-clang-debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-mingw-clang"
+        },
+        {
+          "type": "build",
+          "name": "windows-mingw-clang-debug"
+        },
+        {
+          "type": "test",
+          "name": "windows-mingw-clang-debug"
+        }
+      ]
+    },
+    {
+      "name": "windows-mingw-clang-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "windows-mingw-clang"
+        },
+        {
+          "type": "build",
+          "name": "windows-mingw-clang-release"
+        },
+        {
+          "type": "test",
+          "name": "windows-mingw-clang-release"
+        }
+      ]
+    },
+    {
+      "name": "linux-gcc-debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-gcc"
+        },
+        {
+          "type": "build",
+          "name": "linux-gcc-debug"
+        },
+        {
+          "type": "test",
+          "name": "linux-gcc-debug"
+        }
+      ]
+    },
+    {
+      "name": "linux-gcc-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-gcc"
+        },
+        {
+          "type": "build",
+          "name": "linux-gcc-release"
+        },
+        {
+          "type": "test",
+          "name": "linux-gcc-release"
+        }
+      ]
+    },
+    {
+      "name": "linux-gcc-shared-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-gcc-shared"
+        },
+        {
+          "type": "build",
+          "name": "linux-gcc-shared-release"
+        },
+        {
+          "type": "test",
+          "name": "linux-gcc-shared-release"
+        }
+      ]
+    },
+    {
+      "name": "linux-clang-debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-clang"
+        },
+        {
+          "type": "build",
+          "name": "linux-clang-debug"
+        },
+        {
+          "type": "test",
+          "name": "linux-clang-debug"
+        }
+      ]
+    },
+    {
+      "name": "linux-clang-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-clang"
+        },
+        {
+          "type": "build",
+          "name": "linux-clang-release"
+        },
+        {
+          "type": "test",
+          "name": "linux-clang-release"
+        }
+      ]
+    },
+    {
+      "name": "linux-clang-asan-relwithdebinfo",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-clang-asan"
+        },
+        {
+          "type": "build",
+          "name": "linux-clang-asan-relwithdebinfo"
+        },
+        {
+          "type": "test",
+          "name": "linux-clang-asan-relwithdebinfo"
+        }
+      ]
+    },
+    {
+      "name": "linux-clang-tsan-relwithdebinfo",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-clang-tsan"
+        },
+        {
+          "type": "build",
+          "name": "linux-clang-tsan-relwithdebinfo"
+        },
+        {
+          "type": "test",
+          "name": "linux-clang-tsan-relwithdebinfo"
+        }
+      ]
+    },
+    {
+      "name": "macos-clang-debug",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "macos-clang"
+        },
+        {
+          "type": "build",
+          "name": "macos-clang-debug"
+        },
+        {
+          "type": "test",
+          "name": "macos-clang-debug"
+        }
+      ]
+    },
+    {
+      "name": "macos-clang-release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "macos-clang"
+        },
+        {
+          "type": "build",
+          "name": "macos-clang-release"
+        },
+        {
+          "type": "test",
+          "name": "macos-clang-release"
+        }
+      ]
+    }
+  ]
+}

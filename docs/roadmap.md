@@ -26,6 +26,9 @@ CI/CD спланирован в [ci.md](ci.md).
 
 ## Этап 0 — Фундамент (Windows, Linux, macOS)
 
+> **Статус: реализован.** Локально проверен на Windows (MSVC, MSVC shared, MSVC+ASan, clang-cl, MinGW GCC,
+> MinGW Clang): 101 тест зелёный. Linux и macOS проверяются в CI. Осталось: первый зелёный прогон CI на GitHub.
+
 **Цель:** скелет проекта, в котором удобно и безопасно разрабатывать всё остальное на всех трёх ОС.
 
 - Репозиторий: git, `.clang-format`, `.clang-tidy`, `.editorconfig`, `.gitignore`, `LICENSE` (MIT), SPDX-заголовки.

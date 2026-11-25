@@ -12,7 +12,16 @@ An efficient, embeddable C++ library for neural network inference (first and for
 - **Formats** — GGUF, safetensors, ONNX, native `.ii`.
 - **`ii` CLI** — `info`, `run`, `chat`, `bench`, `inspect`, `quantize`, `convert`.
 
-> Status: design. See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md) (in Russian),
+## Build
+
+```sh
+cmake --workflow --preset linux-gcc-release        # or windows-msvc-release, macos-clang-release, ...
+./build/linux-gcc/bin/Release/ii info --roofline
+```
+
+Details: [building guide](docs/guides/building.md), [contributing](CONTRIBUTING.md).
+
+> Status: stage 0 (foundation) is implemented. See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md) (in Russian),
 > [testing and benchmarks](docs/testing-and-benchmarks.md), [CI/CD](docs/ci.md).
 
 ## License

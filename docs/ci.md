@@ -26,7 +26,7 @@
 │   ├── gpu.yml         self-hosted NVIDIA: ii-cuda, TensorRT differential tests      (stage 5)
 │   ├── nightly.yml     schedule: real models, long fuzzing, benchmarks with history (stage 1+)
 │   ├── release.yml     tag v*: packages for all platforms, GitHub Release           (after stage 3)
-│   ├── docs.yml        main: Doxygen + docs site → GitHub Pages                     (stage 1)
+│   ├── docs.yml        master: Doxygen + docs site → GitHub Pages                     (stage 1)
 │   └── codeql.yml      PR + weekly: CodeQL C++ security analysis                    (stage 0)
 ├── actions/
 │   └── setup/action.yml   composite: toolchain, Ninja, ccache/sccache, Python deps
@@ -38,7 +38,7 @@
 
 ## 3. `ci.yml` — the main pipeline
 
-Triggers: `pull_request`, `push` to `main`, `workflow_dispatch`.
+Triggers: `pull_request`, `push` to `master`, `workflow_dispatch`.
 `concurrency: { group: ci-${{ github.ref }}, cancel-in-progress: true }`.
 A `changes` job (paths filter) lets docs-only changes skip build jobs while still reporting required checks.
 
@@ -72,9 +72,9 @@ Notes:
 - Image labels are pinned explicitly (not `*-latest`) and bumped deliberately.
 - Debug builds enable `II_ASSERT` and `Graph::verify()` after every pass — they catch logic errors Release hides.
 - Warnings are errors in CI (`-Werror` / `/WX`).
-- Compiler cache: `ccache` (GCC/Clang) / `sccache` (MSVC), keyed by OS + compiler + config, restored from `main`.
+- Compiler cache: `ccache` for every toolchain (MSVC included), keyed by OS + preset, restored from `master`.
 
-### Required checks for `main`
+### Required checks for `master`
 
 `lint`, all `build-test` entries, `sanitizers`, `isa-matrix`, `abi-interop`, `examples`; later `android` (stage 2)
 and model tests (stage 3). Branch protection: PR required, linear history, required checks green.
@@ -97,7 +97,7 @@ Jobs: build with `II_BACKEND_CUDA=ON`, `II_BACKEND_TENSORRT=ON`; differential te
 `ii-ref`; TensorRT engine-cache tests; GPU micro-benchmarks.
 
 **Security (mandatory for a public repository):**
-- Triggers: `push` to `main`, `schedule`, `workflow_dispatch`, and `pull_request` **only** when
+- Triggers: `push` to `master`, `schedule`, `workflow_dispatch`, and `pull_request` **only** when
   `github.event.pull_request.head.repo.full_name == github.repository` **and** the PR has the `gpu` label (applied by
   a maintainer). Pull requests from forks never reach the self-hosted runner.
 - Repository setting: "Require approval for all outside collaborators" for workflow runs.
@@ -151,5 +151,5 @@ Every release: full test suite on the packaged binaries, `SHA256SUMS`, build pro
 ## 9. Cost notes
 
 - For a **public** repository hosted runner minutes (including macOS and ARM64 Linux) are free; for a **private**
-  one macOS minutes are billed at a multiplier and the matrix should be trimmed (e.g. macOS only on `main`).
+  one macOS minutes are billed at a multiplier and the matrix should be trimmed (e.g. macOS only on `master`).
 - Self-hosted runner minutes are free but use the development machine; heavy jobs are scheduled at night.

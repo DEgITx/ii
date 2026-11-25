@@ -1,0 +1,24 @@
+# Build trees
+/build/
+/out/
+/install/
+CMakeUserPresets.json
+
+# IDEs and editors
+/.vs/
+/.vscode/
+/.idea/
+/.cache/
+*.swp
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+/.venv/
+
+# Local models and benchmark outputs
+/models/
+/bench/results/local/
+*.trace.json

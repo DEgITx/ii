@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: MIT
+name: Feature request
+description: Suggest a new capability (model format, operation, backend, platform, ...)
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What do you need and why
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution or alternatives

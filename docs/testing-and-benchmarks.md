@@ -98,7 +98,7 @@ A short run in every PR, a long run nightly.
 | TensorRT / reduced precision modes | per-precision tolerances (fp16/int8/fp8), plus model-level metrics below |
 | whole models | logit cosine similarity ≥ 0.999 (f32), top-1 / greedy match, perplexity delta |
 
-Tolerances live in one place (`tests/support/tolerance.hpp`), each justified by a comment.
+Tolerances live in one place (`tests/support/tolerance.h`), each justified by a comment.
 
 ---
 

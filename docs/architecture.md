@@ -51,7 +51,7 @@
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │  tools/ii (CLI)                     bindings: C, Python*, C#*, Rust* (*later)   │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│  Public API         C++: include/ii/*.hpp          C ABI: include/ii/ii.h       │
+│  Public API         C++: include/ii/*.h            C ABI: include/ii/c_api.h    │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │  Domain             ii::llm   — architectures, tokenizers, KV cache, sampling    │
 │                     ii::nn / ii::train — modules, autodiff, optimizers, loops    │
@@ -108,7 +108,7 @@ requests each run in their own `Session`.
 ### Example: generic inference (C++)
 
 ```cpp
-#include <ii/ii.hpp>
+#include <ii/ii.h>
 
 int main() {
     auto ctx     = ii::Context::create().value();                 // discovers devices and backends
@@ -559,7 +559,7 @@ no out-of-bounds reads; every parser (ONNX, GGUF, safetensors, `.ii`, JSON, toke
 | 2 (from stage 2) | Android ARM64 (+ x86-64 emulator), NDK/Clang | builds in CI; tests run on an emulator / device |
 | 3 (later) | iOS, WebAssembly, Linux RISC-V, Windows ARM64 | builds in CI; tests as infrastructure allows |
 
-Minimum versions (proposed): Windows 10 1809+, glibc 2.31+ (Ubuntu 20.04), macOS 12+, Android API 26+,
+Minimum versions (proposed): Windows 10 1809+, glibc 2.31+ (Ubuntu 20.04), macOS 13.3+ (C++20 `<format>` in libc++), Android API 26+,
 CUDA compute capability 7.5+ (matches TensorRT 10).
 
 ### Build
@@ -604,7 +604,7 @@ Common flags: `--backend`, `--device`, `--threads`, `--policy`, `--profile trace
 ```
 ii/
 ├── CMakeLists.txt, CMakePresets.json, cmake/      build, toolchains, package export
-├── include/ii/                                     public headers (ii.hpp, ii.h, tensor.hpp, …)
+├── include/ii/                                     public headers (ii.h, c_api.h, tensor.h, …)
 ├── src/
 │   ├── core/          status, log, alloc, thread_pool, cpu_info, half, json, small_vector
 │   │   └── platform/  mapped_file, dynlib, topology, affinity, clock, paths — per OS
@@ -638,7 +638,7 @@ ii/
   (the planning document `roadmap.md` is the only exception).
 - **C++20** (concepts, `std::span`, designated initializers); no C++ modules (tooling is immature).
 - Naming: types `PascalCase`, functions and variables `snake_case`, constants `kPascalCase`, files
-  `snake_case.hpp/.cpp`.
+  `snake_case.h/.cpp`. Headers use `.h` for C++ too; the C ABI header is `ii/c_api.h`.
 - `clang-format` (LLVM-based, 120 columns), `clang-tidy` (bugprone, performance, modernize, selected
   cppcoreguidelines), `-Wall -Wextra -Wpedantic -Werror` / `/W4 /WX` in CI.
 - No RTTI dependence and no exceptions in the core; ownership via `std::unique_ptr` / intrusive refcounts for buffers.

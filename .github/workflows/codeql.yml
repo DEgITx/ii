@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: MIT
+name: CodeQL
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"  # weekly, Monday 03:17 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (C/C++)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: github/codeql-action/init@915412ff23e8b7659517e607487dbeae018f2934  # v4.39.5
+        with:
+          languages: c-cpp
+          build-mode: none
+          queries: security-and-quality
+      - uses: github/codeql-action/analyze@915412ff23e8b7659517e607487dbeae018f2934  # v4.39.5
+        with:
+          category: /language:c-cpp

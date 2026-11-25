@@ -1,0 +1,39 @@
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++20
+ColumnLimit: 120
+IndentWidth: 4
+AccessModifierOffset: -4
+NamespaceIndentation: None
+FixNamespaceComments: true
+PointerAlignment: Left
+SpacesBeforeTrailingComments: 2
+ReferenceAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBraces: Attach
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: NextLine
+# Preserve: blocks separated by blank lines are sorted independently (needed for <windows.h>, which must precede other
+# Windows headers).
+IncludeBlocks: Preserve
+IncludeCategories:
+  # Own header of the translation unit is handled by IncludeIsMainRegex (priority 0).
+  - Regex: '^<ii/'
+    Priority: 2
+  - Regex: '^"'
+    Priority: 3
+  - Regex: '^<(gtest|gmock|benchmark)/'
+    Priority: 4
+  - Regex: '^<.*\.h>'
+    Priority: 5
+  - Regex: '^<'
+    Priority: 6
+SortIncludes: CaseSensitive
+SpaceAfterTemplateKeyword: true
+InsertNewlineAtEOF: true
+...

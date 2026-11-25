@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: MIT
+name: Set up ii build environment
+description: Installs Ninja and a compiler cache and configures CMake to use it.
+
+inputs:
+  cache-key:
+    description: Unique key of the build configuration for the compiler cache.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Ninja (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build
+
+    - name: Install Ninja (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: brew install ninja
+
+    - name: Install Ninja (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: python -m pip install --quiet ninja
+
+    - name: Compiler cache
+      uses: hendrikmuhs/ccache-action@e91f31892a1d1b8c44424b1a94c0b7f52d337168  # v1.2.26
+      with:
+        key: ${{ inputs.cache-key }}
+        max-size: 500M
+
+    - name: Use the compiler cache
+      shell: bash
+      run: |
+        echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+        echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"

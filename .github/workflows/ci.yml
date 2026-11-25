@@ -1,0 +1,170 @@
+# SPDX-License-Identifier: MIT
+#
+# Main CI pipeline. Every build job runs a CMake workflow preset, so any job can be reproduced locally with
+#   cmake --workflow --preset <preset>
+# See docs/ci.md.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+      - name: Install clang-format (pinned)
+        run: python -m pip install --quiet clang-format==19.1.7
+      - name: Formatting
+        run: python scripts/check_format.py
+      - name: SPDX headers
+        run: python scripts/check_spdx.py
+      - name: CMakePresets.json is up to date
+        run: |
+          python scripts/generate_presets.py
+          git diff --exit-code CMakePresets.json
+
+  build-test:
+    name: ${{ matrix.preset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows
+          - { os: windows-2025, preset: windows-msvc-debug, env: msvc }
+          - { os: windows-2025, preset: windows-msvc-release, env: msvc }
+          - { os: windows-2025, preset: windows-msvc-shared-release, env: msvc }
+          - { os: windows-2025, preset: windows-clang-cl-release, env: msvc }
+          - { os: windows-2025, preset: windows-mingw-gcc-release, env: msys2 }
+          # Linux x86-64
+          - { os: ubuntu-24.04, preset: linux-gcc-debug, env: gcc14 }
+          - { os: ubuntu-24.04, preset: linux-gcc-release, env: gcc14, generic-isa: true }
+          - { os: ubuntu-24.04, preset: linux-gcc-shared-release, env: gcc14 }
+          - { os: ubuntu-24.04, preset: linux-clang-release, env: gcc14 }
+          # Linux Arm64
+          - { os: ubuntu-24.04-arm, preset: linux-gcc-release, env: gcc14 }
+          - { os: ubuntu-24.04-arm, preset: linux-clang-release, env: gcc14 }
+          # macOS
+          - { os: macos-15, preset: macos-clang-debug, env: none }
+          - { os: macos-15, preset: macos-clang-release, env: none }
+          - { os: macos-15-intel, preset: macos-clang-release, env: none }
+    defaults:
+      run:
+        shell: ${{ matrix.env == 'msys2' && 'msys2 {0}' || 'bash' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: MSVC developer environment
+        if: matrix.env == 'msvc'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+
+      - name: MSYS2 UCRT64 toolchain
+        if: matrix.env == 'msys2'
+        uses: msys2/setup-msys2@3c51bf698df1e37b2261f53cb67797b97761185c  # v2.34.0
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-ccache
+            git
+
+      - name: GCC 14 as the default compiler
+        if: matrix.env == 'gcc14'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++-14
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 140
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 140
+
+      - name: Build environment
+        if: matrix.env != 'msys2'
+        uses: ./.github/actions/setup
+        with:
+          cache-key: ${{ matrix.os }}-${{ matrix.preset }}
+
+      - name: Compiler cache (MSYS2)
+        if: matrix.env == 'msys2'
+        run: |
+          echo "CMAKE_C_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache" >> "$GITHUB_ENV"
+
+      - name: Configure, build, test
+        run: cmake --workflow --preset ${{ matrix.preset }}
+
+      - name: Tests with generic kernels only
+        if: matrix.generic-isa
+        env:
+          II_CPU_ISA: generic
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: ii info
+        run: |
+          config=$(echo "${{ matrix.preset }}" | sed -E 's/.*-(debug|release|relwithdebinfo)$/\1/')
+          case "$config" in debug) dir=Debug;; release) dir=Release;; *) dir=RelWithDebInfo;; esac
+          preset=$(echo "${{ matrix.preset }}" | sed -E 's/-(debug|release|relwithdebinfo)$//')
+          ./build/$preset/bin/$dir/ii info
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: test-logs-${{ matrix.os }}-${{ matrix.preset }}
+          path: build/*/Testing/Temporary/
+          if-no-files-found: ignore
+
+  sanitizers:
+    name: ${{ matrix.preset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, preset: linux-clang-asan-relwithdebinfo }
+          - { os: ubuntu-24.04, preset: linux-clang-tsan-relwithdebinfo }
+          - { os: windows-2025, preset: windows-msvc-asan-relwithdebinfo }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: MSVC developer environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+
+      - name: Reduce ASLR entropy for TSan
+        if: contains(matrix.preset, 'tsan')
+        # Recent kernels use more mmap randomization bits than ThreadSanitizer's memory layout supports.
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Build environment
+        uses: ./.github/actions/setup
+        with:
+          cache-key: ${{ matrix.os }}-${{ matrix.preset }}
+
+      - name: Configure, build, test
+        shell: bash
+        run: cmake --workflow --preset ${{ matrix.preset }}
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: test-logs-${{ matrix.preset }}
+          path: build/*/Testing/Temporary/
+          if-no-files-found: ignore
