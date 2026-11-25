@@ -11,5 +11,6 @@ int run_info(const std::vector<std::string>& args);
 int run_inspect(const std::vector<std::string>& args);
 int run_ops(const std::vector<std::string>& args);
 int run_run(const std::vector<std::string>& args);
+int run_bench(const std::vector<std::string>& args);
 
 }  // namespace ii::cli

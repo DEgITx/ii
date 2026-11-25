@@ -1,0 +1,45 @@
+{
+  "comment": "Real models checked against ONNX Runtime by scripts/model_tests.py (fetched by scripts/fetch_models.py). suite 'pr' runs on every change, 'nightly' adds large models.",
+  "models": [
+    {
+      "name": "mobilenetv2-12",
+      "suite": "pr",
+      "url": "https://github.com/onnx/models/raw/main/validated/vision/classification/mobilenet/model/mobilenetv2-12.onnx",
+      "sha256": "c0c3f76d93fa3fd6580652a45618618a220fced18babf65774ed169de0432ad5",
+      "size": 13964571,
+      "dims": "batch_size=2"
+    },
+    {
+      "name": "yolov8n",
+      "suite": "pr",
+      "source": {
+        "url": "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt",
+        "sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+        "size": 6549796
+      },
+      "export": "ultralytics",
+      "dims": "",
+      "detect": {
+        "image_url": "https://ultralytics.com/images/bus.jpg",
+        "expect": ["person", "bus"]
+      }
+    },
+    {
+      "name": "resnet50-v1-12",
+      "suite": "nightly",
+      "url": "https://github.com/onnx/models/raw/main/validated/vision/classification/resnet/model/resnet50-v1-12.onnx",
+      "sha256": "3f03fdef724b22947eed826f1eef1dc5c34151bb4c37d634f1db89dfa2dd1526",
+      "size": 102576593,
+      "dims": "N=2"
+    },
+    {
+      "name": "bert-base-uncased",
+      "suite": "nightly",
+      "url": "https://huggingface.co/Xenova/bert-base-uncased/resolve/main/onnx/model.onnx",
+      "sha256": "92b66126e73e6667ef701c253d0a6be8e6709bb6a03436de226b4f64ff3cbf35",
+      "size": 438327788,
+      "dims": "batch_size=2,sequence_length=32",
+      "int_high": 2
+    }
+  ]
+}

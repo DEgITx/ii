@@ -3,6 +3,7 @@
 set(core_sources
     allocator.cpp
     build_info.cpp
+    compress.cpp
     fatal.cpp
     isa.cpp
     json.cpp

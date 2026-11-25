@@ -186,7 +186,9 @@ void register_quantization_ops(ir::OpRegistry& registry) {
     registry.add(OpSchema{
         .name = "quantize",
         .category = "quantization",
-        .doc = "y = saturate(round_half_even(x / scale) + zero_point). scale (and zero_point) are scalars or vectors "
+        .doc = "y = saturate(round_half_even(x / scale) + zero_point), with x / scale computed in single precision "
+               "(double "
+               "for f64). scale (and zero_point) are scalars or vectors "
                "along `axis`.",
         .inputs = {InputSpec{"x"}, InputSpec{"scale"}, InputSpec{"zero_point", true}},
         .outputs = {OutputSpec{"y"}},

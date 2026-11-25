@@ -29,6 +29,9 @@ struct FoldOptions {
 Result<std::size_t> fold_constants(ir::Graph& graph, const backend::Backend& evaluator,
                                    const FoldOptions& options = {});
 
+/// Executes one node whose inputs are all constants (with static output shapes) and returns its results.
+Result<std::vector<Tensor>> evaluate_node(const ir::Node& node, const backend::Backend& evaluator);
+
 /// Replaces composite nodes for which `predicate` is true by their decompositions, repeatedly (decompositions may
 /// produce further composites). Returns the number of decomposed nodes.
 Result<std::size_t> decompose(ir::Graph& graph, FunctionRef<bool(const ir::Node&)> predicate);
@@ -44,6 +47,12 @@ std::size_t eliminate_common_subexpressions(ir::Graph& graph);
 ///   add(matmul(x, w), bias)  =>  linear(x, w, bias)   (2-D weight, 1-D bias over the output features)
 /// Returns the number of rewrites.
 Result<std::size_t> fuse_patterns(ir::Graph& graph);
+
+/// Merges a convolution with the elementwise operations applied to its result (an activation, a residual addition,
+/// a fused elementwise chain) into `fused_conv`, so that backends can apply them to each output block while it is in
+/// cache. Extra inputs of the epilogue must have the shape of the result, one value per channel, or be scalars.
+/// Returns the number of fused convolutions.
+Result<std::size_t> fuse_conv_epilogue(ir::Graph& graph);
 
 struct ElementwiseFusionOptions {
     int max_nodes = 24;   ///< operations per fused node

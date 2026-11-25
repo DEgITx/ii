@@ -1,0 +1,90 @@
+# SPDX-License-Identifier: MIT
+#
+# Nightly jobs: all model tests (large models included) and long fuzzing. See docs/ci.md.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  models:
+    name: models (all)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Build environment
+        uses: ./.github/actions/setup
+        with:
+          cache-key: ubuntu-24.04-linux-clang-release-models
+
+      - name: Build the CLI and the examples
+        run: |
+          cmake --preset linux-clang -DII_BUILD_TESTS=OFF -DII_BUILD_BENCHMARKS=OFF
+          cmake --build --preset linux-clang-release --target ii_cli ii_example_yolo
+
+      - name: Model cache
+        id: models-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.cache/ii-models
+          key: models-nightly-${{ hashFiles('tests/models/manifest.json') }}
+
+      - name: Python packages
+        run: |
+          python -m pip install --quiet onnxruntime==1.31.0 numpy
+          if [ "${{ steps.models-cache.outputs.cache-hit }}" != "true" ]; then
+            python -m pip install --quiet torch torchvision --index-url https://download.pytorch.org/whl/cpu
+            python -m pip install --quiet ultralytics onnx
+          fi
+
+      - name: Fetch the models
+        run: python scripts/fetch_models.py --cache ~/.cache/ii-models --suite nightly
+
+      - name: Compare with ONNX Runtime
+        run: |
+          python scripts/model_tests.py --cache ~/.cache/ii-models --suite nightly \
+            --ii build/linux-clang/bin/Release/ii --yolo build/linux-clang/bin/Release/ii_example_yolo
+
+  fuzz-long:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_onnx, fuzz_npy, fuzz_ir_text, fuzz_json]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Build environment
+        uses: ./.github/actions/setup
+        with:
+          cache-key: ubuntu-24.04-linux-clang-fuzz
+
+      - name: Build the fuzzer
+        run: |
+          cmake --preset linux-clang-fuzz
+          cmake --build --preset linux-clang-fuzz-relwithdebinfo --target ${{ matrix.target }}
+
+      - name: Fuzz for 30 minutes
+        run: |
+          corpus=$(echo "${{ matrix.target }}" | sed 's/^fuzz_//')
+          mkdir -p work artifacts
+          ./build/linux-clang-fuzz/bin/RelWithDebInfo/${{ matrix.target }} -max_total_time=1800 -timeout=10 \
+            -rss_limit_mb=2048 -artifact_prefix=artifacts/ work "tests/fuzz/corpus/$corpus"
+
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: crashes-${{ matrix.target }}
+          path: artifacts/
+          if-no-files-found: ignore

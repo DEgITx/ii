@@ -30,5 +30,8 @@ void layer_norm(const float* x, const float* scale, const float* bias, float* y,
                 float epsilon);
 void rms_norm(const float* x, const float* scale, float* y, std::int64_t rows, std::int64_t n, float epsilon);
 void attention_row(const AttentionRowArgs& args);
+void axpy(float* y, const float* x, float a, std::int64_t n);
+void max_inplace(float* y, const float* x, std::int64_t n);
+void depthwise(const DepthwiseArgs& args);
 
 }  // namespace ii::cpu::II_ISA_NS

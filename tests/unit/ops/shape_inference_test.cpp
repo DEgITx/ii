@@ -56,6 +56,16 @@ const Case kCases[] = {
     {"mean_int_rejected", "input %x : i32[2]\n %y : i32[] = reduce_mean(%x)", "float"},
     {"argmax", "input %x : f32[N, 5]\n %y : i64[N, 1] = argmax(%x) {axis = 1, keepdims = true}", nullptr},
     {"argmin", "input %x : f16[N, 5]\n %y : i64[5] = argmin(%x) {select_last_index = true}", nullptr},
+    {"topk", "input %x : f32[N, 10]\n %v : f32[N, 3], %i : i64[N, 3] = topk(%x) {k = 3}", nullptr},
+    {"topk_axis0", "input %x : i32[5, 4]\n %v : i32[2, 4], %i : i64[2, 4] = topk(%x) {k = 2, axis = 0}", nullptr},
+    {"topk_too_large", "input %x : f32[2, 3]\n %v : f32[2, 4], %i : i64[2, 4] = topk(%x) {k = 4}", "exceeds"},
+    // Image
+    {"resize", "input %x : f32[N, 3, H, W]\n %y : f32[N, 3, 2*H, 2*W] = resize(%x) {shape = [N, 3, 2*H, 2*W]}",
+     nullptr},
+    {"resize_linear_int_rejected",
+     "input %x : i32[1, 4]\n %y : i32[1, 8] = resize(%x) {shape = [1, 8], mode = \"linear\"}", "float"},
+    {"resize_rank_mismatch", "input %x : f32[1, 4]\n %y : f32[8] = resize(%x) {shape = [8]}", "rank"},
+    {"resize_bad_mode", "input %x : f32[4]\n %y : f32[8] = resize(%x) {shape = [8], mode = \"area\"}", "mode"},
     // matmul
     {"matmul", "input %a : f32[B, M, K]\n input %b : f32[K, 7]\n %y : f32[B, M, 7] = matmul(%a, %b)", nullptr},
     {"matmul_transposes",

@@ -17,6 +17,7 @@
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace ii::cpu {
 
@@ -87,6 +88,22 @@ void parallel_range(const KernelContext& context, std::int64_t n, double cost_pe
 void parallel_slots(const KernelContext& context, int slots, std::int64_t items,
                     FunctionRef<void(int slot, std::int64_t item)> fn);
 
+/// Runs fn(slot, begin, end) over chunks of [0, items) on at most `slots` workers (dynamic hand-out, ~4 chunks per
+/// worker; serial when `items * cost_per_item` is small). Like parallel_slots, for many small items.
+void parallel_chunks(const KernelContext& context, int slots, std::int64_t items, double cost_per_item,
+                     FunctionRef<void(int slot, std::int64_t begin, std::int64_t end)> fn);
+
+/// An elementwise program compiled for the kernel table's interpreter.
+struct CompiledElementwise {
+    std::vector<EwInstr> code;
+    int result = 0;
+    std::vector<Elem> input_elems;
+    Elem out_elem = Elem::kF32;
+};
+
+/// Compiles a graph of elementwise operations (one output) into an interpreter program (elementwise.cpp).
+Result<CompiledElementwise> compile_elementwise_graph(const ir::Graph& program);
+
 /// A kernel implemented by a callable.
 template <class Fn>
 class LambdaKernel final : public Kernel {
@@ -109,5 +126,6 @@ void register_gemm_kernels(CpuBackend& backend);
 void register_reduction_kernels(CpuBackend& backend);
 void register_attention_kernels(CpuBackend& backend);
 void register_movement_kernels(CpuBackend& backend);
+void register_conv_kernels(CpuBackend& backend);
 
 }  // namespace ii::cpu

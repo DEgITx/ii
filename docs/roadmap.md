@@ -114,6 +114,27 @@ OpenBLAS — в `bench/results/`.
 
 ## Этап 3 — ONNX и «классические» модели (первый «настоящий» сценарий)
 
+> **Статус: реализован.** Локально проверен на Windows (MSVC, MSVC shared, MSVC+ASan, clang-cl, MinGW GCC,
+> MinGW Clang) и на телефоне Android; Linux ARM64, macOS и эмулятор — в CI. Сделано: собственный декодер protobuf и
+> импорт ONNX (~130 операторов, opset 1–23+): символьное отслеживание вычислений над формами (Shape → Gather → Concat →
+> Reshape и т.п.), поэтому модели с динамическими batch/sequence импортируются с символьными размерностями; функции
+> модели, `If` с известным при загрузке условием, внешние данные (только внутри каталога модели),
+> `LoadOptions::dims` / `constant_inputs`. Новые операции `resize`, `topk`. В ii-cpu: свёртки через GEMM с неявным
+> im2col (панели упаковываются один раз на изображение) и предупаковкой весов, depthwise-свёртки, пулинги, resize;
+> эпилог свёртки — внутренняя операция `fused_conv` (активации, SiLU, residual; batch_norm после импорта становится
+> поканальными константами эпилога). `.npy` / `.npz` (свой inflate) в публичном API `ii/io.h`; CLI: `ii run` с
+> `.npz`/`.npy`/изображениями, `--save-outputs`, `--top`, `ii bench`, `ii inspect` для ONNX; пример `examples/yolo`
+> (letterbox, декодирование, NMS, отрисовка). Тесты: официальный набор операторных тестов ONNX — 1005 из 1884 случаев
+> проходят на ii-ref и ii-cpu (CI `onnx-conformance` со списком ожидаемых), модели YOLOv8n, ResNet-50 (2 экспорта),
+> MobileNetV2 (2 экспорта), BERT-base (2 экспорта) совпадают с ONNX Runtime (~1e-6; CI `models` и `nightly.yml`),
+> фаззеры ONNX и npy/npz (+ 30 минут каждого в nightly). Задержка: ×1.1–1.25 к ONNX Runtime на BERT и YOLOv8n,
+> ×1.5 на ResNet-50, ×1.9 на MobileNetV2 — разрыв и план в
+> [bench/results/stage3-onnx.md](../bench/results/stage3-onnx.md) (раскладка NCHWc и прямые ядра свёрток).
+> Перенесено: NCHWc / прямые ядра / Winograd — следующий шаг оптимизации CPU; `if`/`loop` с условием во время
+> выполнения и `nms` как операция — вместе с выходами, размер которых зависит от данных (ONNX NonMaxSuppression,
+> NonZero); распознавание attention-шаблонов в `sdpa` — этап 4 (вместе с attention для LLM); conv_transpose, 3-D
+> окна и cubic resize в ii-cpu — по необходимости (сейчас ii-ref); `release.yml` (v0.1), `abi-interop`, `docs.yml`.
+
 **Цель:** запуск произвольных ONNX-моделей (CV, энкодеры, аудио); первая цель — YOLOv8.
 
 - Собственный декодер protobuf, импорт ONNX (opset 13–21+), external data, таблица маппинга операций; фаззинг.

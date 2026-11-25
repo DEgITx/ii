@@ -3,6 +3,7 @@
 #include <ii/model.h>
 #include <ii/version.h>
 
+#include <filesystem>
 #include <new>
 #include <string>
 #include <vector>
@@ -129,6 +130,39 @@ ii_status ii_model_from_text(ii_context* context, const char* text, size_t lengt
             return fail(parsed.status());
         }
         *model = new ii_model{std::move(*parsed)};
+        return II_OK;
+    });
+}
+
+ii_status ii_model_load(ii_context* context, const char* path, ii_model** model) {
+    return guarded([&]() -> ii_status {
+        if (context == nullptr || model == nullptr || path == nullptr) {
+            return fail(II_INVALID_ARGUMENT, "invalid argument to ii_model_load");
+        }
+        *model = nullptr;
+        const std::string_view text(path);
+        ii::Result<ii::Model> loaded =
+            ii::Model::load(context->context, std::filesystem::path(std::u8string(text.begin(), text.end())));
+        if (!loaded.ok()) {
+            return fail(loaded.status());
+        }
+        *model = new ii_model{std::move(*loaded)};
+        return II_OK;
+    });
+}
+
+ii_status ii_model_from_onnx(ii_context* context, const void* data, size_t size, ii_model** model) {
+    return guarded([&]() -> ii_status {
+        if (context == nullptr || model == nullptr || (data == nullptr && size > 0)) {
+            return fail(II_INVALID_ARGUMENT, "invalid argument to ii_model_from_onnx");
+        }
+        *model = nullptr;
+        ii::Result<ii::Model> imported = ii::Model::from_onnx(
+            context->context, std::span<const std::byte>(static_cast<const std::byte*>(data), size));
+        if (!imported.ok()) {
+            return fail(imported.status());
+        }
+        *model = new ii_model{std::move(*imported)};
         return II_OK;
     });
 }

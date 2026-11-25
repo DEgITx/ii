@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 namespace {
@@ -101,6 +103,32 @@ TEST(CApiTest, ReportsErrors) {
     ii_context_destroy(context);
     ii_context_destroy(nullptr);
     EXPECT_STRNE(ii_version(), "");
+}
+
+TEST(CApiTest, LoadsModelFiles) {
+    ii_context* context = nullptr;
+    ASSERT_EQ(ii_context_create(nullptr, &context), II_OK);
+    // The ii text format through ii_model_load, from a file.
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "ii_c_api_model.ii.txt";
+    {
+        std::ofstream file(path, std::ios::binary);
+        file << kModel;
+    }
+    ii_model* model = nullptr;
+    const std::u8string utf8 = path.u8string();
+    const std::string path_text(utf8.begin(), utf8.end());
+    ASSERT_EQ(ii_model_load(context, path_text.c_str(), &model), II_OK) << ii_last_error();
+    ii_model_destroy(model);
+    std::filesystem::remove(path);
+    model = nullptr;
+    EXPECT_EQ(ii_model_load(context, path_text.c_str(), &model), II_NOT_FOUND);
+    EXPECT_EQ(model, nullptr);
+    // Garbage is not an ONNX model.
+    const unsigned char garbage[16] = {0xFF, 0xFF, 0xFF, 0xFF};
+    EXPECT_NE(ii_model_from_onnx(context, garbage, sizeof garbage, &model), II_OK);
+    EXPECT_EQ(model, nullptr);
+    EXPECT_EQ(ii_model_from_onnx(context, nullptr, 4, &model), II_INVALID_ARGUMENT);
+    ii_context_destroy(context);
 }
 
 }  // namespace

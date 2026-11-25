@@ -7,9 +7,12 @@ add_executable(ii_cli
     command_info.cpp
     command_inspect.cpp
     command_ops.cpp
-    command_run.cpp)
+    command_run.cpp
+    image.cpp)
 
-target_link_libraries(ii_cli PRIVATE ii::ii ii_build_options)
+include(IiDependencies)
+ii_require_stb()
+target_link_libraries(ii_cli PRIVATE ii::ii ii_build_options ii_stb)
 if(WIN32)
     target_link_libraries(ii_cli PRIVATE shell32)
 endif()

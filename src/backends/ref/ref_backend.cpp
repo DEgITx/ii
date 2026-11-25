@@ -14,6 +14,7 @@ public:
         register_reduction_kernels(*this);
         register_linalg_kernels(*this);
         register_movement_kernels(*this);
+        register_image_kernels(*this);
         register_creation_kernels(*this);
         register_composite_kernels(*this);
     }

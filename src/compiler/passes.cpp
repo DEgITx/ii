@@ -65,8 +65,9 @@ bool foldable(const ir::Node& node) {
     return true;
 }
 
-/// Executes one node on constant inputs and returns its results.
-Result<std::vector<Tensor>> evaluate(const ir::Node& node, const backend::Backend& evaluator) {
+}  // namespace
+
+Result<std::vector<Tensor>> evaluate_node(const ir::Node& node, const backend::Backend& evaluator) {
     II_ASSIGN_OR_RETURN(std::unique_ptr<backend::Kernel> kernel, evaluator.create_kernel(node));
     std::vector<backend::TensorView> inputs;
     std::vector<Shape> input_shapes;
@@ -103,8 +104,6 @@ Result<std::vector<Tensor>> evaluate(const ir::Node& node, const backend::Backen
     return results;
 }
 
-}  // namespace
-
 Result<std::size_t> fold_constants(ir::Graph& graph, const backend::Backend& evaluator, const FoldOptions& options) {
     std::size_t folded = 0;
     std::vector<ir::Node*> doomed;
@@ -126,7 +125,7 @@ Result<std::size_t> fold_constants(ir::Graph& graph, const backend::Backend& eva
         if (output_bytes > options.max_result_bytes && output_bytes > input_bytes) {
             continue;
         }
-        Result<std::vector<Tensor>> results = evaluate(node, evaluator);
+        Result<std::vector<Tensor>> results = evaluate_node(node, evaluator);
         if (!results.ok()) {
             // Leave the node in place: the same error will surface (with context) when the graph runs.
             continue;

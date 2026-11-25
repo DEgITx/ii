@@ -2,6 +2,8 @@
 // Model and Program: compilation of a model into an executable program.
 #include "api/builder_impl.h"
 #include "compiler/passes.h"
+#include "core/platform/mapped_file.h"
+#include "formats/onnx/onnx_import.h"
 #include "ir/op_schema.h"
 #include "ir/text.h"
 #include "runtime/runtime.h"
@@ -111,6 +113,70 @@ Result<Model> Model::from_text(const Context& context, std::string_view text) {
     return Model(std::move(model));
 }
 
+namespace {
+
+std::string utf8_path(const std::filesystem::path& path) {
+    const std::u8string text = path.u8string();
+    return std::string(text.begin(), text.end());
+}
+
+}  // namespace
+
+Result<Model> Model::from_onnx(const Context& context, std::span<const std::byte> data, const LoadOptions& options) {
+    formats::onnx::ImportOptions import;
+    import.dims = options.dims;
+    import.constant_inputs = options.constant_inputs;
+    import.evaluator = &context.impl()->reference();
+    Result<std::unique_ptr<ir::Graph>> graph = formats::onnx::import_model(data, nullptr, import);
+    if (!graph.ok()) {
+        Status status = graph.status();
+        return status.add_context("ONNX import");
+    }
+    auto model = std::make_shared<detail::ModelImpl>(context);
+    model->graph = std::move(*graph);
+    return Model(std::move(model));
+}
+
+Result<Model> Model::load(const Context& context, const std::filesystem::path& path, const LoadOptions& options) {
+    Result<platform::MappedFile> mapped = platform::MappedFile::open(path);
+    if (!mapped.ok()) {
+        return mapped.status();
+    }
+    auto file = std::make_shared<platform::MappedFile>(std::move(*mapped));
+    const std::span<const std::byte> bytes = file->bytes();
+    std::string extension = utf8_path(path.extension());
+    for (char& c : extension) {
+        c = static_cast<char>(c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c);
+    }
+    const bool is_onnx = extension == ".onnx" || (extension != ".txt" && formats::onnx::looks_like_onnx(bytes));
+    if (is_onnx) {
+        formats::onnx::ImportOptions import;
+        import.base_dir = path.parent_path();
+        if (import.base_dir.empty()) {
+            import.base_dir = ".";
+        }
+        import.dims = options.dims;
+        import.constant_inputs = options.constant_inputs;
+        import.evaluator = &context.impl()->reference();
+        Result<std::unique_ptr<ir::Graph>> graph =
+            formats::onnx::import_model(bytes, std::static_pointer_cast<const void>(file), import);
+        if (!graph.ok()) {
+            Status status = graph.status();
+            return status.add_context(std::format("loading '{}'", utf8_path(path)));
+        }
+        auto model = std::make_shared<detail::ModelImpl>(context);
+        model->graph = std::move(*graph);
+        return Model(std::move(model));
+    }
+    const std::string_view text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    Result<Model> model = from_text(context, text);
+    if (!model.ok()) {
+        Status status = model.status();
+        return status.add_context(std::format("loading '{}'", utf8_path(path)));
+    }
+    return model;
+}
+
 std::vector<TensorInfo> Model::inputs() const {
     return graph_inputs(*impl_->graph);
 }
@@ -187,6 +253,8 @@ Result<Program> Model::compile(const CompileOptions& options) const {
         II_TRY(check("pattern fusion"));
         II_TRY(compiler::fuse_elementwise(graph));
         II_TRY(check("elementwise fusion"));
+        II_TRY(compiler::fuse_conv_epilogue(graph));
+        II_TRY(check("convolution epilogue fusion"));
     }
     II_ASSIGN_OR_RETURN(const auto assignment, assign_backends(graph, backends));
     compiler::eliminate_dead_code(graph);

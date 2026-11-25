@@ -113,6 +113,13 @@ II_API void ii_context_destroy(ii_context* context);
 
 /** Parses a model in the ii IR text format. `text` need not be NUL-terminated. */
 II_API ii_status ii_model_from_text(ii_context* context, const char* text, size_t length, ii_model** model);
+
+/** Loads a model file (ONNX, with external data next to it, or the ii IR text format); `path` is UTF-8. */
+II_API ii_status ii_model_load(ii_context* context, const char* path, ii_model** model);
+
+/** Imports a serialized ONNX model from memory (the data is copied). */
+II_API ii_status ii_model_from_onnx(ii_context* context, const void* data, size_t size, ii_model** model);
+
 II_API void ii_model_destroy(ii_model* model);
 
 /** Compiles a model. `options` may be NULL. */

@@ -415,6 +415,7 @@ void register_opset(ir::OpRegistry& registry) {
     register_reduction_ops(registry);
     register_linalg_ops(registry);
     register_conv_ops(registry);
+    register_image_ops(registry);
     register_movement_ops(registry);
     register_creation_ops(registry);
     register_quantization_ops(registry);

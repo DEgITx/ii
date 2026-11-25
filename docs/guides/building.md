@@ -129,6 +129,24 @@ The minimum API level is 26 (Android 8.0). For Android builds CMake runs every t
 `adb` and runs it there, so `ctest` works unchanged on a connected phone or an emulator. Benchmarks and the CLI run
 the same way: `python scripts/android_run.py build/android-arm64/bin/Release/ii info`.
 
+## Model tests
+
+The CLI and `examples/yolo` decode images with stb_image (fetched like the test dependencies). Real models are
+compared with ONNX Runtime by two scripts (Python with `onnxruntime`; `ultralytics` to export YOLOv8):
+
+```sh
+python scripts/fetch_models.py --cache build/models-cache --suite pr      # or nightly
+python scripts/model_tests.py --cache build/models-cache --ii build/<preset>/bin/Release/ii \
+    --yolo build/<preset>/bin/Release/ii_example_yolo
+```
+
+The ONNX operator conformance suite needs the `onnx` package:
+
+```sh
+python scripts/onnx_node_tests.py --out build/onnx-node-tests
+build/<preset>/bin/Release/ii_onnx_tests build/onnx-node-tests --expected tests/onnx/expected_passes.txt
+```
+
 ## Benchmarks
 
 ```sh

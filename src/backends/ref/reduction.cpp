@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
-// Reference kernels: reduce_sum, reduce_mean, reduce_max, reduce_min, reduce_prod, argmax, argmin.
+// Reference kernels: reduce_sum, reduce_mean, reduce_max, reduce_min, reduce_prod, argmax, argmin, topk.
 #include "backends/ref/common.h"
 
+#include <algorithm>
+#include <numeric>
 #include <vector>
 
 namespace ii::ref {
@@ -47,12 +49,6 @@ Result<std::unique_ptr<Kernel>> reduce_kernel(const ir::Node& node) {
         const ReducePlan plan = plan_reduction(x.shape, axes);
         const std::int64_t outputs = plan.kept_shape.numel();
         const std::int64_t count = plan.reduced_shape.numel();
-        if constexpr (kKind == ReduceKind::kMax || kKind == ReduceKind::kMin) {
-            if (count == 0 && outputs > 0) {
-                return errors::invalid_argument("{} of an empty range",
-                                                kKind == ReduceKind::kMax ? "reduce_max" : "reduce_min");
-            }
-        }
         return dispatch(x.dtype, [&](auto tag) -> Status {
             using S = typename decltype(tag)::type;
             using C = ComputeOf<S>;
@@ -66,6 +62,16 @@ Result<std::unique_ptr<Kernel>> reduce_kernel(const ir::Node& node) {
                 C acc{};
                 if constexpr (kKind == ReduceKind::kProd) {
                     acc = C{1};
+                }
+                if constexpr ((kKind == ReduceKind::kMax || kKind == ReduceKind::kMin) && !kIsBoolStorage<S>) {
+                    // The value of an empty reduction: the identity of max / min.
+                    if constexpr (std::is_floating_point_v<C>) {
+                        acc = kKind == ReduceKind::kMax ? -std::numeric_limits<double>::infinity()
+                                                        : std::numeric_limits<double>::infinity();
+                    } else {
+                        acc = kKind == ReduceKind::kMax ? static_cast<C>(std::numeric_limits<S>::lowest())
+                                                        : static_cast<C>(std::numeric_limits<S>::max());
+                    }
                 }
                 bool nan = false;
                 for (std::int64_t r = 0; r < count; ++r) {
@@ -88,7 +94,7 @@ Result<std::unique_ptr<Kernel>> reduce_kernel(const ir::Node& node) {
                             nan = nan || std::isnan(v);
                         }
                         const bool better = kKind == ReduceKind::kMax ? v > acc : v < acc;
-                        if (r == 0 || better) {
+                        if (better) {
                             acc = v;
                         }
                     }
@@ -156,6 +162,52 @@ Result<std::unique_ptr<Kernel>> arg_kernel(const ir::Node& node) {
     });
 }
 
+Result<std::unique_ptr<Kernel>> topk_kernel(const ir::Node& node) {
+    const std::int64_t axis_attr = node.attrs().get_int("axis");
+    const bool largest = node.attrs().get_bool("largest", true);
+    return make_kernel([axis_attr, largest](const KernelContext& context) -> Status {
+        const TensorView& x = context.input(0);
+        const TensorView& values = context.output(0);
+        auto* indices = context.output(1).as<std::int64_t>();
+        const int axis = axis_of(axis_attr, x.rank());
+        const std::int64_t outer = product(x.shape, 0, axis);
+        const std::int64_t size = x.shape[axis];
+        const std::int64_t inner = product(x.shape, axis + 1, x.rank());
+        const std::int64_t k = values.shape[axis];
+        return dispatch(x.dtype, [&](auto tag) -> Status {
+            using S = typename decltype(tag)::type;
+            using C = ComputeOf<S>;
+            const S* in = x.as<S>();
+            S* out = values.as<S>();
+            std::vector<std::int64_t> order(static_cast<std::size_t>(size));
+            for (std::int64_t o = 0; o < outer; ++o) {
+                for (std::int64_t i = 0; i < inner; ++i) {
+                    const auto value = [&](std::int64_t j) { return load(in[(o * size + j) * inner + i]); };
+                    // "a before b": NaN is greater than every number; equal values keep index order.
+                    const auto greater = [&](C a, C b) {
+                        if constexpr (std::is_floating_point_v<C>) {
+                            if (std::isnan(a) || std::isnan(b)) {
+                                return std::isnan(a) && !std::isnan(b);
+                            }
+                        }
+                        return a > b;
+                    };
+                    std::iota(order.begin(), order.end(), std::int64_t{0});
+                    std::stable_sort(order.begin(), order.end(), [&](std::int64_t a, std::int64_t b) {
+                        return largest ? greater(value(a), value(b)) : greater(value(b), value(a));
+                    });
+                    for (std::int64_t j = 0; j < k; ++j) {
+                        const std::int64_t source = order[static_cast<std::size_t>(j)];
+                        out[(o * k + j) * inner + i] = in[(o * size + source) * inner + i];
+                        indices[(o * k + j) * inner + i] = source;
+                    }
+                }
+            }
+            return ok_status();
+        });
+    });
+}
+
 }  // namespace
 
 void register_reduction_kernels(backend::KernelBackend& backend) {
@@ -166,6 +218,7 @@ void register_reduction_kernels(backend::KernelBackend& backend) {
     backend.add_kernel("reduce_prod", reduce_kernel<ReduceKind::kProd>);
     backend.add_kernel("argmax", arg_kernel<true>);
     backend.add_kernel("argmin", arg_kernel<false>);
+    backend.add_kernel("topk", topk_kernel);
 }
 
 }  // namespace ii::ref

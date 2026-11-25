@@ -5,6 +5,7 @@
 #include "ir/op_schema.h"
 
 #include <algorithm>
+#include <limits>
 #include <vector>
 
 namespace ii::cpu {
@@ -77,14 +78,17 @@ Result<std::unique_ptr<Kernel>> create_reduce(const ir::Node& node, const CpuCon
                             : op == "reduce_min"  ? ReduceKind::kMin
                                                   : ReduceKind::kProd;
     const KernelTable* table = config.table;
-    return make_kernel([table, kind, range, op](const KernelContext& context) -> Status {
+    return make_kernel([table, kind, range](const KernelContext& context) -> Status {
         const TensorView& x = context.input(0);
         const Split3 s = split(x.shape, range.first, range.second);
-        if (s.middle == 0 && (kind == ReduceKind::kMax || kind == ReduceKind::kMin) && s.outer * s.inner > 0) {
-            return errors::invalid_argument("'{}' of an empty range", op);
-        }
         const float* in = x.as<float>();
         float* out = context.output(0).as<float>();
+        if (s.middle == 0 && (kind == ReduceKind::kMax || kind == ReduceKind::kMin)) {
+            const float identity = kind == ReduceKind::kMax ? -std::numeric_limits<float>::infinity()
+                                                            : std::numeric_limits<float>::infinity();
+            std::fill(out, out + s.outer * s.inner, identity);
+            return ok_status();
+        }
         parallel_range(context, s.outer, static_cast<double>(s.middle * s.inner),
                        [&](std::int64_t begin, std::int64_t end) {
                            table->reduce(kind, in + begin * s.middle * s.inner, end - begin, s.middle, s.inner,

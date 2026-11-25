@@ -524,6 +524,152 @@ TEST_P(CpuBackendTest, MovementMatchesReference) {
     }
 }
 
+// --------------------------------------------------------------------------------------------------------------------
+// Convolution, pooling, resize
+
+TEST_P(CpuBackendTest, ConvolutionMatchesReference) {
+    struct ConvCase {
+        Shape x;
+        Shape w;
+        WindowOptions window;
+        std::int64_t groups = 1;
+        bool bias = true;
+        int epilogue = 0;  // 0 none, 1 relu, 2 silu (x * sigmoid(x)), 3 residual add + clamp, 4 per-channel mul
+        bool constant_w = true;
+    };
+    const std::vector<ConvCase> cases = {
+        {{1, 3, 9, 11}, {8, 3, 3, 3}, {}},
+        {{2, 5, 12, 10}, {7, 5, 3, 3}, {{1, 1}, {1, 1}, {1, 1, 1, 1}}, 1, true, 1},
+        {{1, 4, 17, 13}, {6, 4, 5, 3}, {{2, 3}, {1, 1}, {2, 1, 3, 0}}, 1, false, 2},
+        {{1, 8, 16, 16}, {16, 8, 1, 1}, {}, 1, true, 3},                                  // pointwise
+        {{2, 6, 9, 9}, {6, 3, 3, 3}, {{1, 1}, {2, 2}, {2, 2, 2, 2}}, 2, true, 4},         // groups, dilation
+        {{1, 12, 14, 14}, {12, 1, 3, 3}, {{1, 1}, {1, 1}, {1, 1, 1, 1}}, 12, true, 1},    // depthwise
+        {{2, 8, 15, 15}, {16, 1, 3, 3}, {{2, 2}, {1, 1}, {1, 1, 1, 1}}, 8, false, 2},     // depthwise x2, stride 2
+        {{1, 4, 7, 7}, {4, 1, 5, 5}, {{1, 1}, {1, 1}, {}, "same_upper"}, 4, true, 0},     // depthwise 5x5 same
+        {{1, 3, 40, 37}, {64, 3, 7, 7}, {{2, 2}, {1, 1}, {3, 3, 3, 3}}, 1, true, 1},      // stem
+        {{1, 70, 7, 7}, {130, 70, 3, 3}, {{1, 1}, {1, 1}, {1, 1, 1, 1}}, 1, true, 3},     // small image, many channels
+        {{2, 5, 31}, {9, 5, 4}, {{2}, {1}, {1, 2}}, 1, true, 1},                          // 1-D
+        {{1, 3, 8, 8}, {4, 3, 3, 3}, {{1, 1}, {1, 1}, {1, 1, 1, 1}}, 1, true, 1, false},  // weights at run time
+    };
+    std::uint32_t seed = 900;
+    for (const ConvCase& c : cases) {
+        SCOPED_TRACE(c.x.to_string() + " * " + c.w.to_string() + " groups " + std::to_string(c.groups) + " epilogue " +
+                     std::to_string(c.epilogue));
+        const Tensor x = ii_test::random_tensor(DType::kF32, c.x, seed++);
+        const Tensor w = ii_test::random_tensor(DType::kF32, c.w, seed++, -0.5, 0.5);
+        const Tensor bias = ii_test::random_tensor(DType::kF32, Shape{c.w[0]}, seed++);
+        const Tensor scale = ii_test::random_tensor(DType::kF32, Shape{c.w[0], 1, 1}, seed++);
+        std::vector<Tensor> inputs = {x};
+        if (!c.constant_w) {
+            inputs.push_back(w);
+        }
+        // The residual has the shape of the result: compute it with the reference first.
+        Shape out_shape;
+        {
+            GraphBuilder probe;
+            const Var input = probe.input("x", DType::kF32, dims_of(c.x));
+            probe.output("y", conv(input, probe.constant(w), {}, c.window, c.groups));
+            const Result<Model> model = Model::from_builder(context(), std::move(probe));
+            ASSERT_TRUE(model.ok()) << model.status().to_string();
+            const Dims dims = model->outputs()[0].shape;
+            for (const Dim& d : dims) {
+                out_shape.push_back(d.value());
+            }
+        }
+        const Tensor residual = ii_test::random_tensor(DType::kF32, out_shape, seed++);
+        if (c.epilogue == 3) {
+            inputs.push_back(residual);
+        }
+        expect_matches_reference(
+            [&](GraphBuilder& b) {
+                const Var input = b.input("x", DType::kF32, dims_of(c.x));
+                const Var weights = c.constant_w ? b.constant(w) : b.input("w", DType::kF32, dims_of(c.w));
+                Var y = conv(input, weights, c.bias ? b.constant(bias) : Var(), c.window, c.groups);
+                switch (c.epilogue) {
+                case 1:
+                    y = relu(y);
+                    break;
+                case 2:
+                    y = y * sigmoid(y);
+                    break;
+                case 3:
+                    y = clamp(y + b.input("r", DType::kF32, dims_of(out_shape)), -1.0, 6.0);
+                    break;
+                case 4:
+                    y = y * b.constant(scale.reshape({c.w[0], 1, 1}).value());
+                    break;
+                default:
+                    break;
+                }
+                b.output("y", y);
+            },
+            inputs, {1e-4, 1e-5});
+    }
+}
+
+TEST_P(CpuBackendTest, PoolingMatchesReference) {
+    const Shape shape{2, 3, 13, 17};
+    const Tensor x = ii_test::random_tensor(DType::kF32, shape, 950);
+    expect_matches_reference(
+        [&](GraphBuilder& b) {
+            const Var input = b.input("x", DType::kF32, dims_of(shape));
+            b.output("max", max_pool(input, {3, 3}, {{2, 2}, {1, 1}, {1, 1, 1, 1}}));
+            b.output("max_ceil", max_pool(input, {2, 2}, {{2, 2}, {}, {}}, true));
+            b.output("max_same", max_pool(input, {5, 5}, {{1, 1}, {}, {}, "same_upper"}));
+            b.output("max_dilated", max_pool(input, {2, 3}, {{1, 2}, {2, 1}, {0, 1, 1, 0}}));
+            b.output("avg", avg_pool(input, {3, 3}, {{2, 2}, {1, 1}, {1, 1, 1, 1}}));
+            b.output("avg_include_pad", avg_pool(input, {3, 2}, {{1, 1}, {}, {1, 1, 1, 0}}, false, true));
+            b.output("avg_ceil", avg_pool(input, {2, 2}, {{2, 2}, {}, {}}, true));
+        },
+        {x}, {1e-6, 1e-6});
+    const Shape shape1d{2, 4, 20};
+    const Tensor x1 = ii_test::random_tensor(DType::kF32, shape1d, 951);
+    expect_matches_reference(
+        [&](GraphBuilder& b) {
+            const Var input = b.input("x", DType::kF32, dims_of(shape1d));
+            b.output("max", max_pool(input, {3}, {{2}, {}, {1, 1}}));
+            b.output("avg", avg_pool(input, {4}, {{3}, {}, {}}));
+        },
+        {x1}, {1e-6, 1e-6});
+}
+
+TEST_P(CpuBackendTest, ResizeMatchesReference) {
+    const Shape shape{1, 3, 7, 9};
+    const Tensor x = ii_test::random_tensor(DType::kF32, shape, 960);
+    struct ResizeCase {
+        Dims out;
+        std::vector<double> scales;
+        const char* mode;
+        const char* coordinates;
+        const char* nearest;
+    };
+    const std::vector<ResizeCase> cases = {
+        {{1, 3, 14, 18}, {1, 1, 2, 2}, "nearest", "asymmetric", "floor"},
+        {{1, 3, 14, 18}, {}, "nearest", "half_pixel", "round_prefer_floor"},
+        {{1, 3, 5, 4}, {}, "nearest", "half_pixel", "round_prefer_ceil"},
+        {{1, 3, 10, 13}, {}, "linear", "half_pixel", "round_prefer_floor"},
+        {{1, 3, 10, 13}, {}, "linear", "align_corners", "round_prefer_floor"},
+        {{1, 3, 4, 5}, {}, "linear", "pytorch_half_pixel", "round_prefer_floor"},
+        {{1, 3, 21, 27}, {1, 1, 3, 3}, "linear", "asymmetric", "round_prefer_floor"},
+    };
+    for (const ResizeCase& c : cases) {
+        SCOPED_TRACE(std::string(c.mode) + " " + c.coordinates + " to " + to_string(c.out));
+        expect_matches_reference(
+            [&](GraphBuilder& b) {
+                const Var input = b.input("x", DType::kF32, dims_of(shape));
+                Attributes attrs = {{"shape", c.out},
+                                    {"mode", std::string(c.mode)},
+                                    {"coordinate_mode", std::string(c.coordinates)},
+                                    {"nearest_mode", std::string(c.nearest)}};
+                if (!c.scales.empty()) {
+                    attrs.set("scales", c.scales);
+                }
+                b.output("y", b.op1("resize", {input}, attrs));
+            },
+            {x}, {1e-5, 1e-6});
+    }
+}
+
 INSTANTIATE_TEST_SUITE_P(Isa, CpuBackendTest, ::testing::ValuesIn(isa_names()));
 
 // --------------------------------------------------------------------------------------------------------------------

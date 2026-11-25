@@ -437,6 +437,50 @@ Result<std::unique_ptr<Kernel>> create_elementwise(const ir::Node& node, const C
 
 }  // namespace
 
+Result<CompiledElementwise> compile_elementwise_graph(const ir::Graph& graph) {
+    ProgramSource source;
+    std::unordered_map<const ir::Value*, int> ids;
+    for (const ir::Value* input : graph.inputs()) {
+        ids.emplace(input, static_cast<int>(source.input_dtypes.size()));
+        source.input_dtypes.push_back(input->dtype());
+    }
+    for (const auto& inner : graph.nodes()) {
+        SourceNode item{inner->op_name(), &inner->attrs(), {}, {}, inner->output()->dtype()};
+        for (const ir::Value* value : inner->inputs()) {
+            if (value == nullptr || !ids.contains(value)) {
+                return errors::unsupported("elementwise program uses constants or absent inputs");
+            }
+            item.inputs.push_back(ids.at(value));
+            item.input_dtypes.push_back(value->dtype());
+        }
+        ids.emplace(inner->output(), static_cast<int>(source.input_dtypes.size() + source.nodes.size()));
+        source.nodes.push_back(std::move(item));
+    }
+    if (graph.outputs().size() != 1 || static_cast<int>(source.input_dtypes.size()) > kMaxInputs) {
+        return errors::unsupported("elementwise program with {} outputs and {} inputs", graph.outputs().size(),
+                                   source.input_dtypes.size());
+    }
+    source.result = ids.at(graph.outputs()[0].value);
+    source.out_dtype = graph.outputs()[0].value->dtype();
+    II_ASSIGN_OR_RETURN(CompiledProgram program, compile_program(source));
+    CompiledElementwise compiled;
+    compiled.code = std::move(program.code);
+    compiled.result = program.result;
+    for (const DType dtype : source.input_dtypes) {
+        const std::optional<Elem> elem = elem_of(dtype);
+        if (!elem) {
+            return errors::unsupported("elementwise program input of type {}", to_string(dtype));
+        }
+        compiled.input_elems.push_back(*elem);
+    }
+    const std::optional<Elem> out = elem_of(source.out_dtype);
+    if (!out) {
+        return errors::unsupported("elementwise program result of type {}", to_string(source.out_dtype));
+    }
+    compiled.out_elem = *out;
+    return compiled;
+}
+
 void register_elementwise_kernels(CpuBackend& backend) {
     for (const std::string_view op :
          {"neg",  "abs",     "sign", "exp",  "log",   "sqrt",  "rsqrt", "recip", "sin",  "cos",

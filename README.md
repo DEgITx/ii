@@ -28,8 +28,16 @@ auto session = program.new_session().value();
 auto outputs = session.run({{"x", batch}}).value();
 ```
 
-More: [examples/](examples) (C++ and C), `ii inspect examples/models/attention.ii.txt`,
-`ii run examples/models/attention.ii.txt --dims B=4,S=128 --profile trace.json`, `ii ops`.
+ONNX models load directly — `ii::Model::load(context, "yolov8n.onnx")` — and from the command line:
+
+```sh
+ii run resnet50.onnx --input data=cat.jpg --mean 0.485,0.456,0.406 --std 0.229,0.224,0.225 --top 5
+ii run bert.onnx --inputs inputs.npz --save-outputs outputs.npz
+ii bench yolov8n.onnx
+ii_example_yolo yolov8n.onnx bus.jpg result.jpg        # examples/yolo: detection with NMS, boxes drawn
+```
+
+More: [examples/](examples) (C++ and C), `ii inspect model.onnx`, `ii run model.onnx --profile trace.json`, `ii ops`.
 
 ## Build
 
@@ -41,8 +49,9 @@ cmake --workflow --preset linux-gcc-release        # or windows-msvc-release, ma
 Details: [building guide](docs/guides/building.md), [contributing](CONTRIBUTING.md).
 
 > Status: stages 0 (foundation), 1 (tensors, IR, OpSet v1, the reference backend `ii-ref`, runtime, C++ and C
-> APIs) and 2 (the optimized CPU backend `ii-cpu`: SIMD for generic / AVX2 / AVX-512 / NEON, GEMM on par with
-> OpenBLAS, operation fusion, profiler, Android) are implemented. See [architecture](docs/architecture.md), [OpSet reference](docs/opset.md),
+> APIs), 2 (the optimized CPU backend `ii-cpu`: SIMD for generic / AVX2 / AVX-512 / NEON, GEMM on par with
+> OpenBLAS, operation fusion, profiler, Android) and 3 (ONNX import, convolutions, `.npy`/`.npz`, images in the CLI,
+> YOLOv8 example, model tests against ONNX Runtime) are implemented. See [architecture](docs/architecture.md), [OpSet reference](docs/opset.md),
 > [roadmap](docs/roadmap.md) (in Russian), [testing and benchmarks](docs/testing-and-benchmarks.md),
 > [CI/CD](docs/ci.md), [adding an operation](docs/guides/adding-an-op.md).
 

@@ -13,6 +13,7 @@
 #include <ii/export.h>
 #include <ii/function_ref.h>
 #include <ii/half.h>
+#include <ii/io.h>
 #include <ii/log.h>
 #include <ii/model.h>
 #include <ii/opset.h>

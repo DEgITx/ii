@@ -20,6 +20,7 @@ void register_elementwise_ops(ir::OpRegistry& registry);
 void register_reduction_ops(ir::OpRegistry& registry);
 void register_linalg_ops(ir::OpRegistry& registry);
 void register_conv_ops(ir::OpRegistry& registry);
+void register_image_ops(ir::OpRegistry& registry);
 void register_movement_ops(ir::OpRegistry& registry);
 void register_creation_ops(ir::OpRegistry& registry);
 void register_quantization_ops(ir::OpRegistry& registry);

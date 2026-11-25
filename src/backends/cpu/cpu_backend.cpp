@@ -56,6 +56,7 @@ CpuBackend::CpuBackend(CpuConfig config) : config_(config) {
     register_reduction_kernels(*this);
     register_attention_kernels(*this);
     register_movement_kernels(*this);
+    register_conv_kernels(*this);
 }
 
 Status CpuBackend::supports(const ir::Node& node) const {
@@ -151,6 +152,26 @@ void parallel_slots(const KernelContext& context, int slots, std::int64_t items,
             }
         }
     });
+}
+
+void parallel_chunks(const KernelContext& context, int slots, std::int64_t items, double cost_per_item,
+                     FunctionRef<void(int slot, std::int64_t begin, std::int64_t end)> fn) {
+    if (items <= 0) {
+        return;
+    }
+    const double total = static_cast<double>(items) * cost_per_item;
+    int workers = std::max(1, slots);
+    if (context.executor != nullptr) {
+        workers = std::min(workers, context.executor->concurrency());
+    }
+    if (total < 32768.0 || workers <= 1) {
+        fn(0, 0, items);
+        return;
+    }
+    const std::int64_t chunks = std::min<std::int64_t>(items, 4 * static_cast<std::int64_t>(workers));
+    const std::int64_t chunk = (items + chunks - 1) / chunks;
+    parallel_slots(context, workers, (items + chunk - 1) / chunk,
+                   [&](int slot, std::int64_t c) { fn(slot, c * chunk, std::min(items, (c + 1) * chunk)); });
 }
 
 }  // namespace ii::cpu

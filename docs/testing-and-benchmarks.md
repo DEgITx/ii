@@ -67,6 +67,20 @@ arena) — cross-device transfers, events and offload are tested without a GPU.
 **GPU backends** (`ii-cuda`, TensorRT, later Vulkan/Metal) run the same differential suite on GPU runners; TensorRT
 additionally tests engine-cache invalidation (different shapes / precision / version produce a rebuild).
 
+### 2.3a Importers and formats (`tests/unit/formats/`, `tests/onnx/`, `tests/models/`)
+- Protobuf decoding (round trips, malformed input), ONNX import of models built in memory (symbolic shape
+  arithmetic, conv + batch norm + Gemm against the builder API, functions, constant `If`, external data and its
+  directory confinement, constant inputs, truncated and garbage models), `.npy` / `.npz` (NumPy-written files,
+  compressed archives, every dtype) and DEFLATE.
+- **ONNX conformance**: `scripts/onnx_node_tests.py` writes the operator test cases of the `onnx` package (model +
+  inputs + expected outputs); `ii_onnx_tests <dir>` runs each on ii-ref and ii-cpu, reports pass / fail / unsupported
+  and with `--expected tests/onnx/expected_passes.txt` fails when a listed case regresses (CI job
+  `onnx-conformance`). Parameter inputs (axes, shapes) are turned into constants when a case needs them.
+- **Model tests**: `tests/models/manifest.json` lists real models (URL + SHA-256, or a checkpoint exported with
+  ultralytics); `scripts/fetch_models.py` downloads them into a cache, `scripts/model_tests.py` compares every output
+  with ONNX Runtime on the same inputs (`scripts/compare_onnxruntime.py`) and runs `examples/yolo` on a test image.
+  Suite `pr` (MobileNetV2, YOLOv8n) runs in CI on every change, `nightly` adds ResNet-50 and BERT-base.
+
 ### 2.4 Pass tests (`tests/unit/compiler/`)
 - "input text IR → expected text IR" (structural check), e.g. which nodes CSE merges, which chains elementwise
   fusion groups and that fused programs decompose back;
@@ -93,11 +107,12 @@ test (loss → ~0); training curve of a small model compared to PyTorch with ide
   make the backend unavailable, never break the core.
 
 ### 2.8 Fuzzing (`tests/fuzz/`)
-Targets: the IR text format and JSON (stage 1); then ONNX (protobuf wire), GGUF, safetensors, `.ii`, tokenizers,
-Jinja templates, CLI input-file parsers. With `II_BUILD_FUZZERS=ON` (preset `linux-clang-fuzz`) each target is a
+Targets: the IR text format and JSON (stage 1); ONNX import (`fuzz_onnx`: protobuf decoding, tensor conversion,
+operator mapping and shape tracking; accepted models must compile) and `.npy` / `.npz` with DEFLATE (`fuzz_npy`)
+(stage 3); then GGUF, safetensors, `.ii`, tokenizers, Jinja templates. With `II_BUILD_FUZZERS=ON` (preset `linux-clang-fuzz`) each target is a
 libFuzzer executable and ctest fuzzes it for 60 s in every PR; every other build replays the committed corpora
 (`tests/fuzz/corpus/<target>/`) as regression tests. Crashing inputs found by fuzzing are added to the corpus.
-A long run nightly.
+`nightly.yml` fuzzes every target for 30 minutes.
 
 ---
 
@@ -146,6 +161,9 @@ GPU backends get the same groups with their own targets (% of GPU peak; parity w
   for a fair comparison; plus time to first token and memory. Models: TinyLlama-1.1B, Llama-3.2-1B/3B, Qwen2.5-1.5B
   in f16 / q8_0 / q4_k_m.
 - **Baselines**: llama.cpp, ONNX Runtime, OpenBLAS/oneDNN, TensorRT (`trtexec`) — run scripts in `bench/baselines/`.
+
+`ii bench <model>` measures whole models (latency percentiles); `bench/results/stage3-onnx.md` compares
+ResNet-50, MobileNetV2, YOLOv8n and BERT-base with ONNX Runtime.
 
 `bench/micro/bench_cpu.cpp` measures ii-cpu end to end (one-node compiled models): `BM_Linear` (prepacked f32 /
 f16 / bf16 weights: square GEMMs, GEMV, prefill shapes), `BM_Matmul` (both operands at run time),

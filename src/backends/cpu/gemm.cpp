@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: MIT
-// ii-cpu matrix multiplication: matmul and linear.
+// ii-cpu matrix multiplication: matmul and linear, and the blocked GEMM driver (gemm_driver.h).
 //
-// BLIS-style blocking: a work item is an MC x NC block of C (of one batch matrix). It walks the depth in KC steps:
-// packs the MC x KC block of A into MR-row panels (per-thread scratch), takes the KC x NC block of B from panels
-// packed once at compile time (constant weights) or packs it into scratch, and runs the ISA macro-kernel. Items are
-// handed out dynamically to the threads, which balances hybrid CPUs. Accumulation is in f32; f16 / bf16 operands
-// are widened while packing (B stays 16-bit in its panels and is widened in the micro-kernel).
-#include "backends/cpu/cpu_backend.h"
+// Accumulation is in f32; f16 / bf16 operands are widened while packing (B stays 16-bit in its panels and is widened
+// in the micro-kernel).
+#include "backends/cpu/gemm_driver.h"
 #include "core/aligned_buffer.h"
 #include "core/assert.h"
 #include "ir/op_schema.h"
@@ -30,20 +27,12 @@ std::int64_t elem_bytes(Elem elem) {
     return elem == Elem::kF32 ? 4 : 2;
 }
 
-/// Block sizes of one GEMM call.
-struct GemmPlan {
-    std::int64_t m = 0, n = 0, k = 0;
-    std::int64_t batches = 1;
-    std::int64_t mc = 0, kc = 0, nc = 0;
-    std::int64_t m_blocks = 0, n_blocks = 0;
-    int slots = 1;
-    std::size_t a_scratch = 0;  ///< bytes per slot
-    std::size_t b_scratch = 0;  ///< bytes per slot (B packed at run time)
-    std::size_t c_scratch = 0;  ///< bytes per slot (f32 accumulator for 16-bit outputs)
+}  // namespace
 
-    std::size_t slot_bytes() const noexcept { return a_scratch + b_scratch + c_scratch; }
-    std::int64_t items() const noexcept { return batches * m_blocks * n_blocks; }
-};
+std::int64_t gemm_depth_block(const CpuConfig& config, std::int64_t m, std::int64_t k) {
+    // One row panel (GEMV-like): A is tiny, so stream every B panel over the whole depth instead of in KC blocks.
+    return std::max<std::int64_t>(1, m <= config.table->gemm_mr ? k : std::min(config.gemm_kc, k));
+}
 
 GemmPlan plan_gemm(const CpuConfig& config, std::int64_t batches, std::int64_t m, std::int64_t n, std::int64_t k,
                    bool b_prepacked, bool c_is_f32) {
@@ -54,8 +43,7 @@ GemmPlan plan_gemm(const CpuConfig& config, std::int64_t batches, std::int64_t m
     plan.n = n;
     plan.k = k;
     plan.batches = batches;
-    // One row panel (GEMV-like): A is tiny, so stream every B panel over the whole depth instead of in KC blocks.
-    plan.kc = std::max<std::int64_t>(1, m <= mr ? k : std::min(config.gemm_kc, k));
+    plan.kc = gemm_depth_block(config, m, k);
     plan.mc = std::min(config.gemm_mc, round_up(std::max<std::int64_t>(m, 1), mr));
     // Runtime-packed B blocks are kept small (they are packed per item); prepacked B is read in place.
     plan.nc = std::min(b_prepacked ? config.gemm_nc : 16 * nr, round_up(std::max<std::int64_t>(n, 1), nr));
@@ -86,28 +74,6 @@ GemmPlan plan_gemm(const CpuConfig& config, std::int64_t batches, std::int64_t m
     plan.c_scratch = static_cast<std::size_t>(round_up(static_cast<std::int64_t>(plan.c_scratch), 64));
     return plan;
 }
-
-/// One matrix operand: element (i, j) of batch matrix b at data + (offset(b) + i * rs + j * cs) elements.
-struct Operand {
-    const void* data = nullptr;
-    Elem elem = Elem::kF32;
-    std::int64_t rs = 0;
-    std::int64_t cs = 0;
-};
-
-/// Arguments of a (batched) GEMM: C[b] = A[a_index(b)] * B[b_index(b)] + bias.
-struct GemmCall {
-    Operand a;
-    Operand b;                         ///< unused when `packed_b` is set
-    const void* packed_b = nullptr;    ///< prepacked panels of all B matrices, or nullptr
-    std::int64_t packed_b_stride = 0;  ///< elements per prepacked B matrix
-    void* c = nullptr;
-    Elem c_elem = Elem::kF32;
-    const float* bias = nullptr;  ///< f32, n values, or nullptr
-    // Batch mapping (broadcasting): offsets in elements of each batch matrix.
-    const std::int64_t* a_offsets = nullptr;
-    const std::int64_t* b_offsets = nullptr;  ///< element offsets, or matrix indices for prepacked B
-};
 
 void run_gemm(const KernelContext& context, const CpuConfig& config, const GemmPlan& plan, const GemmCall& call) {
     const KernelTable& table = *config.table;
@@ -142,26 +108,41 @@ void run_gemm(const KernelContext& context, const CpuConfig& config, const GemmP
             ldc = nc;
         }
         const float* bias = call.bias != nullptr ? call.bias + j0 : nullptr;
-
-        if (k == 0) {
+        // A per-row bias initializes the block; every depth step then accumulates.
+        const float* row_bias = call.row_bias != nullptr ? call.row_bias + batch * call.row_bias_stride + i0 : nullptr;
+        if (k == 0 || row_bias != nullptr) {
             for (std::int64_t i = 0; i < mc; ++i) {
+                const float base = row_bias != nullptr ? row_bias[i] : 0.0f;
                 for (std::int64_t j = 0; j < nc; ++j) {
-                    c_block[i * ldc + j] = bias != nullptr ? bias[j] : 0.0f;
+                    c_block[i * ldc + j] = base + (bias != nullptr ? bias[j] : 0.0f);
                 }
             }
         }
         const std::int64_t a_size = elem_bytes(call.a.elem);
         const auto* a_base = static_cast<const std::uint8_t*>(call.a.data) + call.a_offsets[batch] * a_size;
+        const std::int64_t mr = table.gemm_mr;
+        const std::int64_t m_panels = ceil_div(m, mr);
         for (std::int64_t p0 = 0; p0 < k; p0 += plan.kc) {
             const std::int64_t kc = std::min(plan.kc, k - p0);
-            table.gemm_pack_a(a_base + (i0 * call.a.rs + p0 * call.a.cs) * a_size, call.a.elem, call.a.rs, call.a.cs,
-                              mc, kc, packed_a);
+            const float* a_block = packed_a;
+            if (call.packed_a != nullptr) {
+                // Prepacked: depth block p0 holds every MR-row panel of kc values.
+                a_block = call.packed_a + call.a_offsets[batch] * call.packed_a_stride + m_panels * mr * p0 +
+                          (i0 / mr) * kc * mr;
+            } else {
+                table.gemm_pack_a(a_base + (i0 * call.a.rs + p0 * call.a.cs) * a_size, call.a.elem, call.a.rs,
+                                  call.a.cs, mc, kc, packed_a);
+            }
             GemmMacroArgs args{};
             args.m = mc;
             args.n = nc;
             args.k = kc;
-            args.a = packed_a;
-            if (call.packed_b != nullptr) {
+            args.a = a_block;
+            if (call.pack_b != nullptr) {
+                (*call.pack_b)(batch, p0, kc, j0, nc, packed_b_scratch);
+                args.b = packed_b_scratch;
+                args.b_panel_stride = kc * nr;
+            } else if (call.packed_b != nullptr) {
                 const std::int64_t b_size = elem_bytes(call.b.elem);
                 const auto* matrix = static_cast<const std::uint8_t*>(call.packed_b) +
                                      call.b_offsets[batch] * call.packed_b_stride * b_size;
@@ -178,9 +159,12 @@ void run_gemm(const KernelContext& context, const CpuConfig& config, const GemmP
             args.b_elem = call.b.elem;
             args.c = c_block;
             args.ldc = ldc;
-            args.accumulate = p0 > 0;
-            args.bias = p0 + kc == k ? bias : nullptr;
+            args.accumulate = p0 > 0 || row_bias != nullptr;
+            args.bias = p0 + kc == k && row_bias == nullptr ? bias : nullptr;
             table.gemm_macro(args);
+        }
+        if (call.epilogue != nullptr && call.c_elem == Elem::kF32) {
+            (*call.epilogue)(batch, i0, mc, j0, nc, c_block, ldc);
         }
         if (call.c_elem != Elem::kF32) {
             auto* out = static_cast<std::uint8_t*>(call.c);
@@ -191,6 +175,26 @@ void run_gemm(const KernelContext& context, const CpuConfig& config, const GemmP
         }
     });
 }
+
+std::int64_t packed_a_size(const KernelTable& table, std::int64_t m, std::int64_t k) {
+    return round_up(m, table.gemm_mr) * k;
+}
+
+void prepack_a(const KernelTable& table, const float* a, std::int64_t rs, std::int64_t cs, std::int64_t m,
+               std::int64_t k, std::int64_t kc, float* out) {
+    const std::int64_t mr = table.gemm_mr;
+    const std::int64_t m_padded = round_up(m, mr);
+    for (std::int64_t p0 = 0; p0 < k; p0 += kc) {
+        const std::int64_t depth = std::min(kc, k - p0);
+        float* block = out + m_padded * p0;
+        for (std::int64_t i0 = 0; i0 < m; i0 += mr) {
+            table.gemm_pack_a(a + i0 * rs + p0 * cs, Elem::kF32, rs, cs, std::min(mr, m - i0), depth,
+                              block + (i0 / mr) * depth * mr);
+        }
+    }
+}
+
+namespace {
 
 // --------------------------------------------------------------------------------------------------------------------
 // Shapes

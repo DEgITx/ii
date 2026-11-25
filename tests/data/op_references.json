@@ -5519,6 +5519,316 @@
    ],
    "rtol": 1e-05,
    "atol": 1e-05
+  },
+  {
+   "name": "resize_nearest_up",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 4, 5]\n  %out0 : f32[1, 2, 8, 10] = resize(%in0) {coordinate_mode = \"asymmetric\", nearest_mode = \"floor\", shape = [1, 2, 8, 10]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      4,
+      5
+     ],
+     "base64": "aF72Puw3Xz52JvI/crz+v9j/TD+HkbI/qAewvqmgGj909gK8Mg/CPy761T0otSm9b2SAP6Dycb9s5P+/RrxVv8oFEr8RuWE/q+cUP/8M3r8zfr0+WAhwvx7O67+LJO6/ILSBv3CAPb+KV6A8cdTrP+5wt78d8R2/Zha5v9jvp7+UXpe/Tyv/P0OcLT+Zo6+/u4MJPhvj8L6e8rU/aRL5vw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      8,
+      10
+     ],
+     "base64": "aF72Pmhe9j7sN18+7DdfPnYm8j92JvI/crz+v3K8/r/Y/0w/2P9MP2he9j5oXvY+7DdfPuw3Xz52JvI/dibyP3K8/r9yvP6/2P9MP9j/TD+HkbI/h5GyP6gHsL6oB7C+qaAaP6mgGj909gK8dPYCvDIPwj8yD8I/h5GyP4eRsj+oB7C+qAewvqmgGj+poBo/dPYCvHT2ArwyD8I/Mg/CPy761T0u+tU9KLUpvSi1Kb1vZIA/b2SAP6Dycb+g8nG/bOT/v2zk/78u+tU9LvrVPSi1Kb0otSm9b2SAP29kgD+g8nG/oPJxv2zk/79s5P+/RrxVv0a8Vb/KBRK/ygUSvxG5YT8RuWE/q+cUP6vnFD//DN6//wzev0a8Vb9GvFW/ygUSv8oFEr8RuWE/EblhP6vnFD+r5xQ//wzev/8M3r8zfr0+M369PlgIcL9YCHC/Hs7rvx7O67+LJO6/iyTuvyC0gb8gtIG/M369PjN+vT5YCHC/WAhwvx7O678ezuu/iyTuv4sk7r8gtIG/ILSBv3CAPb9wgD2/ilegPIpXoDxx1Os/cdTrP+5wt7/ucLe/HfEdvx3xHb9wgD2/cIA9v4pXoDyKV6A8cdTrP3HU6z/ucLe/7nC3vx3xHb8d8R2/Zha5v2YWub/Y76e/2O+nv5Rel7+UXpe/Tyv/P08r/z9DnC0/Q5wtP2YWub9mFrm/2O+nv9jvp7+UXpe/lF6Xv08r/z9PK/8/Q5wtP0OcLT+Zo6+/maOvv7uDCT67gwk+G+Pwvhvj8L6e8rU/nvK1P2kS+b9pEvm/maOvv5mjr7+7gwk+u4MJPhvj8L4b4/C+nvK1P57ytT9pEvm/aRL5vw=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "resize_nearest_down",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 4, 5]\n  %out0 : f32[1, 2, 3, 2] = resize(%in0) {coordinate_mode = \"asymmetric\", nearest_mode = \"floor\", shape = [1, 2, 3, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      4,
+      5
+     ],
+     "base64": "aF72Puw3Xz52JvI/crz+v9j/TD+HkbI/qAewvqmgGj909gK8Mg/CPy761T0otSm9b2SAP6Dycb9s5P+/RrxVv8oFEr8RuWE/q+cUP/8M3r8zfr0+WAhwvx7O67+LJO6/ILSBv3CAPb+KV6A8cdTrP+5wt78d8R2/Zha5v9jvp7+UXpe/Tyv/P0OcLT+Zo6+/u4MJPhvj8L6e8rU/aRL5vw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      2
+     ],
+     "base64": "aF72PnYm8j+HkbI/qaAaPy761T1vZIA/M369Ph7O679wgD2/cdTrP2YWub+UXpe/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "resize_nearest_exact",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 4, 5]\n  %out0 : f32[1, 2, 7, 9] = resize(%in0) {coordinate_mode = \"half_pixel\", nearest_mode = \"round_prefer_ceil\", shape = [1, 2, 7, 9]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      4,
+      5
+     ],
+     "base64": "aF72Puw3Xz52JvI/crz+v9j/TD+HkbI/qAewvqmgGj909gK8Mg/CPy761T0otSm9b2SAP6Dycb9s5P+/RrxVv8oFEr8RuWE/q+cUP/8M3r8zfr0+WAhwvx7O67+LJO6/ILSBv3CAPb+KV6A8cdTrP+5wt78d8R2/Zha5v9jvp7+UXpe/Tyv/P0OcLT+Zo6+/u4MJPhvj8L6e8rU/aRL5vw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      7,
+      9
+     ],
+     "base64": "aF72Pmhe9j7sN18+7DdfPnYm8j9yvP6/crz+v9j/TD/Y/0w/aF72Pmhe9j7sN18+7DdfPnYm8j9yvP6/crz+v9j/TD/Y/0w/h5GyP4eRsj+oB7C+qAewvqmgGj909gK8dPYCvDIPwj8yD8I/LvrVPS761T0otSm9KLUpvW9kgD+g8nG/oPJxv2zk/79s5P+/LvrVPS761T0otSm9KLUpvW9kgD+g8nG/oPJxv2zk/79s5P+/RrxVv0a8Vb/KBRK/ygUSvxG5YT+r5xQ/q+cUP/8M3r//DN6/RrxVv0a8Vb/KBRK/ygUSvxG5YT+r5xQ/q+cUP/8M3r//DN6/M369PjN+vT5YCHC/WAhwvx7O67+LJO6/iyTuvyC0gb8gtIG/M369PjN+vT5YCHC/WAhwvx7O67+LJO6/iyTuvyC0gb8gtIG/cIA9v3CAPb+KV6A8ilegPHHU6z/ucLe/7nC3vx3xHb8d8R2/Zha5v2YWub/Y76e/2O+nv5Rel79PK/8/Tyv/P0OcLT9DnC0/Zha5v2YWub/Y76e/2O+nv5Rel79PK/8/Tyv/P0OcLT9DnC0/maOvv5mjr7+7gwk+u4MJPhvj8L6e8rU/nvK1P2kS+b9pEvm/maOvv5mjr7+7gwk+u4MJPhvj8L6e8rU/nvK1P2kS+b9pEvm/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "resize_linear_half_pixel",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 4, 5]\n  %out0 : f32[1, 2, 7, 9] = resize(%in0) {mode = \"linear\", shape = [1, 2, 7, 9]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      4,
+      5
+     ],
+     "base64": "aF72Puw3Xz52JvI/crz+v9j/TD+HkbI/qAewvqmgGj909gK8Mg/CPy761T0otSm9b2SAP6Dycb9s5P+/RrxVv8oFEr8RuWE/q+cUP/8M3r8zfr0+WAhwvx7O67+LJO6/ILSBv3CAPb+KV6A8cdTrP+5wt78d8R2/Zha5v9jvp7+UXpe/Tyv/P0OcLT+Zo6+/u4MJPhvj8L6e8rU/aRL5vw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      7,
+      9
+     ],
+     "base64": "aF72Pu1yyT4+Kn0+Sj92P3Ym8j9Il4e+EgvXv5uhBL7Y/0w/Jr1OP1tOCz86WNc972ElP7NHtz/bjpu9u92CvyKzjT4XM4c/iDaqP2IJST9jO/q9Ff8PPvcsMj9kqmc+DE70PB5DbT/2hLs/KvE/P4AM3z4rCrS9YA+APsS0TT/FML09zp/mvnbGo77oVHe+BR4ZPUl/wrqos4e9kL/LPuKQfj+meri8j5N2v6ynzL+bef2/lrL/vlSS6748B8q+MvxLPv/QbD9m2tw+uwAvvvWJmr8UI+q/RrxVvx0qP7/Yixm/u5SZPRG5YT/YCzc/2wemPsZudr//DN6/M369PrjFhr291Uq/X3qrvx7O67+TGu2/DRjiv5nZpb8gtIG/z6nYvFVpXb62Ugi/ZZwQv2i6Br87Y5e/FbfOvzlCk79qK1+/wjIpvwzt6b68O++9wb0sP0Ikyj8N3uO9h7Wvv3IGa797MCW/T+uLv+ezcb+3JDK/TXlZvrrrqD4Uxpo+6kGBPr0O6T1gsvo8oGm4v1CDrr9zA56/b1WWv+HbkL9V8hQ/vCXlP8Zgej+DQfs+dAOzv8Kmh79ehv2+bNQIv46MOb8IwRQ/SaGqP2CwBb6lHYG/maOvv9K5Xr/AjQe9lLkJvhvj8L44ohQ/gQ6GPyPMUr9pEvm/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "resize_linear_align_corners",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 4, 5]\n  %out0 : f32[1, 2, 6, 3] = resize(%in0) {coordinate_mode = \"align_corners\", mode = \"linear\", shape = [1, 2, 6, 3]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      4,
+      5
+     ],
+     "base64": "aF72Puw3Xz52JvI/crz+v9j/TD+HkbI/qAewvqmgGj909gK8Mg/CPy761T0otSm9b2SAP6Dycb9s5P+/RrxVv8oFEr8RuWE/q+cUP/8M3r8zfr0+WAhwvx7O67+LJO6/ILSBv3CAPb+KV6A8cdTrP+5wt78d8R2/Zha5v9jvp7+UXpe/Tyv/P0OcLT+Zo6+/u4MJPhvj8L6e8rU/aRL5vw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      6,
+      3
+     ],
+     "base64": "aF72PnYm8j/Y/0w/KMeDP5U/jz98b50/jYeRPxoPLz9YI1A/daa5Pm1abD/m5qW/S+SKviZcdD8NW/K/RrxVvxG5YT//DN6/M369Ph7O678gtIG/2JqXvhK0vD4rh0a/6aJhv9Zjnj9HQ7e+KgWnv/PbE7+TmdY+4U61vx3SZb++Lr6+maOvvxvj8L5pEvm/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "resize_cubic",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 4, 5]\n  %out0 : f32[1, 2, 6, 8] = resize(%in0) {mode = \"cubic\", shape = [1, 2, 6, 8]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      4,
+      5
+     ],
+     "base64": "aF72Puw3Xz52JvI/crz+v9j/TD+HkbI/qAewvqmgGj909gK8Mg/CPy761T0otSm9b2SAP6Dycb9s5P+/RrxVv8oFEr8RuWE/q+cUP/8M3r8zfr0+WAhwvx7O67+LJO6/ILSBv3CAPb+KV6A8cdTrP+5wt78d8R2/Zha5v9jvp7+UXpe/Tyv/P0OcLT+Zo6+/u4MJPhvj8L6e8rU/aRL5vw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      6,
+      8
+     ],
+     "base64": "eyzUPiVtUD5MxLc+eKn5P1P/VD9AegTAgDJYv7cFgT+xPJU/e0vrPp2Si71b5oA/oxQdP/yrZr+QKJI+vvjaP5Cnuj/ntwY/31W5vnOmiT5GZt8+va42vDsNET+7gpU/U+raPia29j2DsVC8SDFUP5m8CD+4N0q/VeWyv2DAx78xbQG/IwL/viLyT75u2EI/8dFZP1NQ/71lDry/pwYYwFK+cb82Vmi/EZUHv5UI8D7lXY4/fHZTP9uILr/l8Pe/4sMaP2r+pL2J2JG/q173v0JBEMDGdPm/SSGyv2oEeL+flcq9Gs2Fvm/DnL4U7a4+klu3vnbQ8r/X5se/Pz5XvysHgr8lZzu//LCXPDJ+wT+wYZA/ATFIv4qcS7/29Jm+lRSxv8ysrL+EaZq/4GWRv68gvTyObL0/vKOiP6xUJj++4cW/VNaOvynsNb8o3Ka/9ATevXT6/D+KT1U/hJM/v74iwr9R8xy/iNGTPmk/qL5xiF0+Ebu2P7iJAb/ULSDA"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "resize_nearest_int_1d",
+   "graph": "graph {\n  input %in0 : i32[2, 3, 4]\n  %out0 : i32[2, 3, 8] = resize(%in0) {coordinate_mode = \"asymmetric\", nearest_mode = \"floor\", shape = [2, 3, 8]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "AAAAAPf///8EAAAAAgAAAPz/////////BwAAAAIAAAAEAAAA9v///wEAAAD5////AQAAAAgAAAAFAAAA9v///wEAAAAKAAAAAgAAAPn////4////9/////3////6////"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      2,
+      3,
+      8
+     ],
+     "base64": "AAAAAAAAAAD3////9////wQAAAAEAAAAAgAAAAIAAAD8/////P//////////////BwAAAAcAAAACAAAAAgAAAAQAAAAEAAAA9v////b///8BAAAAAQAAAPn////5////AQAAAAEAAAAIAAAACAAAAAUAAAAFAAAA9v////b///8BAAAAAQAAAAoAAAAKAAAAAgAAAAIAAAD5////+f////j////4////9/////f////9/////f////r////6////"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "topk_largest",
+   "graph": "graph {\n  input %in0 : f32[3, 10]\n  %out0 : f32[3, 4], %out1 : i64[3, 4] = topk(%in0) {k = 4}\n  output out0 = %out0\n  output out1 = %out1\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      10
+     ],
+     "base64": "AABAwAAAoD8AAIC+AADgPwAAEMAAABBAAAAwQAAAUEAAAAA/AACAPwAAIEAAAAC/AADgvwAAQEAAAIA+AAAwwAAAYEAAAAAAAABwQAAAwL8AAADAAADAPwAAgL8AAIhAAACgvwAAIMAAAABAAACAQAAAQD8AAEC/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AABQQAAAMEAAABBAAADgPwAAcEAAAGBAAABAQAAAIEAAAIhAAACAQAAAAEAAAMA/"
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "BwAAAAAAAAAGAAAAAAAAAAUAAAAAAAAAAwAAAAAAAAAIAAAAAAAAAAYAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAMAAAAAAAAABwAAAAAAAAAGAAAAAAAAAAEAAAAAAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "topk_smallest_axis0",
+   "graph": "graph {\n  input %in0 : f32[3, 10]\n  %out0 : f32[3, 10], %out1 : i64[3, 10] = topk(%in0) {axis = 0, k = 3, largest = false}\n  output out0 = %out0\n  output out1 = %out1\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      10
+     ],
+     "base64": "AABAwAAAoD8AAIC+AADgPwAAEMAAABBAAAAwQAAAUEAAAAA/AACAPwAAIEAAAAC/AADgvwAAQEAAAIA+AAAwwAAAYEAAAAAAAABwQAAAwL8AAADAAADAPwAAgL8AAIhAAACgvwAAIMAAAABAAACAQAAAQD8AAEC/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      10
+     ],
+     "base64": "AABAwAAAAL8AAOC/AADgPwAAEMAAADDAAAAAQAAAAAAAAAA/AADAvwAAAMAAAKA/AACAvwAAQEAAAKC/AAAgwAAAMEAAAFBAAABAPwAAQL8AACBAAADAPwAAgL4AAIhAAACAPgAAEEAAAGBAAACAQAAAcEAAAIA/"
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      3,
+      10
+     ],
+     "base64": "AAAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAABAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAACAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAgAAAAAAAAABAAAAAAAAAAAAAAAAAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "topk_i64_all",
+   "graph": "graph {\n  input %in0 : i64[2, 6]\n  %out0 : i64[2, 6], %out1 : i64[2, 6] = topk(%in0) {k = 6}\n  output out0 = %out0\n  output out1 = %out1\n}\n",
+   "inputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      2,
+      6
+     ],
+     "base64": "AwAAAAAAAAAGAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAUAAAAAAAAAAgAAAAAAAAALAAAAAAAAAAgAAAAAAAAACgAAAAAAAAAHAAAAAAAAAAEAAAAAAAAA"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      2,
+      6
+     ],
+     "base64": "CQAAAAAAAAAGAAAAAAAAAAUAAAAAAAAABAAAAAAAAAADAAAAAAAAAAAAAAAAAAAACwAAAAAAAAAKAAAAAAAAAAgAAAAAAAAABwAAAAAAAAACAAAAAAAAAAEAAAAAAAAA"
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      2,
+      6
+     ],
+     "base64": "AgAAAAAAAAABAAAAAAAAAAUAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAQAAAAAAAAADAAAAAAAAAAIAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
   }
  ]
 }

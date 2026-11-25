@@ -279,7 +279,7 @@ Arithmetic mean over `axes`. An empty reduction is NaN.
 
 `reduce_max(x) -> y`
 
-Maximum over `axes`; NaN if any element is NaN. Reducing an empty range is an error.
+Maximum over `axes`; NaN if any element is NaN. An empty reduction is the lowest value of the dtype (-inf for floats).
 
 | Attribute | Kind | Default |
 |---|---|---|
@@ -290,7 +290,7 @@ Maximum over `axes`; NaN if any element is NaN. Reducing an empty range is an er
 
 `reduce_min(x) -> y`
 
-Minimum over `axes`; NaN if any element is NaN. Reducing an empty range is an error.
+Minimum over `axes`; NaN if any element is NaN. An empty reduction is the highest value of the dtype (inf for floats).
 
 | Attribute | Kind | Default |
 |---|---|---|
@@ -331,6 +331,18 @@ Index (i64) of the largest / smallest element along `axis`. Ties resolve to the 
 | `axis` | int | `0` |
 | `keepdims` | bool | `false` |
 | `select_last_index` | bool | `false` |
+
+### `topk`
+
+`topk(x) -> values, indices`
+
+The `k` largest (or smallest) elements along `axis` and their indices (i64), in order: descending for largest, ascending otherwise. Equal values keep the order of their indices; NaN compares greater than every number.
+
+| Attribute | Kind | Default |
+|---|---|---|
+| `k` | int | required |
+| `axis` | int | `-1` |
+| `largest` | bool | `true` |
 
 ## linalg
 
@@ -406,6 +418,24 @@ N-d average pooling over x [N, C, spatial...]. With count_include_pad the diviso
 | `kernel` | ints | required |
 | `ceil_mode` | bool | `false` |
 | `count_include_pad` | bool | `false` |
+
+## image
+
+### `resize`
+
+`resize(x) -> y`
+
+Resizes x to `shape` by interpolating along every dimension whose size or scale changes (ONNX Resize). An output coordinate maps to the input by `coordinate_mode` (half_pixel: (o + 0.5) / scale - 0.5, half_pixel_symmetric, pytorch_half_pixel, align_corners, asymmetric: o / scale) with scale = `scales[d]`, or out / in when scales are empty or 0. mode: nearest (rounded by `nearest_mode`), linear, cubic (`cubic_coeff_a`; `exclude_outside` renormalizes the weights inside the input). Sample positions are clamped to the input.
+
+| Attribute | Kind | Default |
+|---|---|---|
+| `shape` | dims | required |
+| `scales` | floats | `[]` |
+| `mode` | string | `"nearest"` |
+| `coordinate_mode` | string | `"half_pixel"` |
+| `nearest_mode` | string | `"round_prefer_floor"` |
+| `cubic_coeff_a` | float | `-0.75` |
+| `exclude_outside` | bool | `false` |
 
 ## movement
 
@@ -600,7 +630,7 @@ Pseudo-random normally distributed values (Box-Muller over the same generator as
 
 `quantize(x, scale, zero_point?) -> y`
 
-y = saturate(round_half_even(x / scale) + zero_point). scale (and zero_point) are scalars or vectors along `axis`.
+y = saturate(round_half_even(x / scale) + zero_point), with x / scale computed in single precision (double for f64). scale (and zero_point) are scalars or vectors along `axis`.
 
 | Attribute | Kind | Default |
 |---|---|---|

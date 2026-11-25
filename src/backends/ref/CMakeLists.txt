@@ -4,6 +4,7 @@ ii_add_component(backend_ref SOURCES
     composite.cpp
     creation.cpp
     elementwise.cpp
+    image.cpp
     linalg.cpp
     movement.cpp
     reduction.cpp

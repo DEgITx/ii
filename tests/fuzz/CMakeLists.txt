@@ -24,3 +24,5 @@ endfunction()
 
 ii_add_fuzzer(fuzz_ir_text ir_text)
 ii_add_fuzzer(fuzz_json json)
+ii_add_fuzzer(fuzz_onnx onnx)
+ii_add_fuzzer(fuzz_npy npy)

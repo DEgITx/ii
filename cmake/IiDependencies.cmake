@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 #
-# Third-party dependencies of tests and benchmarks. The ii library itself has no third-party dependencies.
+# Third-party dependencies of tests, benchmarks, the CLI and examples. The ii library itself has no third-party
+# dependencies.
 # Archives are pinned by version and SHA-256. Set II_USE_SYSTEM_DEPS=ON to use installed packages instead.
 
 include(FetchContent)
@@ -45,4 +46,25 @@ function(ii_require_benchmark)
         SYSTEM
         EXCLUDE_FROM_ALL)
     FetchContent_MakeAvailable(benchmark)
+endfunction()
+
+# stb_image / stb_image_write (public domain or MIT): image decoding and encoding for the CLI and the examples.
+# Provides the header-only INTERFACE target ii_stb.
+function(ii_require_stb)
+    if(TARGET ii_stb)
+        return()
+    endif()
+    if(II_USE_SYSTEM_DEPS)
+        find_path(II_STB_INCLUDE_DIR stb_image.h PATH_SUFFIXES stb REQUIRED)
+        set(stb_dir "${II_STB_INCLUDE_DIR}")
+    else()
+        FetchContent_Declare(stb
+            URL https://github.com/nothings/stb/archive/aeb69073d7570a481245a665dc17726d68827062.tar.gz
+            URL_HASH SHA256=a3bf405a0625a153ba9d51511ec0ef82e1ce0995f273e8a85858e956154c83a2
+            DOWNLOAD_EXTRACT_TIMESTAMP ON)
+        FetchContent_MakeAvailable(stb)
+        set(stb_dir "${stb_SOURCE_DIR}")
+    endif()
+    add_library(ii_stb INTERFACE)
+    target_include_directories(ii_stb SYSTEM INTERFACE "${stb_dir}")
 endfunction()

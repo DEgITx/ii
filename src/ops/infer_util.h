@@ -115,4 +115,33 @@ WindowGeometry resolve_window(std::int64_t input, std::int64_t kernel, std::int6
 /// Concrete output size of a sliding window (same rules as `window_output_size`).
 std::int64_t window_output_size(std::int64_t input, const WindowGeometry& geometry, bool ceil_mode);
 
+/// Interpolation taps of `resize` along one dimension: output position `o` reads input positions
+/// `index[o * count + t]` with weights `weight[o * count + t]` for t < count (1 tap for nearest, 2 for linear, 4 for
+/// cubic). Positions are clamped to the input (edge replication).
+struct ResizeTaps {
+    int count = 1;
+    std::vector<std::int64_t> index;
+    std::vector<double> weight;
+};
+
+/// Parsed `resize` attributes for one dimension.
+struct ResizeMode {
+    std::string_view mode;             ///< nearest, linear, cubic
+    std::string_view coordinate_mode;  ///< half_pixel, ...
+    std::string_view nearest_mode;     ///< round_prefer_floor, ...
+    double cubic_coeff_a = -0.75;
+    bool exclude_outside = false;
+};
+
+/// The taps of one dimension resized from `input` to `output` positions; `scale` <= 0 means output / input.
+ResizeTaps resize_taps(std::int64_t input, std::int64_t output, double scale, const ResizeMode& mode);
+
+/// Number of taps per output position of a resize mode (1, 2 or 4).
+int resize_tap_count(std::string_view mode) noexcept;
+
+/// Like `resize_taps`, writing `output * resize_tap_count(mode)` indices and weights into caller memory (no
+/// allocation).
+void resize_taps_into(std::int64_t input, std::int64_t output, double scale, const ResizeMode& mode,
+                      std::int64_t* index, double* weight);
+
 }  // namespace ii::ops

@@ -86,3 +86,11 @@ support check returning `kUnsupported` and a reason — the planner shows it to 
 - **Composites**: add the operation to `kDecompositionCases` in `passes_test.cpp` (native kernel vs. decomposition).
 - **Random graphs**: consider adding the operation to `tests/support/random_graph.cpp`, so that pass and backend
   property tests exercise it in combination with others.
+
+## 5. Importers
+
+If ONNX has the operation, map it in `src/formats/onnx/onnx_ops.cpp` (a handler reads the ONNX inputs and attributes
+through `NodeContext`, creates ii operations and binds the outputs; parameters ONNX passes as tensors are read with
+`ints_input` / `dims_input`, which also work for shape computations tracked symbolically). Then run the ONNX
+operator suite (`docs/guides/building.md`, "Model tests") and refresh the list of passing cases with
+`ii_onnx_tests <cases> --write-expected tests/onnx/expected_passes.txt`.

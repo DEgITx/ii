@@ -296,3 +296,77 @@ jobs:
           name: test-logs-android
           path: build/*/Testing/Temporary/
           if-no-files-found: ignore
+
+  # ONNX operator conformance: the operator test cases of the `onnx` package (pinned version) on ii-ref and ii-cpu.
+  # Every case listed in tests/onnx/expected_passes.txt must keep passing (scripts/onnx_node_tests.py and
+  # tests/onnx/onnx_node_tests.cpp; refresh the list with --write-expected after adding operators).
+  onnx-conformance:
+    name: ONNX conformance
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Build environment
+        uses: ./.github/actions/setup
+        with:
+          cache-key: ubuntu-24.04-linux-clang-release-onnx
+
+      - name: Build
+        run: |
+          cmake --preset linux-clang -DII_BUILD_BENCHMARKS=OFF -DII_BUILD_EXAMPLES=OFF
+          cmake --build --preset linux-clang-release --target ii_onnx_tests
+
+      - name: Generate the ONNX test cases
+        run: |
+          python -m pip install --quiet onnx==1.23.2 numpy
+          python scripts/onnx_node_tests.py --out build/onnx-node-tests
+
+      - name: Run them on ii-ref and ii-cpu
+        run: ./build/linux-clang/bin/Release/ii_onnx_tests build/onnx-node-tests --expected tests/onnx/expected_passes.txt
+
+  # Real models against ONNX Runtime (tests/models/manifest.json, suite "pr"; the nightly workflow runs all).
+  models:
+    name: models
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Build environment
+        uses: ./.github/actions/setup
+        with:
+          cache-key: ubuntu-24.04-linux-clang-release-models
+
+      - name: Build the CLI and the examples
+        run: |
+          cmake --preset linux-clang -DII_BUILD_TESTS=OFF -DII_BUILD_BENCHMARKS=OFF
+          cmake --build --preset linux-clang-release --target ii_cli ii_example_yolo
+
+      - name: Model cache
+        id: models-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: ~/.cache/ii-models
+          key: models-pr-${{ hashFiles('tests/models/manifest.json') }}
+
+      - name: Python packages
+        run: |
+          python -m pip install --quiet onnxruntime==1.31.0 numpy
+          if [ "${{ steps.models-cache.outputs.cache-hit }}" != "true" ]; then
+            # Exporting YOLOv8 to ONNX needs ultralytics (and a CPU build of PyTorch).
+            python -m pip install --quiet torch torchvision --index-url https://download.pytorch.org/whl/cpu
+            python -m pip install --quiet ultralytics onnx
+          fi
+
+      - name: Fetch the models
+        run: python scripts/fetch_models.py --cache ~/.cache/ii-models --suite pr
+
+      - name: Compare with ONNX Runtime
+        run: |
+          python scripts/model_tests.py --cache ~/.cache/ii-models --suite pr \
+            --ii build/linux-clang/bin/Release/ii --yolo build/linux-clang/bin/Release/ii_example_yolo

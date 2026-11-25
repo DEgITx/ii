@@ -7,6 +7,7 @@ add_subdirectory(ops)
 add_subdirectory(backend)
 add_subdirectory(backends)
 add_subdirectory(compiler)
+add_subdirectory(formats)
 add_subdirectory(runtime)
 add_subdirectory(api)
 

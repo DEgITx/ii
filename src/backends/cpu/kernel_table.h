@@ -205,6 +205,35 @@ using AttentionRowFn = void (*)(const AttentionRowArgs& args);
 // --------------------------------------------------------------------------------------------------------------------
 
 /// The kernels of one ISA variant.
+/// One plane of a depthwise convolution (f32): out[oh][ow] = bias + sum filter[ky][kx] *
+/// in[oh * sh - ph + ky * dh][ow * sw - pw + kx * dw] (zero outside the input).
+struct DepthwiseArgs {
+    const float* in;
+    std::int64_t h, w;
+    const float* filter;
+    std::int64_t kh, kw;
+    float bias;
+    float* out;
+    std::int64_t oh, ow;
+    std::int64_t sh, sw, dh, dw, ph, pw;
+    float* scratch;  ///< depthwise_scratch_floats(...) floats for the zero-padded input
+};
+using DepthwiseFn = void (*)(const DepthwiseArgs& args);
+
+/// Floats of scratch memory a depthwise plane needs.
+inline std::int64_t depthwise_scratch_floats(std::int64_t oh, std::int64_t ow, std::int64_t kh, std::int64_t kw,
+                                             std::int64_t sh, std::int64_t sw, std::int64_t dh, std::int64_t dw) {
+    const std::int64_t rows = (oh - 1) * sh + (kh - 1) * dh + 1;
+    const std::int64_t cols = (ow - 1) * sw + (kw - 1) * dw + 1;
+    // One plane per column phase (stride sw), each row padded so that vector loads may run past its last column.
+    return sw * rows * ((cols + sw - 1) / sw + 16) + 64;
+}
+
+/// y[i] += a * x[i] (f32).
+using AxpyFn = void (*)(float* y, const float* x, float a, std::int64_t n);
+/// y[i] = max(y[i], x[i]) (f32).
+using MaxInplaceFn = void (*)(float* y, const float* x, std::int64_t n);
+
 struct KernelTable {
     const char* isa;
     EwRunFn ew_run;
@@ -219,6 +248,9 @@ struct KernelTable {
     LayerNormFn layer_norm;
     RmsNormFn rms_norm;
     AttentionRowFn attention_row;
+    AxpyFn axpy;
+    MaxInplaceFn max_inplace;
+    DepthwiseFn depthwise;
 };
 
 // Scalar fallbacks for rare functions, compiled once without ISA flags (src/backends/cpu/scalar_math.cpp).

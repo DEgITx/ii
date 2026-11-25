@@ -19,7 +19,8 @@ Commands:
   info        Describe the machine: OS, CPU, memory, kernel variants, roofline
   inspect     Describe a model and its execution plan
   ops         List the operations of the OpSet
-  run         Run a model on random inputs and measure it (--profile for a trace)
+  run         Run a model (ONNX or ii text) on inputs from files or random ones; outputs, timings, profile
+  bench       Benchmark a model: latency percentiles and throughput
   version     Print the version
   help        Show this help
 
@@ -55,6 +56,9 @@ int main(int argc, char** argv) {
     }
     if (command == "run") {
         return ii::cli::run_run(rest);
+    }
+    if (command == "bench") {
+        return ii::cli::run_bench(rest);
     }
     if (command == "version" || command == "--version" || command == "-V") {
         return print_version();

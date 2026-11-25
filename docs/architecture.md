@@ -214,8 +214,9 @@ view must start on a block boundary.
 - **Attributes** — a typed `variant` (bool, int, float, string, int/float/string lists, dtype, dims, tensor);
   subgraphs arrive with `if`/`loop`. Every attribute is declared in the operation schema with its kind and default;
   nodes always carry the complete, canonical attribute set.
-- **Subgraphs** — for `if`/`loop` (required by some ONNX models). The LLM generation loop lives in the runtime, not
-  in the graph.
+- **Subgraphs** — ONNX `If` nodes whose condition is known when the model is loaded are inlined by the importer;
+  general `if`/`loop` (control flow at run time) is planned together with data-dependent shapes. The LLM generation
+  loop lives in the runtime, not in the graph.
 - **`Graph::verify()`** — checks SSA, types, shapes, topological order. Runs after every pass in debug builds.
 - **Text format** for debugging and pass tests:
 
@@ -247,10 +248,11 @@ view must start on a block boundary.
 | reductions | reduce_sum, reduce_mean, reduce_max, reduce_min, reduce_prod, argmax, argmin |
 | linear algebra | matmul (batched, broadcast, transposes, quantized B) |
 | convolution | conv (N-d, groups, dilation, padding), conv_transpose, max_pool, avg_pool |
+| image, selection | resize (nearest / linear / cubic, ONNX coordinate modes), topk |
 | data movement | reshape, permute, slice, expand, concat, split, pad, gather, scatter, tile, flip, cumsum |
 | creation | iota, fill, random_uniform/normal (dropout/initialization) |
 | quantization | quantize, dequantize |
-| control flow | if, loop (stage 3) |
+| control flow | if, loop (later: with data-dependent shapes; constant ONNX `If` is inlined when importing) |
 
 **Composites** (have a decomposition rule; a backend may implement them natively — which is what is done for
 speed): gelu, silu, softmax, log_softmax, layer_norm, rms_norm, linear (matmul + bias), sdpa (scaled dot-product
@@ -300,7 +302,12 @@ import → canonicalize → shape inference → constant folding → DCE/CSE →
 - **Elementwise fusion** groups chains of elementwise operations of one shape (float and bool tensors; values used only
   inside the chain) into an internal `fused_elementwise` node whose `program` attribute holds the subgraph in the IR
   text format. It is a composite: backends without a fused kernel get the chain back by decomposition, so the pass is
-  safe for every backend. `CompileOptions::fuse` turns CSE and both fusions off.
+  safe for every backend.
+- **Convolution epilogues**: a convolution whose only user is an elementwise operation or a fused chain (an
+  activation, SiLU, a residual addition, a per-channel scale and shift — batch normalization after import) becomes an
+  internal `fused_conv` with the chain as its `program`; extra inputs must be per pixel, per channel or scalars.
+  ii-cpu applies the program to each output block while it is still in cache; other backends decompose it.
+  `CompileOptions::fuse` turns CSE and all fusions off.
 - **Pass invariant**: a pass never changes results beyond tolerance — verified automatically in tests (the graph is
   executed before and after the pass on random inputs).
 
@@ -490,8 +497,23 @@ minimax polynomials). Accuracy is stated in the header and verified by sweeps ag
   accumulation; 16-bit outputs are accumulated in f32 scratch and converted once.
 - `linear` adds the bias in the GEMM epilogue; `matmul` supports transposes and batch broadcasting. Single-row
   panels (decode) stream B over the whole depth with software prefetch.
-- Not yet: activations in the GEMM epilogue (a following activation is a separate fused elementwise pass), conv
-  through GEMM (stage 3), quantized weights (stage 4).
+- The driver (`gemm_driver.h`) is shared with convolution: B may also be packed by a callback (implicit im2col),
+  A may be prepacked (constant convolution weights), and an epilogue callback sees every finished f32 block.
+- Not yet: activations in the epilogue of `matmul` / `linear` (a following activation is a separate fused
+  elementwise pass), quantized weights (stage 4).
+
+### Convolution, pooling, resize (stage 3)
+
+- **Convolution** (NCHW, f32, 1-D and 2-D) is a GEMM per image and group: weights [M/groups, C/groups·KH·KW]
+  (prepacked into MR panels when the program is compiled) times the im2col matrix, which is never materialized as a
+  whole: it is packed straight from the image into NR-column GEMM panels (zero padding included) once per image, in
+  parallel, and the micro-kernel reads the panels in place. 1×1 stride-1 convolutions pack a plain copy of the image.
+  Biases initialize the output blocks; a `fused_conv` epilogue runs on each finished block.
+- **Depthwise** convolutions (one input channel per group, MobileNet) are direct stencils: each plane is copied into a
+  zero-padded L1 buffer and the taps are accumulated with vector FMAs (stride 1) or gathered columns (other strides).
+- `max_pool` / `avg_pool` (row-wise vector max / sum over the window taps), `resize` (nearest and linear over the last
+  two dimensions with precomputed taps). Cubic resize, 3-D windows and `conv_transpose` run on ii-ref.
+- Gap to ONNX Runtime (MLAS: direct NCHWc kernels) and the plan: `bench/results/stage3-onnx.md`.
 
 ### Quantized kernels (the key to weak hardware) — stage 4
 
@@ -518,7 +540,8 @@ minimax polynomials). Accuracy is stated in the header and verified by sweeps ag
 - `sdpa`: one query row at a time (scores, softmax and the weighted sum of values in a per-thread row of scratch, so
   the attention matrix is never materialized); grouped-query attention, causal masking, bool and additive masks.
   Tiled flash attention with a KV cache arrives with the LLM stage.
-- `reshape`, `permute` (tiled transposes), `concat`: dtype-agnostic copies. Everything else falls back to ii-ref.
+- `reshape`, `permute` (tiled transposes), `concat`: dtype-agnostic copies. Everything else falls back to ii-ref
+  (`ii inspect` shows which nodes).
 
 ### Threads
 
@@ -594,8 +617,25 @@ rules in `OpSchema`, and the "one IR" principle.
 |--------|---------|----------------|
 | GGUF | quantized LLMs | header/metadata parser, tensor mmap, GGML type → ii dtype mapping |
 | safetensors + `config.json` | HF models | JSON header + mmap; architecture from `config.json` |
-| ONNX | general models (CV, audio, encoders) | **own protobuf wire-format decoder** (no libprotobuf dependency), external data, `onnx op@opset → ii ops` mapping table |
+| ONNX | general models (CV, audio, encoders) | **own protobuf wire-format decoder** (no libprotobuf dependency), external data, `onnx op@opset → ii ops` mapping table (stage 3, see below) |
+| `.npy` / `.npz` | tensors (inputs, outputs, test data) | `ii/io.h`: NumPy format 1.0–3.0, stored and DEFLATE-compressed archives (own inflate) |
 | `.ii` | native, fast startup | header + sections; graph in a compact TLV encoding, weights aligned for mmap, optional weights pre-packed for a specific ISA; versioned format |
+
+**ONNX import** (`src/formats/onnx/`, `Model::load` / `Model::from_onnx`):
+- `onnx_proto.cpp` decodes ModelProto, GraphProto, NodeProto, TensorProto, AttributeProto and FunctionProto with the
+  wire-format reader (`src/formats/protobuf.h`); raw tensor data is referenced from the memory-mapped file when it
+  is suitably aligned, otherwise copied. External data must stay inside the model's directory.
+- `onnx_ops.cpp` maps ~130 operators of the default domain (opsets 1–23 and newer where semantics are unchanged) to
+  ii operations; model-local functions are inlined; `If` with a condition known at load time is inlined.
+- ONNX passes many parameters as tensors (Reshape targets, Slice bounds, reduction axes, Resize scales), ii keeps them
+  in attributes. The importer therefore tracks the **contents of small integer tensors symbolically**: `Shape(x)` of
+  an input [N, 3, 224, 224] is known to be [N, 3, 224, 224], and Gather / Slice / Concat / Unsqueeze / arithmetic /
+  Equal / Where over such values are evaluated while importing, so dynamic-batch and dynamic-sequence models import
+  with symbolic dimensions. Parameters computed from constants are evaluated with ii-ref on demand. When contents
+  cannot be expressed (e.g. slicing by a run-time value), `LoadOptions::dims` fixes input dimensions and
+  `LoadOptions::constant_inputs` replaces parameter inputs by constants.
+- Verified against ONNX Runtime on real models (`tests/models/manifest.json`) and on the operator test cases shipped
+  with the `onnx` package (`tests/onnx`, run in CI).
 
 **Loader security**: a model is untrusted input. All sizes and offsets are checked with overflow-safe arithmetic,
 no out-of-bounds reads; every parser (ONNX, GGUF, safetensors, `.ii`, JSON, tokenizers, Jinja) is fuzzed
@@ -638,12 +678,13 @@ CUDA compute capability 7.5+ (matches TensorRT 10).
 
 ```
 ii info                          hardware, ISA, devices, backends, plugins; --roofline measures peaks
-ii run <model> [--dims N=8]      run a model on random inputs: timings, --profile trace.json (stage 2);
-                                 later: inputs from .npy/.npz/raw/images, outputs to .npy/JSON/top-k
+ii run <model> [--dims N=8]      run an ONNX or ii text model; inputs from --inputs a.npz, --input x=a.npy or
+                                 images (--input images=cat.jpg, --letterbox, --mean/--std), otherwise random;
+                                 --save-outputs out.npz, --top K, --profile trace.json
 ii generate <llm> -p "…"         text generation
 ii chat <llm>                    interactive chat
-ii bench <model> [--llm]         benchmark: latency p50/p90/p99, throughput, memory; for LLMs pp/tg tokens/s
-ii inspect <model> [--plan]      graph, ops, parameters, shapes, backend partitioning and reasons
+ii bench <model> [--llm]         benchmark: latency p50/p90/p99 and throughput (stage 3); for LLMs pp/tg tokens/s
+ii inspect <model> [--plan]      inputs and outputs, the execution plan with backends; --graph, --imported
 ii convert <in> <out.ii>         conversion to the native format (+ pre-packing)
 ii quantize <in> <out> --type q4_k
 ii check-backends [<model>]      verify every available backend against the reference on this machine
@@ -673,7 +714,7 @@ ii/
 │   │   ├── cpu/       ii-cpu: drivers; isa/ (SIMD layer, math, kernels compiled per ISA)
 │   │   ├── cuda/  vulkan/  metal/
 │   │   └── plugins/   tensorrt/, onnxruntime/, openvino/, coreml/, …
-│   ├── formats/       gguf/, safetensors/, onnx/ (+ protobuf wire), native/
+│   ├── formats/       onnx/ (+ protobuf wire decoder), npy/npz; later gguf/, safetensors/, native/
 │   ├── llm/           arch/, tokenizer/, sampling/, chat_template/
 │   ├── train/         nn/, optim/, loss/, data/
 │   └── capi/          C ABI implementation

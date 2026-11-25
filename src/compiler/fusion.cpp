@@ -249,4 +249,141 @@ Result<std::size_t> fuse_elementwise(ir::Graph& graph, const ElementwiseFusionOp
     return created;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Convolution epilogues
+
+namespace {
+
+/// True when `extra` can be read per output row of a convolution result of `shape` ([N, C, spatial...]): the same
+/// shape, one value per channel, or a scalar (after numpy alignment, with batch broadcasting allowed).
+bool epilogue_operand(const Dims& shape, const Dims& extra) {
+    if (extra.size() > shape.size()) {
+        return false;
+    }
+    const std::size_t offset = shape.size() - extra.size();
+    // Per pixel: every spatial dimension present and equal (contiguous pixels); per row: all spatial dimensions 1.
+    bool spatial_full = true;
+    bool spatial_one = true;
+    for (std::size_t axis = 0; axis < shape.size(); ++axis) {
+        const bool present = axis >= offset;
+        const Dim e = present ? extra[axis - offset] : Dim(1);
+        if (!(e == Dim(1)) && !(e == shape[axis])) {
+            return false;
+        }
+        if (axis >= 2) {
+            spatial_full = spatial_full && present && e == shape[axis];
+            spatial_one = spatial_one && e == Dim(1);
+        }
+    }
+    return spatial_full || spatial_one;
+}
+
+Result<bool> try_fuse_conv(ir::Graph& graph, ir::Node& conv) {
+    ir::Value* result = conv.output();
+    if (!single_use(graph, result) || result->dtype() != DType::kF32) {
+        return false;
+    }
+    ir::Node* user = result->uses().front().node;
+    const bool chain = user->op_name() == ops::kFusedElementwise;
+    const ir::OpSchema& op = user->op();
+    if (!chain && (!op.has_flag(ir::kOpElementwise) || op.has_flag(ir::kOpInternal) || op.has_flag(ir::kOpRandom) ||
+                   user->num_outputs() != 1)) {
+        return false;
+    }
+    if (!(user->output()->shape() == result->shape()) || user->output()->dtype() != DType::kF32) {
+        return false;
+    }
+    std::vector<ir::Value*> extras;
+    for (ir::Value* input : user->inputs()) {
+        if (input == nullptr) {
+            return false;
+        }
+        if (input != result && std::find(extras.begin(), extras.end(), input) == extras.end()) {
+            if (!epilogue_operand(result->shape(), input->shape())) {
+                return false;
+            }
+            extras.push_back(input);
+        }
+    }
+
+    // The epilogue program: input 0 is the convolution result, then the extra inputs.
+    ir::Graph program;
+    program.set_name("epilogue");
+    std::unordered_map<const ir::Value*, ir::Value*> mapping;
+    ir::Value* c = program.add_input("c", result->type());
+    for (std::size_t i = 0; i < extras.size(); ++i) {
+        mapping.emplace(extras[i], program.add_input(std::format("e{}", i), extras[i]->type()));
+    }
+    ir::Value* program_result = nullptr;
+    if (chain) {
+        II_ASSIGN_OR_RETURN(const std::unique_ptr<ir::Graph> body, ops::parse_fused_program(*user));
+        std::unordered_map<const ir::Value*, ir::Value*> inner;
+        for (int i = 0; i < user->num_inputs(); ++i) {
+            const ir::Value* outer = user->input(i);
+            inner.emplace(body->inputs()[static_cast<std::size_t>(i)], outer == result ? c : mapping.at(outer));
+        }
+        for (const auto& node : body->nodes()) {
+            std::vector<ir::Value*> inputs;
+            for (const ir::Value* value : node->inputs()) {
+                inputs.push_back(inner.at(value));
+            }
+            const ir::TensorType type = node->output()->type();
+            ir::Node* copy = program.create_node(node->op(), std::move(inputs), node->attrs(),
+                                                 std::span<const ir::TensorType>(&type, 1));
+            inner.emplace(node->output(), copy->output());
+        }
+        program_result = inner.at(body->outputs()[0].value);
+    } else {
+        std::vector<ir::Value*> inputs;
+        for (const ir::Value* value : user->inputs()) {
+            inputs.push_back(value == result ? c : mapping.at(value));
+        }
+        const ir::TensorType type = user->output()->type();
+        program_result =
+            program
+                .create_node(user->op(), std::move(inputs), user->attrs(), std::span<const ir::TensorType>(&type, 1))
+                ->output();
+    }
+    program.add_output("y", program_result);
+
+    Attributes attrs = conv.attrs();
+    attrs.set("program", program.to_text(ir::PrintOptions{-1}));
+    attrs.set("dtype", DType::kF32);
+    std::vector<ir::Value*> inputs = {conv.input(0), conv.input(1), conv.input(2)};
+    inputs.insert(inputs.end(), extras.begin(), extras.end());
+    ir::Builder builder(graph);
+    builder.set_insertion_point(user);
+    II_ASSIGN_OR_RETURN(ir::Node * fused, builder.create_node(ops::kFusedConv, std::move(inputs), std::move(attrs)));
+    if (!(fused->output()->type() == user->output()->type())) {
+        ir::Node* doomed[] = {fused};
+        graph.erase_nodes(doomed);
+        return false;
+    }
+    fused->set_name(conv.name());
+    if (!user->output()->name().empty()) {
+        fused->output()->set_name(user->output()->name());
+    }
+    graph.replace_all_uses(user->output(), fused->output());
+    ir::Node* doomed[] = {user, &conv};
+    graph.erase_nodes(doomed);
+    return true;
+}
+
+}  // namespace
+
+Result<std::size_t> fuse_conv_epilogue(ir::Graph& graph) {
+    std::vector<ir::Node*> convs;
+    for (const auto& node : graph.nodes()) {
+        if (node->op_name() == "conv") {
+            convs.push_back(node.get());
+        }
+    }
+    std::size_t fused = 0;
+    for (ir::Node* conv : convs) {
+        II_ASSIGN_OR_RETURN(const bool changed, try_fuse_conv(graph, *conv));
+        fused += changed ? 1 : 0;
+    }
+    return fused;
+}
+
 }  // namespace ii::compiler

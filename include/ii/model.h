@@ -4,7 +4,7 @@
 ///
 /// @code
 /// auto context = ii::Context::create().value();
-/// auto model   = ii::Model::from_text(context, text).value();     // or Model::from_builder(...)
+/// auto model   = ii::Model::load(context, "model.onnx").value();  // or from_text / from_builder
 /// auto program = model.compile().value();                        // optimized, backends chosen, kernels created
 /// auto session = program.new_session().value();                  // one per thread / request
 /// auto outputs = session.run({{"x", x}}).value();
@@ -22,6 +22,8 @@
 #include <ii/status.h>
 #include <ii/tensor.h>
 
+#include <cstddef>
+#include <filesystem>
 #include <initializer_list>
 #include <memory>
 #include <span>
@@ -47,6 +49,18 @@ struct TensorInfo {
     std::string name;
     DType dtype = DType::kInvalid;
     Dims shape;
+};
+
+/// Options of `Model::load` and `Model::from_onnx`.
+struct LoadOptions {
+    /// Values for symbolic dimensions of the model inputs, by name (e.g. {"batch", 1}). Fixed dimensions make shapes
+    /// static, which lets the compiler evaluate more at compile time; ONNX models whose shape computations cannot be
+    /// expressed symbolically (e.g. slicing a constant table by the sequence length) need them to load.
+    std::vector<std::pair<std::string, std::int64_t>> dims;
+
+    /// Inputs replaced by constants. ONNX passes some operation parameters as tensors (target shapes, axes, resize
+    /// scales); when a model takes them as inputs, ii needs their values when the model is loaded.
+    std::vector<std::pair<std::string, Tensor>> constant_inputs;
 };
 
 /// Options of `Model::compile`.
@@ -98,6 +112,15 @@ public:
 
     /// Parses a model in the ii IR text format.
     static Result<Model> from_text(const Context& context, std::string_view text);
+
+    /// Loads a model file: ONNX (`.onnx`, external data next to it is supported) or the ii IR text format. The file
+    /// is memory-mapped; suitably aligned weights are used from the mapping without copying.
+    static Result<Model> load(const Context& context, const std::filesystem::path& path,
+                              const LoadOptions& options = {});
+
+    /// Imports a serialized ONNX model from memory (the data is copied; external data is not available).
+    static Result<Model> from_onnx(const Context& context, std::span<const std::byte> data,
+                                   const LoadOptions& options = {});
 
     std::vector<TensorInfo> inputs() const;
     std::vector<TensorInfo> outputs() const;

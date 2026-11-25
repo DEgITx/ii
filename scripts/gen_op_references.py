@@ -620,6 +620,49 @@ def gen_composites():
         rtol=1e-5, atol=1e-5)
 
 
+# --- Image and selection (stage 3) ----------------------------------------------------------------------------------
+
+def gen_image_selection():
+    x = rand(1, 2, 4, 5)
+    t = t64(x)
+
+    def resize_case(name, out_hw, torch_mode, attrs, align_corners=None, rtol=1e-6, atol=1e-6):
+        kwargs = {"size": out_hw, "mode": torch_mode}
+        if align_corners is not None:
+            kwargs["align_corners"] = align_corners
+        y = F.interpolate(t, **kwargs).numpy()
+        attrs = dict(attrs)
+        attrs["shape"] = [1, 2, out_hw[0], out_hw[1]]
+        add(name, "resize", [x], [like(x, y)], attrs, rtol=rtol, atol=atol)
+
+    # PyTorch "nearest" picks floor(o * in / out): asymmetric coordinates rounded down.
+    resize_case("resize_nearest_up", [8, 10], "nearest", {"coordinate_mode": "asymmetric", "nearest_mode": "floor"})
+    resize_case("resize_nearest_down", [3, 2], "nearest", {"coordinate_mode": "asymmetric", "nearest_mode": "floor"})
+    # "nearest-exact" rounds half-pixel coordinates, ties up.
+    resize_case("resize_nearest_exact", [7, 9], "nearest-exact",
+                {"coordinate_mode": "half_pixel", "nearest_mode": "round_prefer_ceil"})
+    resize_case("resize_linear_half_pixel", [7, 9], "bilinear", {"mode": "linear"}, align_corners=False,
+                rtol=1e-5, atol=1e-6)
+    resize_case("resize_linear_align_corners", [6, 3], "bilinear",
+                {"mode": "linear", "coordinate_mode": "align_corners"}, align_corners=True, rtol=1e-5, atol=1e-6)
+    resize_case("resize_cubic", [6, 8], "bicubic", {"mode": "cubic"}, align_corners=False, rtol=1e-5, atol=1e-5)
+    xi = randint(2, 3, 4, dtype=np.int32)
+    yi = F.interpolate(torch.from_numpy(xi.astype(np.float64)), size=[8], mode="nearest").numpy().astype(np.int32)
+    add("resize_nearest_int_1d", "resize", [xi], [yi],
+        {"shape": [2, 3, 8], "coordinate_mode": "asymmetric", "nearest_mode": "floor"})
+
+    # topk: distinct values, so that the order is unique.
+    v = RNG.permutation(30).astype(np.float32).reshape(3, 10) / 4 - 3
+    values, indices = torch.topk(torch.from_numpy(v), 4, dim=-1, largest=True, sorted=True)
+    add("topk_largest", "topk", [v], [values.numpy(), indices.numpy().astype(np.int64)], {"k": 4})
+    values, indices = torch.topk(torch.from_numpy(v), 3, dim=0, largest=False, sorted=True)
+    add("topk_smallest_axis0", "topk", [v], [values.numpy(), indices.numpy().astype(np.int64)],
+        {"k": 3, "axis": 0, "largest": False})
+    vi = RNG.permutation(12).astype(np.int64).reshape(2, 6)
+    values, indices = torch.topk(torch.from_numpy(vi), 6, dim=1)
+    add("topk_i64_all", "topk", [vi], [values.numpy(), indices.numpy().astype(np.int64)], {"k": 6})
+
+
 def generate() -> str:
     CASES.clear()
     gen_unary()
@@ -631,6 +674,7 @@ def generate() -> str:
     gen_creation()
     gen_quantization()
     gen_composites()
+    gen_image_selection()
     names = [c["name"] for c in CASES]
     duplicates = {n for n in names if names.count(n) > 1}
     if duplicates:

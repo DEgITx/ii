@@ -450,4 +450,29 @@ void attention_row(const AttentionRowArgs& args) {
     }
 }
 
+void axpy(float* y, const float* x, float a, std::int64_t n) {
+    const VF va = vset1(a);
+    std::int64_t i = 0;
+    for (; i + 2 * kLanes <= n; i += 2 * kLanes) {
+        vstore(y + i, vfma(va, vload(x + i), vload(y + i)));
+        vstore(y + i + kLanes, vfma(va, vload(x + i + kLanes), vload(y + i + kLanes)));
+    }
+    for (; i + kLanes <= n; i += kLanes) {
+        vstore(y + i, vfma(va, vload(x + i), vload(y + i)));
+    }
+    if (i < n) {
+        vstore_partial(y + i, vfma(va, vload_partial(x + i, n - i), vload_partial(y + i, n - i)), n - i);
+    }
+}
+
+void max_inplace(float* y, const float* x, std::int64_t n) {
+    std::int64_t i = 0;
+    for (; i + kLanes <= n; i += kLanes) {
+        vstore(y + i, vmax_nan(vload(y + i), vload(x + i)));
+    }
+    if (i < n) {
+        vstore_partial(y + i, vmax_nan(vload_partial(y + i, n - i), vload_partial(x + i, n - i)), n - i);
+    }
+}
+
 }  // namespace ii::cpu::II_ISA_NS

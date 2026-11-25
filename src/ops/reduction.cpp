@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Reductions: reduce_sum, reduce_mean, reduce_max, reduce_min, reduce_prod, argmax, argmin.
+// Reductions: reduce_sum, reduce_mean, reduce_max, reduce_min, reduce_prod, argmax, argmin, topk.
 #include "ops/infer_util.h"
 #include "ops/opset.h"
 
@@ -66,6 +66,26 @@ Status infer_arg_reduce(const InferContext& context, std::vector<TensorType>& ou
     return ok_status();
 }
 
+Status infer_topk(const InferContext& context, std::vector<TensorType>& outputs) {
+    II_TRY(expect_input(context, 0, &is_numeric_dtype, "a numeric type"));
+    const TensorType& input = *context.input(0);
+    if (input.rank() == 0) {
+        return errors::invalid_argument("'topk' requires an input of rank >= 1");
+    }
+    II_ASSIGN_OR_RETURN(const int axis, normalize_axis(context.attrs.get_int("axis"), input.rank()));
+    const std::int64_t k = context.attrs.get_int("k");
+    II_TRY(expect_in_range(k, 0, kMaxDimension, "'topk' k"));
+    const Dim& size = input.shape[static_cast<std::size_t>(axis)];
+    if (size.is_constant() && k > size.value()) {
+        return errors::invalid_argument("'topk': k = {} exceeds the size {} of axis {}", k, size.value(), axis);
+    }
+    Dims shape = input.shape;
+    shape[static_cast<std::size_t>(axis)] = Dim(k);
+    outputs.push_back(TensorType{input.dtype, shape});
+    outputs.push_back(TensorType{DType::kI64, std::move(shape)});
+    return ok_status();
+}
+
 }  // namespace
 
 void register_reduction_ops(ir::OpRegistry& registry) {
@@ -79,9 +99,11 @@ void register_reduction_ops(ir::OpRegistry& registry) {
          "Sum over `axes` (all axes when empty). An empty reduction is 0."},
         {"reduce_mean", infer_reduce<is_float_dtype>, "Arithmetic mean over `axes`. An empty reduction is NaN."},
         {"reduce_max", infer_reduce<is_numeric_dtype>,
-         "Maximum over `axes`; NaN if any element is NaN. Reducing an empty range is an error."},
+         "Maximum over `axes`; NaN if any element is NaN. An empty reduction is the lowest value of the dtype (-inf "
+         "for floats)."},
         {"reduce_min", infer_reduce<is_numeric_dtype>,
-         "Minimum over `axes`; NaN if any element is NaN. Reducing an empty range is an error."},
+         "Minimum over `axes`; NaN if any element is NaN. An empty reduction is the highest value of the dtype (inf "
+         "for floats)."},
         {"reduce_prod", infer_reduce<is_numeric_dtype>, "Product over `axes`. An empty reduction is 1."},
     };
     for (const Def& def : reductions) {
@@ -110,6 +132,18 @@ void register_reduction_ops(ir::OpRegistry& registry) {
             .infer = infer_arg_reduce,
         });
     }
+    registry.add(OpSchema{
+        .name = "topk",
+        .category = "reduction",
+        .doc = "The `k` largest (or smallest) elements along `axis` and their indices (i64), in order: descending "
+               "for largest, ascending otherwise. Equal values keep the order of their indices; NaN compares greater "
+               "than every number.",
+        .inputs = {InputSpec{"x"}},
+        .outputs = {OutputSpec{"values"}, OutputSpec{"indices"}},
+        .attrs = {AttrSpec{"k", AttrKind::kInt, std::nullopt}, AttrSpec{"axis", AttrKind::kInt, std::int64_t{-1}},
+                  AttrSpec{"largest", AttrKind::kBool, true}},
+        .infer = infer_topk,
+    });
 }
 
 }  // namespace ii::ops

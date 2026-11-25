@@ -176,6 +176,50 @@ TEST(PassesTest, ElementwiseFusionKeepsSharedAndBroadcastValues) {
     EXPECT_THAT(text, HasSubstr("%u : f32[4, 8] = neg(%t)"));
 }
 
+TEST(PassesTest, FusesConvolutionEpilogues) {
+    std::string weights;
+    for (int i = 0; i < 4 * 3 * 3 * 3; ++i) {
+        weights += i == 0 ? "0.5" : ", 0.5";
+    }
+    std::string text_model = R"(graph {
+      input %x : f32[N, 3, 8, 8]
+      input %r : f32[N, 4, 6, 6]
+      input %row : f32[6]
+      const %w : f32[4, 3, 3, 3] = f32[4, 3, 3, 3] {WEIGHTS}
+      const %s : f32[4, 1, 1] = f32[4, 1, 1] {1, 2, 3, 4}
+      %c1 : f32[N, 4, 6, 6] = conv(%x, %w)
+      %a1 : f32[N, 4, 6, 6] = relu(%c1)
+      %c2 : f32[N, 4, 6, 6] = conv(%x, %w)
+      %a2 : f32[N, 4, 6, 6] = add(%c2, %r)
+      %b2 : f32[N, 4, 6, 6] = mul(%a2, %s)
+      %c3 : f32[N, 4, 6, 6] = conv(%x, %w)
+      %a3 : f32[N, 4, 6, 6] = add(%c3, %row)
+      %c4 : f32[N, 4, 6, 6] = conv(%x, %w)
+      %a4 : f32[N, 4, 6, 6] = neg(%c4)
+      output y1 = %a1
+      output y2 = %b2
+      output y3 = %a3
+      output y4 = %a4
+      output c4 = %c4
+    })";
+    text_model.replace(text_model.find("WEIGHTS"), 7, weights);
+    auto graph = parse(text_model);
+    EXPECT_EQ(compiler::fuse_elementwise(*graph).value(), 1u);  // add + mul
+    EXPECT_EQ(compiler::fuse_conv_epilogue(*graph).value(), 2u);
+    ASSERT_TRUE(graph->verify().ok());
+    const std::string text = graph->to_text();
+    EXPECT_THAT(text, HasSubstr("%a1 : f32[N, 4, 6, 6] = fused_conv(%x, %w, _)"));
+    EXPECT_THAT(text, HasSubstr("%b2 : f32[N, 4, 6, 6] = fused_conv(%x, %w, _, %r, %s)"));
+    // A bias along the width is neither per pixel nor per channel; a result that is also a graph output stays.
+    EXPECT_THAT(text, HasSubstr("%a3 : f32[N, 4, 6, 6] = add(%c3, %row)"));
+    EXPECT_THAT(text, HasSubstr("%a4 : f32[N, 4, 6, 6] = neg(%c4)"));
+    // Decomposition restores convolutions followed by the epilogue operations.
+    EXPECT_EQ(compiler::decompose(*graph, [](const ir::Node& node) { return node.op_name() == "fused_conv"; }).value(),
+              2u);
+    ASSERT_TRUE(graph->verify().ok());
+    EXPECT_THAT(graph->to_text(), HasSubstr("relu("));
+}
+
 TEST(PassesTest, DecompositionKeepsTypes) {
     auto graph = parse(R"(graph {
       input %q : f32[B, 4, S, 8]

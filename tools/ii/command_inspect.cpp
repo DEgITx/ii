@@ -5,10 +5,9 @@
 #include "args.h"
 #include "commands.h"
 
+#include <charconv>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -18,10 +17,12 @@ namespace {
 
 constexpr const char* kUsage = R"(Usage: ii inspect <model> [options]
 
-Describes a model (inputs, outputs, states) and its execution plan. Supported formats: the ii IR text format.
+Describes a model (inputs, outputs, states) and its execution plan. Formats: ONNX and the ii IR text format.
 
 Options:
   --graph             Print the optimized graph
+  --imported          Print the graph as loaded (before optimization)
+  --dims LIST         Fix symbolic dimensions when loading, e.g. batch=1,seq=128
   --backends LIST     Comma-separated backends to compile for (default: all)
   --no-fold           Disable constant folding
   --no-fuse           Disable fusion (common subexpressions, patterns, elementwise chains)
@@ -37,21 +38,31 @@ std::string describe(const std::vector<TensorInfo>& infos) {
     return text.empty() ? "  (none)\n" : text;
 }
 
-Result<std::string> read_file(const std::string& utf8_path) {
-    const std::filesystem::path path(std::u8string(utf8_path.begin(), utf8_path.end()));
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        return errors::io_error("cannot open '{}'", utf8_path);
+/// "batch=1,seq=128" as load options.
+Result<LoadOptions> parse_dims(const std::optional<std::string>& text) {
+    LoadOptions options;
+    const std::string all = text.value_or("");
+    std::string_view rest = all;
+    while (!rest.empty()) {
+        const std::size_t comma = rest.find(',');
+        const std::string_view item = rest.substr(0, comma);
+        rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
+        const std::size_t eq = item.find('=');
+        std::int64_t value = 0;
+        if (eq == std::string_view::npos ||
+            std::from_chars(item.data() + eq + 1, item.data() + item.size(), value).ec != std::errc()) {
+            return errors::invalid_argument("expected NAME=VALUE in --dims, got '{}'", item);
+        }
+        options.dims.emplace_back(std::string(item.substr(0, eq)), value);
     }
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    return buffer.str();
+    return options;
 }
 
 }  // namespace
 
 int run_inspect(const std::vector<std::string>& args) {
-    auto parsed = Args::parse(args, {"graph", "no-fold", "no-fuse", "decompose", "help"}, {"backends"});
+    auto parsed =
+        Args::parse(args, {"graph", "imported", "no-fold", "no-fuse", "decompose", "help"}, {"backends", "dims"});
     if (!parsed.ok()) {
         std::fprintf(stderr, "ii inspect: %s\n\n%s", std::string(parsed.status().message()).c_str(), kUsage);
         return 2;
@@ -69,17 +80,21 @@ int run_inspect(const std::vector<std::string>& args) {
         std::fprintf(stderr, "ii inspect: %s: %s\n", path.c_str(), status.to_string().c_str());
         return 1;
     };
-    const Result<std::string> text = read_file(path);
-    if (!text.ok()) {
-        return fail(text.status());
+    const Result<LoadOptions> load_options = parse_dims(parsed->option("dims"));
+    if (!load_options.ok()) {
+        return fail(load_options.status());
     }
     const Result<Context> context = Context::create();
     if (!context.ok()) {
         return fail(context.status());
     }
-    const Result<Model> model = Model::from_text(*context, *text);
+    const Result<Model> model =
+        Model::load(*context, std::filesystem::path(std::u8string(path.begin(), path.end())), *load_options);
     if (!model.ok()) {
         return fail(model.status());
+    }
+    if (parsed->flag("imported")) {
+        std::printf("Imported graph:\n%s\n", model->to_text().c_str());
     }
     std::printf("Inputs:\n%sOutputs:\n%s", describe(model->inputs()).c_str(), describe(model->outputs()).c_str());
     if (!model->states().empty()) {

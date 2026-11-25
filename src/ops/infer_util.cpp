@@ -2,6 +2,7 @@
 #include "ops/infer_util.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace ii::ops {
@@ -286,6 +287,111 @@ std::int64_t window_output_size(std::int64_t input, const WindowGeometry& g, boo
         --size;
     }
     return size;
+}
+
+int resize_tap_count(std::string_view mode) noexcept {
+    return mode == "nearest" ? 1 : mode == "linear" ? 2 : 4;
+}
+
+ResizeTaps resize_taps(std::int64_t input, std::int64_t output, double scale, const ResizeMode& mode) {
+    ResizeTaps taps;
+    taps.count = resize_tap_count(mode.mode);
+    const auto count = static_cast<std::size_t>(taps.count);
+    taps.index.assign(static_cast<std::size_t>(output) * count, 0);
+    taps.weight.assign(static_cast<std::size_t>(output) * count, 0.0);
+    resize_taps_into(input, output, scale, mode, taps.index.data(), taps.weight.data());
+    return taps;
+}
+
+void resize_taps_into(std::int64_t input, std::int64_t output, double scale, const ResizeMode& mode,
+                      std::int64_t* index, double* weight) {
+    struct Taps {
+        int count;
+        std::int64_t* index;
+        double* weight;
+    } taps{resize_tap_count(mode.mode), index, weight};
+    const auto count = static_cast<std::size_t>(taps.count);
+    for (std::size_t i = 0; i < static_cast<std::size_t>(output) * count; ++i) {
+        taps.index[i] = 0;
+        taps.weight[i] = 0;
+    }
+    if (input <= 0) {
+        return;
+    }
+    if (!(scale > 0)) {
+        scale = static_cast<double>(output) / static_cast<double>(input);
+    }
+    const auto in = static_cast<double>(input);
+    const auto out = static_cast<double>(output);
+    const auto clamp_index = [&](std::int64_t i) { return std::clamp<std::int64_t>(i, 0, input - 1); };
+    for (std::int64_t o = 0; o < output; ++o) {
+        const auto x = static_cast<double>(o);
+        double source = 0;
+        if (mode.coordinate_mode == "half_pixel") {
+            source = (x + 0.5) / scale - 0.5;
+        } else if (mode.coordinate_mode == "half_pixel_symmetric") {
+            const double adjustment = out / (scale * in);
+            const double offset = in / 2 * (1 - adjustment);
+            source = offset + (x + 0.5) / scale - 0.5;
+        } else if (mode.coordinate_mode == "pytorch_half_pixel") {
+            source = output > 1 ? (x + 0.5) / scale - 0.5 : 0.0;
+        } else if (mode.coordinate_mode == "align_corners") {
+            // The resized length is in * scale (not rounded), as in the ONNX reference.
+            const double resized = in * scale;
+            source = resized == 1 ? 0.0 : x * (in - 1) / (resized - 1);
+        } else {  // asymmetric
+            source = x / scale;
+        }
+        const std::size_t base = static_cast<std::size_t>(o) * count;
+        const double floor_source = std::floor(source);
+        const double t = source - floor_source;
+        const auto i0 = static_cast<std::int64_t>(floor_source);
+        if (taps.count == 1) {
+            std::int64_t i = i0;
+            if (t != 0) {
+                const std::string_view nearest = mode.nearest_mode;
+                const bool up = nearest == "ceil" || (nearest == "round_prefer_floor" && t > 0.5) ||
+                                (nearest == "round_prefer_ceil" && t >= 0.5);
+                i = up ? i0 + 1 : i0;
+            }
+            taps.index[base] = clamp_index(i);
+            taps.weight[base] = 1.0;
+            continue;
+        }
+        if (taps.count == 2) {
+            taps.index[base] = clamp_index(i0);
+            taps.index[base + 1] = clamp_index(i0 + 1);
+            taps.weight[base] = 1 - t;
+            taps.weight[base + 1] = t;
+            continue;
+        }
+        const double a = mode.cubic_coeff_a;
+        const auto cubic = [a](double d) {  // Keys kernel, d = |distance|
+            if (d <= 1) {
+                return ((a + 2) * d - (a + 3)) * d * d + 1;
+            }
+            if (d < 2) {
+                return ((a * d - 5 * a) * d + 8 * a) * d - 4 * a;
+            }
+            return 0.0;
+        };
+        double sum = 0;
+        for (int k = 0; k < 4; ++k) {
+            const std::int64_t i = i0 - 1 + k;
+            double w = cubic(std::fabs(t - (k - 1)));
+            if (mode.exclude_outside && (i < 0 || i >= input)) {
+                w = 0;
+            }
+            taps.index[base + static_cast<std::size_t>(k)] = clamp_index(i);
+            taps.weight[base + static_cast<std::size_t>(k)] = w;
+            sum += w;
+        }
+        if (mode.exclude_outside && sum != 0) {
+            for (int k = 0; k < 4; ++k) {
+                taps.weight[base + static_cast<std::size_t>(k)] /= sum;
+            }
+        }
+    }
 }
 
 }  // namespace ii::ops

@@ -30,7 +30,19 @@ namespace ii::ops {
 
 inline constexpr std::string_view kFusedElementwise = "fused_elementwise";
 
+/// `fused_conv(x, w, bias?, extras...)`: a convolution followed by an elementwise program over its result (the
+/// epilogue, e.g. an activation or a residual addition), created by `compiler::fuse_conv_epilogue`. The program's
+/// input 0 is the convolution result, inputs 1... are the extra inputs (each the shape of the result, one value per
+/// channel, or a scalar); the result has the shape of the convolution and dtype `dtype`.
+inline constexpr std::string_view kFusedConv = "fused_conv";
+
 /// Parses the `program` attribute of a `fused_elementwise` node and checks it against the node's inputs.
 Result<std::unique_ptr<ir::Graph>> parse_fused_program(const ir::Node& node);
+
+/// Parses the epilogue program of a `fused_conv` node and checks it against the node's extra inputs.
+Result<std::unique_ptr<ir::Graph>> parse_epilogue_program(const ir::Node& node);
+
+/// The attributes of the convolution inside a `fused_conv` node.
+Attributes conv_attributes(const Attributes& fused);
 
 }  // namespace ii::ops

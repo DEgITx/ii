@@ -298,6 +298,7 @@ void register_elementwise_kernels(backend::KernelBackend& backend);
 void register_reduction_kernels(backend::KernelBackend& backend);
 void register_linalg_kernels(backend::KernelBackend& backend);
 void register_movement_kernels(backend::KernelBackend& backend);
+void register_image_kernels(backend::KernelBackend& backend);
 void register_creation_kernels(backend::KernelBackend& backend);
 void register_composite_kernels(backend::KernelBackend& backend);
 

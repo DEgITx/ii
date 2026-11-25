@@ -466,7 +466,12 @@ Result<std::unique_ptr<Kernel>> quantize_kernel(const ir::Node& node) {
                     const double s = static_cast<double>(load(at<X>(scale, channel)));
                     const double zp =
                         zero_point.present() ? static_cast<double>(load(at<Y>(zero_point, channel))) : 0.0;
-                    const double q = round_half_even(static_cast<double>(load(at<X>(x, i))) / s) + zp;
+                    // x / scale in single precision (double for f64 inputs), like ONNX Runtime.
+                    double ratio = static_cast<double>(load(at<X>(x, i))) / s;
+                    if constexpr (!std::is_same_v<X, double>) {
+                        ratio = static_cast<double>(static_cast<float>(load(at<X>(x, i))) / static_cast<float>(s));
+                    }
+                    const double q = round_half_even(ratio) + zp;
                     y.as<Y>()[i] = store<Y>(q);
                 }
                 return ok_status();
