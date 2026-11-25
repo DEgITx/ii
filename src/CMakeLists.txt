@@ -9,6 +9,7 @@ add_subdirectory(backends)
 add_subdirectory(compiler)
 add_subdirectory(formats)
 add_subdirectory(runtime)
+add_subdirectory(llm)
 add_subdirectory(api)
 
 ii_finalize_library()

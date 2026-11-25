@@ -216,7 +216,8 @@ Result<std::unique_ptr<Kernel>> gather_kernel(const ir::Node& node) {
         const std::int64_t size_axis = data.shape[axis];
         const std::int64_t inner = product(data.shape, axis + 1, data.rank());
         const std::int64_t count = indices.numel();
-        const std::size_t size = element_size(data.dtype);
+        // Whole slices of `inner` elements are copied, so block-quantized rows work too.
+        const auto slice_bytes = static_cast<std::int64_t>(storage_size(data.dtype, inner));
         for (std::int64_t j = 0; j < count; ++j) {
             std::int64_t index = read_index(indices, j);
             if (index < 0) {
@@ -227,11 +228,9 @@ Result<std::unique_ptr<Kernel>> gather_kernel(const ir::Node& node) {
                                             size_axis);
             }
             for (std::int64_t o = 0; o < outer; ++o) {
-                copy_elements(static_cast<std::byte*>(y.data) +
-                                  ((o * count + j) * inner) * static_cast<std::int64_t>(size),
-                              static_cast<const std::byte*>(data.data) +
-                                  ((o * size_axis + index) * inner) * static_cast<std::int64_t>(size),
-                              inner, size);
+                copy_elements(static_cast<std::byte*>(y.data) + (o * count + j) * slice_bytes,
+                              static_cast<const std::byte*>(data.data) + (o * size_axis + index) * slice_bytes,
+                              slice_bytes, 1);
             }
         }
         return ok_status();

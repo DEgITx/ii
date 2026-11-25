@@ -11,6 +11,7 @@
 
 #include "backend/backend.h"
 #include "backends/cpu/kernel_table.h"
+#include "core/aligned_buffer.h"
 #include "core/isa.h"
 
 #include <memory>
@@ -120,6 +121,15 @@ std::unique_ptr<Kernel> make_kernel(Fn fn) {
     return std::make_unique<LambdaKernel<Fn>>(std::move(fn));
 }
 
+/// Repacks rows [0, rows) (a multiple of 8) of block-quantized weights [N, K] into the panels of the GEMM kernels
+/// (`QGemm8Fn`); each panel takes `quantized_panel_stride(type, k)` bytes.
+Result<AlignedBuffer> pack_quantized_panels(QType type, DType dtype, const void* w, std::int64_t rows, std::int64_t k);
+std::int64_t quantized_panel_stride(QType type, std::int64_t k);
+
+/// linear / matmul with block-quantized weights (qmatmul.cpp); used by the GEMM registration.
+Status check_quantized_matmul(const ir::Node& node);
+Result<std::unique_ptr<Kernel>> create_quantized_matmul(const ir::Node& node, const CpuConfig& config);
+
 // Registration of the kernel groups (one file each).
 void register_elementwise_kernels(CpuBackend& backend);
 void register_gemm_kernels(CpuBackend& backend);
@@ -127,5 +137,6 @@ void register_reduction_kernels(CpuBackend& backend);
 void register_attention_kernels(CpuBackend& backend);
 void register_movement_kernels(CpuBackend& backend);
 void register_conv_kernels(CpuBackend& backend);
+void register_llm_kernels(CpuBackend& backend);
 
 }  // namespace ii::cpu

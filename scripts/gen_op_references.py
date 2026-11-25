@@ -10,7 +10,8 @@ Usage:
     python scripts/gen_op_references.py            # writes tests/data/op_references.json
     python scripts/gen_op_references.py --check    # fails if the committed file is out of date
 
-Requires numpy and torch (CPU build is enough). The output is deterministic.
+Requires numpy, torch (CPU build is enough) and gguf (the llama.cpp package, for block-quantized tensors). The
+output is deterministic.
 """
 
 from __future__ import annotations
@@ -59,7 +60,18 @@ NP_TO_II = {
 }
 
 
+class QBlocks:
+    """A block-quantized tensor (GGUF layout): raw blocks, the ii dtype name and the logical shape."""
+
+    def __init__(self, dtype: str, shape: tuple, raw: np.ndarray):
+        self.dtype_name = dtype
+        self.shape = tuple(shape)
+        self.raw = np.ascontiguousarray(raw, dtype=np.uint8).reshape(-1)
+
+
 def ii_dtype(t) -> str:
+    if isinstance(t, QBlocks):
+        return t.dtype_name
     return "bf16" if isinstance(t, BF16) else NP_TO_II[t.dtype]
 
 
@@ -68,6 +80,8 @@ def tensor_type(t) -> str:
 
 
 def encode(t) -> dict:
+    if isinstance(t, QBlocks):
+        return {"dtype": t.dtype_name, "shape": list(t.shape), "base64": base64.b64encode(t.raw.tobytes()).decode()}
     raw = t.bits if isinstance(t, BF16) else np.ascontiguousarray(t)
     data = raw.astype(raw.dtype.newbyteorder("<"), copy=False).tobytes()
     return {"dtype": ii_dtype(t), "shape": list(t.shape), "base64": base64.b64encode(data).decode("ascii")}
@@ -663,6 +677,153 @@ def gen_image_selection():
     add("topk_i64_all", "topk", [vi], [values.numpy(), indices.numpy().astype(np.int64)], {"k": 6})
 
 
+# --- LLM operations (stage 4): block-quantized weights, rope, slice_update, sdpa with a KV cache -----------------
+
+# ii dtype -> (gguf type, block elements, block bytes, offsets of f16 scale fields)
+BLOCK_TYPES = {
+    "q4_0": ("Q4_0", 32, 18, [0]),
+    "q8_0": ("Q8_0", 32, 34, [0]),
+    "q4_k": ("Q4_K", 256, 144, [0, 2]),
+    "q5_k": ("Q5_K", 256, 176, [0, 2]),
+    "q6_k": ("Q6_K", 256, 210, [208]),
+}
+
+
+def random_blocks(dtype: str, rows: int, cols: int) -> tuple[QBlocks, np.ndarray]:
+    """Random blocks with finite, small scales and their dequantization (float32, [rows, cols])."""
+    from gguf import GGMLQuantizationType, quants
+
+    name, elements, nbytes, f16_offsets = BLOCK_TYPES[dtype]
+    blocks = rows * cols // elements
+    raw = RNG.integers(0, 256, size=(blocks, nbytes), dtype=np.uint8)
+    for offset in f16_offsets:
+        scales = RNG.uniform(-0.05, 0.05, size=blocks).astype(np.float16)
+        raw[:, offset : offset + 2] = scales.view(np.uint8).reshape(blocks, 2)
+    values = quants.dequantize(raw.reshape(-1), GGMLQuantizationType[name]).astype(np.float32).reshape(rows, cols)
+    return QBlocks(dtype, (rows, cols), raw), values
+
+
+def rope_reference(x, cos, sin, interleaved):
+    x = f64(x)
+    half = cos.shape[-1]
+    cos = np.broadcast_to(f64(cos), x.shape[:-1] + (half,))
+    sin = np.broadcast_to(f64(sin), x.shape[:-1] + (half,))
+    y = x.copy()
+    if interleaved:
+        a, b = x[..., 0 : 2 * half : 2], x[..., 1 : 2 * half : 2]
+        y[..., 0 : 2 * half : 2] = a * cos - b * sin
+        y[..., 1 : 2 * half : 2] = b * cos + a * sin
+    else:
+        a, b = x[..., :half], x[..., half : 2 * half]
+        y[..., :half] = a * cos - b * sin
+        y[..., half : 2 * half] = b * cos + a * sin
+    return y
+
+
+def gen_llm():
+    for dtype in ("q4_0", "q8_0", "q4_k", "q6_k"):
+        cols = 256 if dtype.endswith("_k") else 64
+        blocks, values = random_blocks(dtype, 3, cols)
+        add(f"dequantize_{dtype}", "dequantize", [blocks], [values])
+    for dtype in ("q4_k", "q8_0"):
+        cols = 256 if dtype.endswith("_k") else 64
+        w, wv = random_blocks(dtype, 5, cols)
+        x = rand(2, 3, cols)
+        add(f"matmul_{dtype}", "matmul", [x, w], [like(x, f64(x) @ f64(wv).T)], {"transpose_b": True}, rtol=1e-5,
+            atol=1e-5)
+        bias = rand(5)
+        add(f"linear_{dtype}", "linear", [x, w, bias], [like(x, f64(x) @ f64(wv).T + f64(bias))], rtol=1e-5,
+            atol=1e-5)
+    xh = rand(4, 256, dtype=np.float16)
+    w, wv = random_blocks("q5_k", 3, 256)
+    add("matmul_f16_q5_k", "matmul", [xh, w], [like(xh, f64(xh) @ f64(wv).T)], {"transpose_b": True}, rtol=2e-3,
+        atol=2e-3)
+    table, table_values = random_blocks("q6_k", 6, 256)
+    ids = np.array([[5, 0], [2, 5]], dtype=np.int32)
+    add("gather_q6_k_rows", "gather", [table, ids], [QBlocks("q6_k", (2, 2, 256), table.raw.reshape(6, -1)[ids])])
+
+    # rope: x [B, S, H, D] with cos / sin [S, 1, R]
+    x = rand(2, 3, 2, 8)
+    angles = f64(rand(3, 1, 4, low=0.0, high=6.0))
+    cos, sin = np.cos(angles).astype(np.float32), np.sin(angles).astype(np.float32)
+    add("rope", "rope", [x, cos, sin], [like(x, rope_reference(x, cos, sin, False))], rtol=1e-5, atol=1e-5)
+    add("rope_interleaved", "rope", [x, cos, sin], [like(x, rope_reference(x, cos, sin, True))],
+        {"interleaved": True}, rtol=1e-5, atol=1e-5)
+    partial_cos, partial_sin = cos[..., :2].copy(), sin[..., :2].copy()
+    add("rope_partial", "rope", [x, partial_cos, partial_sin],
+        [like(x, rope_reference(x, partial_cos, partial_sin, False))], rtol=1e-5, atol=1e-5)
+
+    # slice_update: a KV cache [B, H, C, D] receives [B, H, S, D] at a position
+    cache = rand(1, 2, 6, 3)
+    update = rand(1, 2, 2, 3)
+    expected = cache.copy()
+    expected[:, :, 3:5] = update
+    add("slice_update", "slice_update", [cache, update, np.array(3, dtype=np.int64)], [expected], {"axis": 2})
+    expected0 = cache.copy()
+    expected0[:, :, 0:2] = update
+    add("slice_update_i32_start", "slice_update", [cache, update, np.array(0, dtype=np.int32)], [expected0],
+        {"axis": -2})
+
+    # sdpa over a preallocated cache: only kv_len keys are used; causal positions follow kv_len.
+    def cache_reference(q, k, v, kv_len, causal, window=0, scale=None):
+        qt, kt, vt = t64(q), t64(k)[:, :, :kv_len], t64(v)[:, :, :kv_len]
+        groups = qt.shape[1] // kt.shape[1]
+        kt = kt.repeat_interleave(groups, dim=1)
+        vt = vt.repeat_interleave(groups, dim=1)
+        sq = qt.shape[2]
+        position = torch.arange(sq)[:, None] + (kv_len - sq)
+        j = torch.arange(kv_len)[None, :]
+        allowed = torch.ones(sq, kv_len, dtype=torch.bool)
+        if causal:
+            allowed &= j <= position
+        if window:
+            allowed &= j > position - window
+        bias = torch.zeros(sq, kv_len, dtype=torch.float64).masked_fill(~allowed, float("-inf"))
+        return F.scaled_dot_product_attention(qt, kt, vt, attn_mask=bias, scale=scale).numpy()
+
+    q = rand(1, 4, 2, 8)
+    k = rand(1, 2, 7, 8)
+    v = rand(1, 2, 7, 8)
+    kv_len = np.array(5, dtype=np.int64)
+    add("sdpa_kv_len_causal", "sdpa", [q, k, v, kv_len], [like(q, cache_reference(q, k, v, 5, True))],
+        {"causal": True}, rtol=1e-5, atol=1e-5, absent=(3,))
+    add("sdpa_kv_len", "sdpa", [q, k, v, np.array(4, dtype=np.int32)], [like(q, cache_reference(q, k, v, 4, False))],
+        rtol=1e-5, atol=1e-5, absent=(3,))
+    qw = rand(1, 4, 4, 8)
+    add("sdpa_window", "sdpa", [qw, k, v, kv_len], [like(qw, cache_reference(qw, k, v, 5, True, window=2))],
+        {"causal": True, "window": 2}, rtol=1e-5, atol=1e-5, absent=(3,))
+
+    def softcap_reference(q, k, v, cap):
+        qt, kt, vt = t64(q), t64(k), t64(v)
+        scores = qt @ kt.transpose(-1, -2) / math.sqrt(qt.shape[-1])
+        scores = cap * torch.tanh(scores / cap)
+        sq, skv = scores.shape[-2:]
+        allowed = torch.arange(skv)[None, :] <= torch.arange(sq)[:, None] + (skv - sq)
+        scores = scores.masked_fill(~allowed, float("-inf"))
+        return (torch.softmax(scores, dim=-1) @ vt).numpy()
+
+    qs = rand(1, 2, 3, 4, low=-4, high=4)
+    ks = rand(1, 2, 5, 4, low=-4, high=4)
+    vs = rand(1, 2, 5, 4)
+    add("sdpa_softcap", "sdpa", [qs, ks, vs], [like(qs, softcap_reference(qs, ks, vs, 2.0))],
+        {"causal": True, "softcap": 2.0}, rtol=1e-5, atol=1e-5)
+
+    # 16-bit weights with f32 activations
+    xa = rand(3, 2, 16)
+    wh = rand(16, 5, dtype=np.float16)
+    add("matmul_f32_f16_weights", "matmul", [xa, wh], [like(xa, f64(xa) @ f64(wh))], rtol=1e-5, atol=1e-5)
+    wb = BF16(rand(7, 16))
+    bias = rand(7)
+    add("linear_f32_bf16_weights", "linear", [xa, wb, bias], [like(xa, f64(xa) @ f64(wb).T + f64(bias))], rtol=1e-5,
+        atol=1e-5)
+
+    # A 16-bit KV cache with f32 queries
+    kh = rand(1, 2, 7, 8, dtype=np.float16)
+    vh = rand(1, 2, 7, 8, dtype=np.float16)
+    add("sdpa_f16_cache", "sdpa", [q, kh, vh, kv_len], [like(q, cache_reference(q, kh, vh, 5, True))],
+        {"causal": True}, rtol=1e-5, atol=1e-5, absent=(3,))
+
+
 def generate() -> str:
     CASES.clear()
     gen_unary()
@@ -675,6 +836,7 @@ def generate() -> str:
     gen_quantization()
     gen_composites()
     gen_image_selection()
+    gen_llm()
     names = [c["name"] for c in CASES]
     duplicates = {n for n in names if names.count(n) > 1}
     if duplicates:

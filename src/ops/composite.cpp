@@ -28,6 +28,10 @@ bool is_float_dtype(DType dtype) noexcept {
     return is_float(dtype);
 }
 
+bool is_index_dtype(DType dtype) noexcept {
+    return dtype == DType::kI32 || dtype == DType::kI64;
+}
+
 Status infer_float_unary(const InferContext& context, std::vector<TensorType>& outputs) {
     II_TRY(expect_input(context, 0, &is_float_dtype, "a float type"));
     if (context.op.name == "gelu") {
@@ -87,7 +91,9 @@ Status infer_linear(const InferContext& context, std::vector<TensorType>& output
     II_TRY(expect_input(context, 0, &is_float_dtype, "a float type"));
     const TensorType& x = *context.input(0);
     const TensorType& w = *context.input(1);
-    if (!is_block_quantized(w.dtype)) {
+    if (x.dtype == DType::kF32 && (w.dtype == DType::kF16 || w.dtype == DType::kBF16)) {
+        // 16-bit weights with f32 activations: w is widened, the result is f32.
+    } else if (!is_block_quantized(w.dtype)) {
         II_TRY(expect_same_dtype(context, 1));
     } else if (!context.attrs.get_bool("transpose_w")) {
         return errors::invalid_argument("'linear' with a block-quantized weight requires transpose_w = true");
@@ -130,8 +136,16 @@ Cost cost_linear(const CostContext& context) {
 
 Status infer_sdpa(const InferContext& context, std::vector<TensorType>& outputs) {
     II_TRY(expect_input(context, 0, &is_float_dtype, "a float type"));
-    II_TRY(expect_same_dtype(context, 1));
-    II_TRY(expect_same_dtype(context, 2));
+    const DType kv = context.input(1)->dtype;
+    if (context.input(0)->dtype == DType::kF32 && (kv == DType::kF16 || kv == DType::kBF16)) {
+        // A 16-bit KV cache with f32 queries.
+        if (context.input(2)->dtype != kv) {
+            return errors::invalid_argument("'sdpa' k and v must have one dtype");
+        }
+    } else {
+        II_TRY(expect_same_dtype(context, 1));
+        II_TRY(expect_same_dtype(context, 2));
+    }
     for (int i = 0; i < 3; ++i) {
         II_TRY(expect_rank(context, i, 4));
     }
@@ -154,6 +168,18 @@ Status infer_sdpa(const InferContext& context, std::vector<TensorType>& outputs)
     }
     if (context.attrs.get_float("scale") == 0.0 && !q.shape[3].is_constant()) {
         return errors::invalid_argument("'sdpa' needs an explicit scale when the head size is symbolic");
+    }
+    if (const TensorType* kv_len = context.input(4)) {
+        if (!is_index_dtype(kv_len->dtype) || kv_len->rank() != 0) {
+            return errors::invalid_argument("'sdpa' kv_len must be an i32 or i64 scalar, got {}", kv_len->to_string());
+        }
+    }
+    const std::int64_t window = context.attrs.get_int("window");
+    if (window < 0 || (window > 0 && !context.attrs.get_bool("causal"))) {
+        return errors::invalid_argument("'sdpa' window must be >= 0 and requires causal = true, got {}", window);
+    }
+    if (!(context.attrs.get_float("softcap") >= 0.0)) {
+        return errors::invalid_argument("'sdpa' softcap must be >= 0");
     }
     if (const TensorType* mask = context.input(3)) {
         if (mask->dtype != DType::kBool && mask->dtype != q.dtype) {
@@ -277,6 +303,122 @@ Status decompose_linear(Builder& b, const Node& node, std::vector<Value*>& outpu
     return b.status();
 }
 
+// --- rope ---
+
+Status infer_rope(const InferContext& context, std::vector<TensorType>& outputs) {
+    II_TRY(expect_input(context, 0, &is_float_dtype, "a float type"));
+    II_TRY(expect_same_dtype(context, 1));
+    II_TRY(expect_same_dtype(context, 2));
+    const TensorType& x = *context.input(0);
+    const TensorType& cos = *context.input(1);
+    const TensorType& sin = *context.input(2);
+    if (x.rank() == 0 || cos.rank() == 0 || !(cos.shape == sin.shape)) {
+        return errors::invalid_argument("'rope' expects x of rank >= 1 and cos, sin of one shape, got {}, {} and {}",
+                                        x.to_string(), cos.to_string(), sin.to_string());
+    }
+    const Dim& size = x.shape.back();
+    const Dim& half = cos.shape.back();
+    if (!size.is_constant() || !half.is_constant() || half.value() <= 0 || 2 * half.value() > size.value()) {
+        return errors::invalid_argument("'rope' rotates 2 * {} of {} features: needs constant sizes with "
+                                        "2 * cos.shape[-1] <= x.shape[-1]",
+                                        half.to_string(), size.to_string());
+    }
+    Dims target = x.shape;
+    target.back() = half;
+    II_ASSIGN_OR_RETURN(const Dims broadcast_shape, broadcast(target, cos.shape));
+    if (!(broadcast_shape == target)) {
+        return errors::invalid_argument("'rope' cos {} does not broadcast to {}", cos.to_string(), to_string(target));
+    }
+    outputs.push_back(x);
+    return ok_status();
+}
+
+Value* slice_last(Builder& b, Value* x, std::int64_t begin, std::int64_t end) {
+    return b.op("slice", {x},
+                {{"axes", std::vector<std::int64_t>{-1}},
+                 {"starts", std::vector<std::int64_t>{begin}},
+                 {"ends", std::vector<std::int64_t>{end}}});
+}
+
+Status decompose_rope(Builder& b, const Node& node, std::vector<Value*>& outputs) {
+    Value* x = node.input(0);
+    Value* cos = node.input(1);
+    Value* sin = node.input(2);
+    const std::int64_t size = x->shape().back().value();
+    const std::int64_t half = cos->shape().back().value();
+    const std::int64_t axis = x->rank() - 1;
+    std::vector<Value*> parts;
+    if (node.attrs().get_bool("interleaved")) {
+        // Pairs (x[2i], x[2i + 1]) rotate by angle i.
+        Dims pairs = x->shape();
+        pairs.back() = Dim(half);
+        pairs.emplace_back(2);
+        Dims column = cos->shape();
+        column.emplace_back(1);
+        Value* rotated = b.op("reshape", {slice_last(b, x, 0, 2 * half)}, {{"shape", pairs}});
+        Value* even = slice_last(b, rotated, 0, 1);
+        Value* odd = slice_last(b, rotated, 1, 2);
+        Value* c = b.op("reshape", {cos}, {{"shape", column}});
+        Value* s = b.op("reshape", {sin}, {{"shape", column}});
+        Value* y_even = b.op("sub", {b.op("mul", {even, c}), b.op("mul", {odd, s})});
+        Value* y_odd = b.op("add", {b.op("mul", {odd, c}), b.op("mul", {even, s})});
+        Dims flat = x->shape();
+        flat.back() = Dim(2 * half);
+        parts.push_back(b.op("reshape", {b.op("concat", {y_even, y_odd}, {{"axis", axis + 1}})}, {{"shape", flat}}));
+    } else {
+        // Halves x[:half] and x[half:2 half] rotate (rotate_half).
+        Value* x1 = slice_last(b, x, 0, half);
+        Value* x2 = slice_last(b, x, half, 2 * half);
+        parts.push_back(b.op("sub", {b.op("mul", {x1, cos}), b.op("mul", {x2, sin})}));
+        parts.push_back(b.op("add", {b.op("mul", {x2, cos}), b.op("mul", {x1, sin})}));
+    }
+    if (2 * half < size) {
+        parts.push_back(slice_last(b, x, 2 * half, size));
+    }
+    outputs.push_back(parts.size() == 1 ? parts[0] : b.op("concat", parts, {{"axis", axis}}));
+    return b.status();
+}
+
+// --- slice_update ---
+
+Status infer_slice_update(const InferContext& context, std::vector<TensorType>& outputs) {
+    const TensorType& x = *context.input(0);
+    const TensorType& update = *context.input(1);
+    II_TRY(expect_input(context, 0, &is_plain, "a non-quantized type"));
+    II_TRY(expect_same_dtype(context, 1));
+    II_TRY(expect_input(context, 2, &is_index_dtype, "i32 or i64"));
+    if (context.input(2)->rank() != 0) {
+        return errors::invalid_argument("'slice_update' start must be a scalar");
+    }
+    if (x.rank() == 0 || x.rank() != update.rank()) {
+        return errors::invalid_argument("'slice_update' needs x and update of one rank >= 1, got {} and {}",
+                                        x.to_string(), update.to_string());
+    }
+    II_ASSIGN_OR_RETURN(const int axis, normalize_axis(context.attrs.get_int("axis"), x.rank()));
+    for (int d = 0; d < x.rank(); ++d) {
+        if (d == axis) {
+            if (x.shape[d].is_constant() && update.shape[d].is_constant() &&
+                update.shape[d].value() > x.shape[d].value()) {
+                return errors::invalid_argument("'slice_update' update {} is longer than x {} along axis {}",
+                                                update.to_string(), x.to_string(), axis);
+            }
+            continue;
+        }
+        II_TRY(expect_equal_dims(x.shape[d], update.shape[d], "'slice_update' dimension of x and update"));
+    }
+    outputs.push_back(x);
+    return ok_status();
+}
+
+Status decompose_slice_update(Builder& b, const Node& node, std::vector<Value*>& outputs) {
+    Value* update = node.input(1);
+    const std::int64_t axis = node.attrs().get_int("axis");
+    Value* positions = b.op("iota", {}, {{"shape", update->shape()}, {"axis", axis}, {"dtype", DType::kI64}});
+    Value* indices = b.op("add", {positions, b.op("cast", {node.input(2)}, {{"to", DType::kI64}})});
+    outputs.push_back(b.op("scatter", {node.input(0), indices, update}, {{"axis", axis}}));
+    return b.status();
+}
+
 /// Repeats the heads of k or v ([B, Hkv, S, D]) `groups` times: [B, Hkv * groups, S, D].
 Value* repeat_heads(Builder& b, Value* x, std::int64_t groups) {
     const Dims& s = x->shape();
@@ -303,19 +445,39 @@ Status decompose_sdpa(Builder& b, const Node& node, std::vector<Value*>& outputs
         scale = 1.0 / std::sqrt(static_cast<double>(qs[3].value()));
     }
     Value* scores = b.op("mul", {b.op("matmul", {q, k}, {{"transpose_b", true}}), b.scalar(scale, t)});
+    if (const double softcap = node.attrs().get_float("softcap"); softcap > 0.0) {
+        scores = b.op("mul", {b.op("tanh", {b.op("mul", {scores, b.scalar(1.0 / softcap, t)})}), b.scalar(softcap, t)});
+    }
     const double negative_infinity = -std::numeric_limits<double>::infinity();
     if (mask != nullptr) {
         scores = mask->dtype() == DType::kBool ? b.op("where", {mask, scores, b.scalar(negative_infinity, t)})
                                                : b.op("add", {scores, mask});
     }
-    if (node.attrs().get_bool("causal")) {
-        // Query i may attend key j iff j <= i + (Skv - Sq)  <=>  (Skv - 1 - j) >= (Sq - 1 - i).
+    const bool causal = node.attrs().get_bool("causal");
+    const std::int64_t window = node.attrs().get_int("window");
+    Value* kv_len = node.inputs().size() > 4 ? node.input(4) : nullptr;
+    if (causal || kv_len != nullptr) {
+        // With L keys in use (kv_len, or Skv), query i is at position p_i = i + L - Sq. Key j is attended iff
+        // j < L, and with causal j <= p_i (and j > p_i - window). In terms of reversed indices that need no
+        // concrete Sq: p_i - j = (L - 1 - j) - (Sq - 1 - i).
         const Dims grid{qs[2], ks[2]};
-        Value* rows =
-            b.op("flip", {b.op("iota", {}, {{"shape", grid}, {"axis", 0}})}, {{"axes", std::vector<std::int64_t>{0}}});
-        Value* cols =
-            b.op("flip", {b.op("iota", {}, {{"shape", grid}, {"axis", 1}})}, {{"axes", std::vector<std::int64_t>{1}}});
-        scores = b.op("where", {b.op("ge", {cols, rows}), scores, b.scalar(negative_infinity, t)});
+        Value* cols = b.op("iota", {}, {{"shape", grid}, {"axis", 1}});
+        Value* last_minus_j =
+            kv_len != nullptr
+                ? b.op("sub",
+                       {b.op("sub", {b.op("cast", {kv_len}, {{"to", DType::kI64}}), b.scalar(1, DType::kI64)}), cols})
+                : b.op("flip", {cols}, {{"axes", std::vector<std::int64_t>{1}}});
+        Value* keep = b.op("ge", {last_minus_j, b.scalar(0, DType::kI64)});
+        if (causal) {
+            Value* rows = b.op("flip", {b.op("iota", {}, {{"shape", grid}, {"axis", 0}})},
+                               {{"axes", std::vector<std::int64_t>{0}}});
+            Value* distance = b.op("sub", {last_minus_j, rows});
+            keep = b.op("ge", {distance, b.scalar(0, DType::kI64)});
+            if (window > 0) {
+                keep = b.op("and", {keep, b.op("lt", {distance, b.scalar(static_cast<double>(window), DType::kI64)})});
+            }
+        }
+        scores = b.op("where", {keep, scores, b.scalar(negative_infinity, t)});
     }
     Value* probabilities = b.op("softmax", {scores}, {{"axis", -1}});
     outputs.push_back(b.op("matmul", {probabilities, v}));
@@ -385,7 +547,8 @@ void register_composite_ops(ir::OpRegistry& registry) {
         .name = "linear",
         .category = "composite",
         .doc = "x @ w^T + bias for w [out, in] (transpose_w = true, the PyTorch layout) or x @ w + bias for "
-               "w [in, out]. w may be block-quantized (with transpose_w = true).",
+               "w [in, out]. w may be f16 / bf16 with an f32 x, or block-quantized (with transpose_w = true); the "
+               "result has x's dtype.",
         .inputs = {InputSpec{"x"}, InputSpec{"w"}, InputSpec{"bias", true}},
         .outputs = {OutputSpec{"y"}},
         .attrs = {AttrSpec{"transpose_w", AttrKind::kBool, true}},
@@ -398,15 +561,51 @@ void register_composite_ops(ir::OpRegistry& registry) {
         .category = "composite",
         .doc = "Scaled dot-product attention softmax(q @ k^T * scale + mask) @ v for q [B, Hq, Sq, D], "
                "k [B, Hkv, Skv, D], v [B, Hkv, Skv, Dv]; Hq must be a multiple of Hkv (grouped-query attention). "
+               "With an f32 q, k and v may be f16 / bf16 (a 16-bit KV cache); the result has q's dtype. "
                "scale = 0 means 1 / sqrt(D). mask: bool (true = attend) or additive, broadcastable to "
-               "[B, Hq, Sq, Skv]. causal: query i attends key j iff j <= i + Skv - Sq (keys of earlier steps are "
-               "at the front, as with a KV cache). Fully masked rows produce NaN.",
-        .inputs = {InputSpec{"q"}, InputSpec{"k"}, InputSpec{"v"}, InputSpec{"mask", true}},
+               "[B, Hq, Sq, Skv]. kv_len (i32 or i64 scalar, optional): only the first kv_len keys and values are "
+               "used (a preallocated KV cache); L = kv_len, or Skv without it. causal: query i (at position "
+               "i + L - Sq) attends key j iff j <= i + L - Sq (keys of earlier steps are at the front, as with a KV "
+               "cache); window > 0 (requires causal) also drops keys j <= i + L - Sq - window (sliding-window "
+               "attention). softcap > 0 squashes the scaled scores to softcap * tanh(score / softcap) before masking "
+               "(gemma2). Fully masked rows produce NaN.",
+        .inputs = {InputSpec{"q"}, InputSpec{"k"}, InputSpec{"v"}, InputSpec{"mask", true}, InputSpec{"kv_len", true}},
         .outputs = {OutputSpec{"y"}},
-        .attrs = {AttrSpec{"causal", AttrKind::kBool, false}, AttrSpec{"scale", AttrKind::kFloat, 0.0}},
+        .attrs = {AttrSpec{"causal", AttrKind::kBool, false}, AttrSpec{"scale", AttrKind::kFloat, 0.0},
+                  AttrSpec{"window", AttrKind::kInt, std::int64_t{0}}, AttrSpec{"softcap", AttrKind::kFloat, 0.0}},
         .infer = infer_sdpa,
         .decompose = decompose_sdpa,
         .cost = cost_sdpa,
+    });
+}
+
+void register_llm_ops(ir::OpRegistry& registry) {
+    registry.add(OpSchema{
+        .name = "rope",
+        .category = "composite",
+        .doc = "Rotary position embedding: rotates pairs of the first 2 * R features of x (R = cos.shape[-1]) by the "
+               "angles whose cosines and sines are given; the remaining features pass through. Pairs are "
+               "(x[i], x[i + R]) (rotate_half, GPT-NeoX / Hugging Face) or with interleaved = true "
+               "(x[2i], x[2i + 1]) (GPT-J, ggml): y_a = x_a * cos - x_b * sin, y_b = x_b * cos + x_a * sin. cos and "
+               "sin broadcast to x.shape[:-1] + [R], e.g. [S, 1, R] for x [B, S, H, D].",
+        .inputs = {InputSpec{"x"}, InputSpec{"cos"}, InputSpec{"sin"}},
+        .outputs = {OutputSpec{"y"}},
+        .attrs = {AttrSpec{"interleaved", AttrKind::kBool, false}},
+        .infer = infer_rope,
+        .decompose = decompose_rope,
+    });
+    registry.add(OpSchema{
+        .name = "slice_update",
+        .category = "composite",
+        .doc = "Copy of x with update written at offset `start` (a run-time i32 / i64 scalar) along `axis`: "
+               "y[..., start:start + U, ...] = update. Every other dimension of update equals x's. An out-of-range "
+               "start is a run-time error. Backends run it in place, so a state updated this way (a KV cache) is "
+               "never copied.",
+        .inputs = {InputSpec{"x"}, InputSpec{"update"}, InputSpec{"start"}},
+        .outputs = {OutputSpec{"y"}},
+        .attrs = {AttrSpec{"axis", AttrKind::kInt, std::nullopt}},
+        .infer = infer_slice_update,
+        .decompose = decompose_slice_update,
     });
 }
 
@@ -420,6 +619,7 @@ void register_opset(ir::OpRegistry& registry) {
     register_creation_ops(registry);
     register_quantization_ops(registry);
     register_composite_ops(registry);
+    register_llm_ops(registry);
     register_internal_ops(registry);
 }
 

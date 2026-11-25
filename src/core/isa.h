@@ -19,10 +19,12 @@ namespace ii {
 
 /// Kernel ISA variants, ordered from baseline to most advanced within each architecture.
 enum class Isa : std::uint8_t {
-    kGeneric,  ///< Portable C++ compiled for the architecture baseline (x86-64: SSE2, Arm64: NEON).
-    kAvx2,     ///< x86-64: AVX2 + FMA + F16C.
-    kAvx512,   ///< x86-64: AVX-512 F/BW/VL/DQ.
-    kNeon,     ///< Arm64: explicit NEON intrinsics.
+    kGeneric,      ///< Portable C++ compiled for the architecture baseline (x86-64: SSE2, Arm64: NEON).
+    kAvx2,         ///< x86-64: AVX2 + FMA + F16C.
+    kAvx512,       ///< x86-64: AVX-512 F/BW/VL/DQ.
+    kNeon,         ///< Arm64: explicit NEON intrinsics.
+    kAvxVnni,      ///< x86-64: the AVX2 kernels plus AVX-VNNI int8 dot products (vpdpbusd).
+    kNeonDotprod,  ///< Arm64: the NEON kernels plus int8 dot products (sdot, Armv8.2 dotprod).
 };
 
 std::string_view isa_name(Isa isa) noexcept;

@@ -14,6 +14,7 @@ add_executable(ii_tests
     support/test_util.cpp
     unit/api/c_api_test.cpp
     unit/backends/cpu_backend_test.cpp
+    unit/backends/cpu_quant_test.cpp
     unit/compiler/pass_invariance_test.cpp
     unit/compiler/passes_test.cpp
     unit/core/allocator_test.cpp
@@ -27,6 +28,7 @@ add_executable(ii_tests
     unit/core/status_test.cpp
     unit/core/system_info_test.cpp
     unit/core/thread_pool_test.cpp
+    unit/formats/gguf_test.cpp
     unit/formats/npy_test.cpp
     unit/formats/onnx_test.cpp
     unit/platform/dynlib_test.cpp
@@ -35,10 +37,13 @@ add_executable(ii_tests
     unit/runtime/memory_planner_test.cpp
     unit/runtime/session_test.cpp
     unit/ir/graph_test.cpp
+    unit/llm/jinja_test.cpp
+    unit/llm/llm_test.cpp
     unit/ir/text_test.cpp
     unit/ops/conformance_test.cpp
     unit/ops/shape_inference_test.cpp
     unit/tensor/dim_test.cpp
+    unit/tensor/quant_test.cpp
     unit/tensor/tensor_test.cpp)
 
 target_include_directories(ii_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

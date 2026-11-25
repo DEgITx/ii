@@ -14,10 +14,12 @@ namespace {
 constexpr std::int64_t kRowsPerItem = 8;
 
 Status check_sdpa(const ir::Node& node) {
-    for (int i = 0; i < 3; ++i) {
-        if (node.input(i)->dtype() != DType::kF32) {
-            return errors::unsupported("'sdpa' is accelerated for f32 only");
-        }
+    if (node.input(0)->dtype() != DType::kF32) {
+        return errors::unsupported("'sdpa' is accelerated for f32 queries only");
+    }
+    const DType kv = node.input(1)->dtype();
+    if ((kv != DType::kF32 && kv != DType::kF16) || node.input(2)->dtype() != kv) {
+        return errors::unsupported("'sdpa' is accelerated for f32 or f16 keys and values");
     }
     if (const ir::Value* mask = node.input(3)) {
         if (mask->dtype() != DType::kF32 && mask->dtype() != DType::kBool) {
@@ -32,14 +34,17 @@ Status check_sdpa(const ir::Node& node) {
 
 class AttentionKernel final : public Kernel {
 public:
-    AttentionKernel(const CpuConfig& config, bool causal, double scale)
-        : table_(config.table), threads_(config.threads), causal_(causal), scale_(scale) {}
+    AttentionKernel(const CpuConfig& config, bool causal, double scale, std::int64_t window, double softcap)
+        : table_(config.table),
+          threads_(config.threads),
+          causal_(causal),
+          scale_(scale),
+          window_(window),
+          softcap_(softcap) {}
 
     std::size_t workspace_size(std::span<const Shape> inputs, std::span<const Shape> outputs) const override {
         (void)outputs;
-        const Shape& k = inputs[1];
-        const auto kv_len = static_cast<std::size_t>(k[2]);
-        return static_cast<std::size_t>(threads_) * ((kv_len * 4 + 63) / 64 * 64);
+        return static_cast<std::size_t>(threads_) * row_bytes(inputs[1][2]);
     }
 
     Status run(const KernelContext& context) const override {
@@ -57,7 +62,18 @@ public:
         const std::int64_t dv = v.shape[3];
         const std::int64_t group = hq / hkv;
         const float scale = static_cast<float>(scale_ != 0.0 ? scale_ : 1.0 / std::sqrt(static_cast<double>(d)));
-        const std::size_t row_bytes = (static_cast<std::size_t>(skv) * 4 + 63) / 64 * 64;
+        const std::size_t scratch_bytes = row_bytes(skv);
+        // Keys in use: kv_len (a preallocated KV cache) or all.
+        std::int64_t used = skv;
+        if (context.inputs.size() > 4 && context.input(4).present()) {
+            const TensorView& kv_len = context.input(4);
+            used = kv_len.dtype == DType::kI32 ? *kv_len.as<const std::int32_t>() : *kv_len.as<const std::int64_t>();
+            if (used < 0 || used > skv) {
+                return errors::out_of_range("'sdpa' kv_len {} is outside [0, {}]", used, skv);
+            }
+        }
+        const Elem kv_elem = k.dtype == DType::kF16 ? Elem::kF16 : Elem::kF32;
+        const std::int64_t kv_size = kv_elem == Elem::kF16 ? 2 : 4;
 
         // Mask strides over [B, H, Sq, Skv] (right-aligned, 0 along broadcast dimensions).
         std::int64_t mask_strides[4] = {0, 0, 0, 0};
@@ -75,10 +91,10 @@ public:
 
         const std::int64_t rows = batch * hq * sq;
         const std::int64_t items = (rows + kRowsPerItem - 1) / kRowsPerItem;
-        const int slots = rows * skv * d < 65536 ? 1 : threads_;
+        const int slots = rows * used * d < 65536 ? 1 : threads_;
         parallel_slots(context, slots, items, [&](int slot, std::int64_t item) {
             auto* scratch =
-                reinterpret_cast<float*>(context.workspace.data() + static_cast<std::size_t>(slot) * row_bytes);
+                reinterpret_cast<float*>(context.workspace.data() + static_cast<std::size_t>(slot) * scratch_bytes);
             const std::int64_t end = std::min(rows, (item + 1) * kRowsPerItem);
             for (std::int64_t row = item * kRowsPerItem; row < end; ++row) {
                 const std::int64_t i = row % sq;
@@ -87,15 +103,19 @@ public:
                 const std::int64_t hk = h / group;
                 AttentionRowArgs args{};
                 args.q = q.as<float>() + row * d;
-                args.k = k.as<float>() + (b * hkv + hk) * skv * d;
+                args.k = static_cast<const std::uint8_t*>(k.data) + (b * hkv + hk) * skv * d * kv_size;
                 args.k_stride = d;
-                args.v = v.as<float>() + (b * hkv + hk) * skv * dv;
+                args.v = static_cast<const std::uint8_t*>(v.data) + (b * hkv + hk) * skv * dv * kv_size;
                 args.v_stride = dv;
+                args.kv_elem = kv_elem;
                 args.d = d;
                 args.dv = dv;
-                args.kv_len = skv;
-                args.kv_limit = causal_ ? std::clamp<std::int64_t>(i + skv - sq + 1, 0, skv) : skv;
+                args.kv_len = used;
+                const std::int64_t position = i + used - sq;  // of the query among the keys in use
+                args.kv_limit = causal_ ? std::clamp<std::int64_t>(position + 1, 0, used) : used;
+                args.kv_start = window_ > 0 ? std::clamp<std::int64_t>(position - window_ + 1, 0, used) : 0;
                 args.scale = scale;
+                args.softcap = static_cast<float>(softcap_);
                 args.mask_kind = mask_kind;
                 if (mask_kind != MaskKind::kNone) {
                     const std::int64_t offset = b * mask_strides[0] + h * mask_strides[1] + i * mask_strides[2];
@@ -111,15 +131,21 @@ public:
     }
 
 private:
+    /// Per-thread scratch: scores of every key plus room for the output row.
+    static std::size_t row_bytes(std::int64_t keys) { return (static_cast<std::size_t>(keys) * 4 + 63) / 64 * 64 + 64; }
+
     const KernelTable* table_;
     int threads_;
     bool causal_;
     double scale_;
+    std::int64_t window_;
+    double softcap_;
 };
 
 Result<std::unique_ptr<Kernel>> create_sdpa(const ir::Node& node, const CpuConfig& config) {
     return std::unique_ptr<Kernel>(
-        std::make_unique<AttentionKernel>(config, node.attrs().get_bool("causal"), node.attrs().get_float("scale")));
+        std::make_unique<AttentionKernel>(config, node.attrs().get_bool("causal"), node.attrs().get_float("scale"),
+                                          node.attrs().get_int("window"), node.attrs().get_float("softcap")));
 }
 
 }  // namespace

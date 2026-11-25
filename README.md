@@ -10,7 +10,9 @@ An efficient, embeddable C++ library for neural network inference (first and for
 - **Correct by construction** — the reference backend `ii-ref` and differential tests for every fast path.
 - **Easy to embed** — zero mandatory dependencies, no global state, stable C ABI.
 - **Formats** — GGUF, safetensors, ONNX, native `.ii`.
-- **`ii` CLI** — `info`, `run`, `chat`, `bench`, `inspect`, `quantize`, `convert`.
+- **Language models** — llama, qwen2/3, gemma 1/2/3, phi3 from GGUF (llama.cpp quantizations used in place) or
+  Hugging Face safetensors; own tokenizers, chat templates and sampling.
+- **`ii` CLI** — `info`, `run`, `generate`, `chat`, `bench`, `perplexity`, `inspect`, `quantize`, `tokenize`.
 
 ## Example
 
@@ -39,6 +41,22 @@ ii_example_yolo yolov8n.onnx bus.jpg result.jpg        # examples/yolo: detectio
 
 More: [examples/](examples) (C++ and C), `ii inspect model.onnx`, `ii run model.onnx --profile trace.json`, `ii ops`.
 
+Language models (GGUF files as published for llama.cpp, or Hugging Face model directories):
+
+```cpp
+auto llm  = ii::llm::Llm::load(context, "qwen2.5-0.5b-instruct-q4_k_m.gguf").value();
+auto chat = llm.new_chat({.temperature = 0.7f}).value();
+chat.send("Hi! Who are you?", [](std::string_view piece) { std::cout << piece << std::flush; return true; });
+```
+
+```sh
+ii chat Llama-3.2-1B-Instruct-Q4_K_M.gguf
+ii generate Qwen3-0.6B-Q8_0.gguf --chat -p "Name three planets." --temp 0
+ii bench tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf --llm -p 512 -n 128      # prompt / generation tokens per second
+ii perplexity models/TinyLlama-1.1B-Chat-v1.0 -f wiki.test.raw            # a Hugging Face directory works too
+ii quantize model-f16.gguf model-q4_k_m.gguf --type q4_k_m
+```
+
 ## Build
 
 ```sh
@@ -50,10 +68,14 @@ Details: [building guide](docs/guides/building.md), [contributing](CONTRIBUTING.
 
 > Status: stages 0 (foundation), 1 (tensors, IR, OpSet v1, the reference backend `ii-ref`, runtime, C++ and C
 > APIs), 2 (the optimized CPU backend `ii-cpu`: SIMD for generic / AVX2 / AVX-512 / NEON, GEMM on par with
-> OpenBLAS, operation fusion, profiler, Android) and 3 (ONNX import, convolutions, `.npy`/`.npz`, images in the CLI,
-> YOLOv8 example, model tests against ONNX Runtime) are implemented. See [architecture](docs/architecture.md), [OpSet reference](docs/opset.md),
-> [roadmap](docs/roadmap.md) (in Russian), [testing and benchmarks](docs/testing-and-benchmarks.md),
-> [CI/CD](docs/ci.md), [adding an operation](docs/guides/adding-an-op.md).
+> OpenBLAS, operation fusion, profiler, Android), 3 (ONNX import, convolutions, `.npy`/`.npz`, images in the CLI,
+> YOLOv8 example, model tests against ONNX Runtime) and 4 (language models: GGUF and safetensors, quantized kernels
+> for AVX2 / AVX-VNNI / NEON dot products, KV cache, tokenizers, chat templates, `ii generate` / `chat` /
+> `perplexity` / `quantize`, results checked against transformers) are implemented. See
+> [architecture](docs/architecture.md), [OpSet reference](docs/opset.md), [roadmap](docs/roadmap.md) (in Russian),
+> [testing and benchmarks](docs/testing-and-benchmarks.md),
+> [CI/CD](docs/ci.md), [adding an operation](docs/guides/adding-an-op.md),
+> [adding a language model architecture](docs/guides/adding-an-llm-architecture.md).
 
 ## License
 

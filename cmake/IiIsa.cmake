@@ -16,8 +16,8 @@
 #   * they include only headers without inline functions or templates that could be instantiated with ISA flags
 #     (intrinsics headers, <cstddef>, <cstdint>, and kernel declaration headers).
 
-set(_ii_isas_x86_64 generic avx2 avx512)
-set(_ii_isas_arm64 generic neon)
+set(_ii_isas_x86_64 generic avx2 avx_vnni avx512)
+set(_ii_isas_arm64 generic neon neon_dotprod)
 set(_ii_isas_generic generic)
 
 set(_ii_available_isas ${_ii_isas_${II_TARGET_ARCH}})
@@ -46,7 +46,7 @@ endforeach()
 function(ii_isa_compile_options isa out_var)
     set(_flags "")
     if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-        if(isa STREQUAL "avx2")
+        if(isa STREQUAL "avx2" OR isa STREQUAL "avx_vnni")
             set(_flags /arch:AVX2)
         elseif(isa STREQUAL "avx512")
             set(_flags /arch:AVX512)
@@ -55,12 +55,16 @@ function(ii_isa_compile_options isa out_var)
         # GCC, Clang and clang-cl accept GCC-style -m flags.
         if(isa STREQUAL "avx2")
             set(_flags -mavx2 -mfma -mf16c)
+        elseif(isa STREQUAL "avx_vnni")
+            set(_flags -mavx2 -mfma -mf16c -mavxvnni)
         elseif(isa STREQUAL "avx512")
             set(_flags -mavx512f -mavx512bw -mavx512vl -mavx512dq -mavx2 -mfma -mf16c)
+        elseif(isa STREQUAL "neon_dotprod")
+            set(_flags -march=armv8.2-a+dotprod)
         endif()
         # MinGW GCC does not realign the stack for 32/64-byte vector spills (GCC bug 54412) and may emit aligned
         # moves to misaligned stack slots. Ask the assembler to turn them into unaligned moves.
-        if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND isa MATCHES "^(avx2|avx512)$")
+        if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND isa MATCHES "^(avx2|avx_vnni|avx512)$")
             list(APPEND _flags -Wa,-muse-unaligned-vector-move)
         endif()
     endif()

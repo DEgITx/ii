@@ -350,7 +350,7 @@ The `k` largest (or smallest) elements along `axis` and their indices (i64), in 
 
 `matmul(a, b) -> y`
 
-Matrix product with numpy semantics: batch dimensions broadcast, 1-D operands are promoted to matrices and the promoted dimension is removed. transpose_a / transpose_b swap the last two dimensions of an operand of rank >= 2. b may be block-quantized ([N, K], transpose_b = true).
+Matrix product with numpy semantics: batch dimensions broadcast, 1-D operands are promoted to matrices and the promoted dimension is removed. transpose_a / transpose_b swap the last two dimensions of an operand of rank >= 2. With an f32 a, b may be f16 / bf16 (widened; the result is f32). b may be block-quantized ([N, K], transpose_b = true; the result has a's dtype).
 
 | Attribute | Kind | Default |
 |---|---|---|
@@ -711,7 +711,7 @@ x / sqrt(mean(x^2) + epsilon) * scale, with the mean over the dimensions from `a
 
 `linear(x, w, bias?) -> y`
 
-x @ w^T + bias for w [out, in] (transpose_w = true, the PyTorch layout) or x @ w + bias for w [in, out]. w may be block-quantized (with transpose_w = true).
+x @ w^T + bias for w [out, in] (transpose_w = true, the PyTorch layout) or x @ w + bias for w [in, out]. w may be f16 / bf16 with an f32 x, or block-quantized (with transpose_w = true); the result has x's dtype.
 
 | Attribute | Kind | Default |
 |---|---|---|
@@ -719,12 +719,34 @@ x @ w^T + bias for w [out, in] (transpose_w = true, the PyTorch layout) or x @ w
 
 ### `sdpa` (composite)
 
-`sdpa(q, k, v, mask?) -> y`
+`sdpa(q, k, v, mask?, kv_len?) -> y`
 
-Scaled dot-product attention softmax(q @ k^T * scale + mask) @ v for q [B, Hq, Sq, D], k [B, Hkv, Skv, D], v [B, Hkv, Skv, Dv]; Hq must be a multiple of Hkv (grouped-query attention). scale = 0 means 1 / sqrt(D). mask: bool (true = attend) or additive, broadcastable to [B, Hq, Sq, Skv]. causal: query i attends key j iff j <= i + Skv - Sq (keys of earlier steps are at the front, as with a KV cache). Fully masked rows produce NaN.
+Scaled dot-product attention softmax(q @ k^T * scale + mask) @ v for q [B, Hq, Sq, D], k [B, Hkv, Skv, D], v [B, Hkv, Skv, Dv]; Hq must be a multiple of Hkv (grouped-query attention). With an f32 q, k and v may be f16 / bf16 (a 16-bit KV cache); the result has q's dtype. scale = 0 means 1 / sqrt(D). mask: bool (true = attend) or additive, broadcastable to [B, Hq, Sq, Skv]. kv_len (i32 or i64 scalar, optional): only the first kv_len keys and values are used (a preallocated KV cache); L = kv_len, or Skv without it. causal: query i (at position i + L - Sq) attends key j iff j <= i + L - Sq (keys of earlier steps are at the front, as with a KV cache); window > 0 (requires causal) also drops keys j <= i + L - Sq - window (sliding-window attention). softcap > 0 squashes the scaled scores to softcap * tanh(score / softcap) before masking (gemma2). Fully masked rows produce NaN.
 
 | Attribute | Kind | Default |
 |---|---|---|
 | `causal` | bool | `false` |
 | `scale` | float | `0.0` |
+| `window` | int | `0` |
+| `softcap` | float | `0.0` |
+
+### `rope` (composite)
+
+`rope(x, cos, sin) -> y`
+
+Rotary position embedding: rotates pairs of the first 2 * R features of x (R = cos.shape[-1]) by the angles whose cosines and sines are given; the remaining features pass through. Pairs are (x[i], x[i + R]) (rotate_half, GPT-NeoX / Hugging Face) or with interleaved = true (x[2i], x[2i + 1]) (GPT-J, ggml): y_a = x_a * cos - x_b * sin, y_b = x_b * cos + x_a * sin. cos and sin broadcast to x.shape[:-1] + [R], e.g. [S, 1, R] for x [B, S, H, D].
+
+| Attribute | Kind | Default |
+|---|---|---|
+| `interleaved` | bool | `false` |
+
+### `slice_update` (composite)
+
+`slice_update(x, update, start) -> y`
+
+Copy of x with update written at offset `start` (a run-time i32 / i64 scalar) along `axis`: y[..., start:start + U, ...] = update. Every other dimension of update equals x's. An out-of-range start is a run-time error. Backends run it in place, so a state updated this way (a KV cache) is never copied.
+
+| Attribute | Kind | Default |
+|---|---|---|
+| `axis` | int | required |
 

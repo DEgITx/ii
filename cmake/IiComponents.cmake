@@ -54,6 +54,12 @@ function(ii_add_isa_component name)
     target_compile_options(${target} PRIVATE ${_flags})
     string(TOUPPER "${ARG_ISA}" isa_upper)
     target_compile_definitions(${target} PRIVATE II_ISA_NS=${ARG_ISA} II_ISA_IS_${isa_upper}=1)
+    # Extensions of a base variant use its kernels (II_ISA_IS_<BASE>) plus their own instructions.
+    if(ARG_ISA STREQUAL "avx_vnni")
+        target_compile_definitions(${target} PRIVATE II_ISA_IS_AVX2=1)
+    elseif(ARG_ISA STREQUAL "neon_dotprod")
+        target_compile_definitions(${target} PRIVATE II_ISA_IS_NEON=1)
+    endif()
 endfunction()
 
 function(ii_add_link_libraries)

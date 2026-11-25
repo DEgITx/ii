@@ -1,0 +1,1 @@
+{% set ns = namespace(n=0) %}{% macro f(a, b=2) %}{{ a + b }}{% endmacro %}{% for i in range(3) %}{% set ns.n = ns.n + i %}{{ f(i) }}{% endfor %}{{ ns.n }}{{ {'a': [1, 2]} | tojson }}

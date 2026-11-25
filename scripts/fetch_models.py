@@ -2,7 +2,9 @@
 """Downloads the models listed in tests/models/manifest.json into a cache directory and verifies their SHA-256.
 
 Models given as a `source` with `"export": "ultralytics"` are PyTorch checkpoints exported to ONNX with the
-`ultralytics` package (pip install ultralytics). Already present and verified files are not downloaded again.
+`ultralytics` package (pip install ultralytics). Language models ("llms") are a GGUF file or a Hugging Face directory
+(a list of files); the test text for perplexity is fetched with them. Already present and verified files are not
+downloaded again.
 
     python scripts/fetch_models.py --cache ~/.cache/ii-models [--suite pr|nightly] [--only name]
 """
@@ -60,10 +62,10 @@ def export_ultralytics(checkpoint: pathlib.Path, target: pathlib.Path) -> None:
         exported.replace(target)
 
 
-def models(suite: str, only: str | None):
+def models(suite: str, only: str | None, section: str = "models"):
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     order = {"pr": 0, "nightly": 1}
-    for model in manifest["models"]:
+    for model in manifest.get(section, []):
         if order[model["suite"]] > order[suite]:
             continue
         if only and model["name"] != only:
@@ -92,6 +94,33 @@ def fetch(model: dict, cache: pathlib.Path) -> pathlib.Path:
     return target
 
 
+def fetch_llm(model: dict, cache: pathlib.Path) -> pathlib.Path:
+    """A GGUF file (cache/<name>.gguf) or a Hugging Face directory (cache/<name>/)."""
+    if "files" in model:
+        directory = cache / model["name"]
+        directory.mkdir(parents=True, exist_ok=True)
+        for file in model["files"]:
+            download(file["url"], file["sha256"], directory / file["path"])
+        return directory
+    target = cache / f"{model['name']}.gguf"
+    download(model["url"], model["sha256"], target)
+    return target
+
+
+def fetch_text(cache: pathlib.Path) -> pathlib.Path:
+    """The perplexity test text (wikitext-2 test split), extracted from its archive."""
+    import zipfile
+
+    text = json.loads(MANIFEST.read_text(encoding="utf-8"))["text"]
+    archive = cache / pathlib.Path(text["url"]).name
+    download(text["url"], text["sha256"], archive)
+    target = cache / pathlib.Path(text["member"]).name
+    if not target.exists():
+        with zipfile.ZipFile(archive) as z:
+            target.write_bytes(z.read(text["member"]))
+    return target
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cache", default=os.environ.get("II_MODEL_CACHE", "build/models-cache"))
@@ -103,6 +132,11 @@ def main() -> int:
     for model in models(args.suite, args.only):
         path = fetch(model, cache)
         print(f"{model['name']}: {path}")
+    llms = list(models(args.suite, args.only, "llms"))
+    for model in llms:
+        print(f"{model['name']}: {fetch_llm(model, cache)}")
+    if any("perplexity_chunks" in model for model in llms):
+        print(f"text: {fetch_text(cache)}")
     return 0
 
 

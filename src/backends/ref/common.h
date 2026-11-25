@@ -293,6 +293,36 @@ std::unique_ptr<Kernel> make_kernel(Fn fn) {
     return std::make_unique<FunctionKernel<Fn>>(std::move(fn));
 }
 
+/// A kernel with scratch memory: `workspace(inputs, outputs)` returns its size in bytes for concrete shapes.
+template <class Fn, class WorkspaceFn>
+class WorkspaceKernel final : public Kernel {
+public:
+    WorkspaceKernel(Fn fn, WorkspaceFn workspace) : fn_(std::move(fn)), workspace_(std::move(workspace)) {}
+    std::size_t workspace_size(std::span<const Shape> inputs, std::span<const Shape> outputs) const override {
+        return workspace_(inputs, outputs);
+    }
+    Status run(const KernelContext& context) const override { return fn_(context); }
+
+private:
+    Fn fn_;
+    WorkspaceFn workspace_;
+};
+
+template <class Fn, class WorkspaceFn>
+std::unique_ptr<Kernel> make_kernel(Fn fn, WorkspaceFn workspace) {
+    return std::make_unique<WorkspaceKernel<Fn, WorkspaceFn>>(std::move(fn), std::move(workspace));
+}
+
+/// y[r, n] = sum_k x[r, k] * dequantize(w)[n, k] (+ bias[n]) for a block-quantized weight w [N, K] and float x, y and
+/// bias of dtype `dtype`, computed in double. `scratch` holds K floats (one dequantized weight row).
+Status block_quantized_product(DType dtype, const void* x, std::int64_t rows, std::int64_t k, const void* w,
+                               DType w_dtype, std::int64_t n, const void* bias, void* y, float* scratch);
+
+/// Workspace of `block_quantized_product` for a weight of shape `w`.
+inline std::size_t block_quantized_workspace(const Shape& w) noexcept {
+    return static_cast<std::size_t>(w[1]) * sizeof(float);
+}
+
 /// Registration functions for the kernel groups.
 void register_elementwise_kernels(backend::KernelBackend& backend);
 void register_reduction_kernels(backend::KernelBackend& backend);

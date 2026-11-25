@@ -5,6 +5,7 @@
 #include "commands.h"
 #include "console.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <format>
 #include <string>
@@ -20,7 +21,12 @@ Commands:
   inspect     Describe a model and its execution plan
   ops         List the operations of the OpSet
   run         Run a model (ONNX or ii text) on inputs from files or random ones; outputs, timings, profile
-  bench       Benchmark a model: latency percentiles and throughput
+  bench       Benchmark a model: latency percentiles and throughput; language models: pp / tg tokens per second
+  generate    Generate text with a language model (GGUF or Hugging Face directory)
+  chat        Chat with a language model
+  perplexity  Perplexity of a language model on a text file
+  quantize    Convert the weights of a GGUF model (q4_k_m, q8_0, ...)
+  tokenize    Show the tokens of a text for a language model
   version     Print the version
   help        Show this help
 
@@ -58,7 +64,24 @@ int main(int argc, char** argv) {
         return ii::cli::run_run(rest);
     }
     if (command == "bench") {
-        return ii::cli::run_bench(rest);
+        const bool llm = std::find(rest.begin(), rest.end(), "--llm") != rest.end() ||
+                         (!rest.empty() && ii::cli::is_llm_path(rest.front()));
+        return llm ? ii::cli::run_llm_bench(rest) : ii::cli::run_bench(rest);
+    }
+    if (command == "generate") {
+        return ii::cli::run_generate(rest);
+    }
+    if (command == "chat") {
+        return ii::cli::run_chat(rest);
+    }
+    if (command == "perplexity") {
+        return ii::cli::run_perplexity(rest);
+    }
+    if (command == "quantize") {
+        return ii::cli::run_quantize(rest);
+    }
+    if (command == "tokenize") {
+        return ii::cli::run_tokenize(rest);
     }
     if (command == "version" || command == "--version" || command == "-V") {
         return print_version();

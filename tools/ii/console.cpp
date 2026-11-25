@@ -12,6 +12,7 @@
 #endif
 
 #include <cstdio>
+#include <iostream>
 
 namespace ii::cli {
 
@@ -47,6 +48,47 @@ std::vector<std::string> init_console(int argc, char** argv) {
         args.emplace_back(argv[i]);
     }
     return args;
+}
+
+bool read_line(std::string& line) {
+    line.clear();
+#if defined(_WIN32)
+    // Console input through ReadConsoleW: UTF-8 reads of the console are unreliable for non-ASCII text.
+    HANDLE input = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    if (input != INVALID_HANDLE_VALUE && GetConsoleMode(input, &mode)) {
+        std::wstring wide;
+        wchar_t buffer[512];
+        while (true) {
+            DWORD read = 0;
+            if (!ReadConsoleW(input, buffer, 512, &read, nullptr) || read == 0) {
+                if (wide.empty()) {
+                    return false;
+                }
+                break;
+            }
+            wide.append(buffer, read);
+            if (wide.back() == L'\n') {
+                break;
+            }
+        }
+        while (!wide.empty() && (wide.back() == L'\n' || wide.back() == L'\r')) {
+            wide.pop_back();
+        }
+        if (wide.size() == 1 && wide[0] == 26) {  // Ctrl+Z
+            return false;
+        }
+        line = narrow(wide.c_str());
+        return true;
+    }
+#endif
+    if (!std::getline(std::cin, line)) {
+        return false;
+    }
+    if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+    }
+    return true;
 }
 
 bool stdout_is_terminal() {

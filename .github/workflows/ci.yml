@@ -246,12 +246,12 @@ jobs:
           environmentVariableName: SDE_PATH
           sdeVersion: 10.13.1
 
-      - name: ii-cpu tests on an emulated AVX-512 CPU
+      - name: ii-cpu tests on an emulated AVX-512 / AVX-VNNI CPU
         env:
           II_TEST_DATA_DIR: ${{ github.workspace }}/tests/data
         run: |
           "$SDE_PATH/sde64" -spr -- ./build/linux-clang/bin/Release/ii_tests \
-            --gtest_brief=1 --gtest_filter='Isa/*:*CpuConformance*avx512*:CpuBackend*'
+            --gtest_brief=1 --gtest_filter='Isa/*:*CpuConformance*avx512*:CpuBackend*:*QuantKernel*'
 
   # Android: arm64-v8a is cross-built; x86_64 is built and tested on an emulator (scripts/android_run.py runs every
   # ctest entry through adb).
@@ -370,3 +370,6 @@ jobs:
         run: |
           python scripts/model_tests.py --cache ~/.cache/ii-models --suite pr \
             --ii build/linux-clang/bin/Release/ii --yolo build/linux-clang/bin/Release/ii_example_yolo
+
+      - name: Language models
+        run: python scripts/llm_tests.py --cache ~/.cache/ii-models --suite pr --ii build/linux-clang/bin/Release/ii

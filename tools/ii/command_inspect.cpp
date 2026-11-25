@@ -76,6 +76,9 @@ int run_inspect(const std::vector<std::string>& args) {
         return 2;
     }
     const std::string& path = parsed->positionals().front();
+    if (is_llm_path(path) && path.size() > 5 && path.substr(path.size() - 5) == ".gguf") {
+        return inspect_gguf(path, parsed->flag("graph"));
+    }
     auto fail = [&](const Status& status) {
         std::fprintf(stderr, "ii inspect: %s: %s\n", path.c_str(), status.to_string().c_str());
         return 1;

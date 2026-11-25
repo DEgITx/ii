@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Reference kernels: unary, binary, where, cast, clamp, quantize, dequantize.
 #include "backends/ref/common.h"
+#include "tensor/quant.h"
 
 namespace ii::ref {
 
@@ -480,14 +481,20 @@ Result<std::unique_ptr<Kernel>> quantize_kernel(const ir::Node& node) {
     });
 }
 
-Status check_dequantize(const ir::Node& node) {
-    if (is_block_quantized(node.input(0)->dtype())) {
-        return errors::unsupported("dequantization of block-quantized tensors is not implemented yet");
-    }
+Status check_dequantize(const ir::Node&) {
     return ok_status();
 }
 
 Result<std::unique_ptr<Kernel>> dequantize_kernel(const ir::Node& node) {
+    if (is_block_quantized(node.input(0)->dtype())) {
+        return make_kernel([](const KernelContext& context) -> Status {
+            const TensorView& x = context.input(0);
+            const std::int64_t row = x.rank() == 0 ? 1 : x.shape[x.rank() - 1];
+            II_TRY(quant::check_row(x.dtype, row));
+            quant::dequantize(x.dtype, x.data, context.output(0).as<float>(), x.numel());
+            return ok_status();
+        });
+    }
     const std::int64_t axis = node.attrs().get_int("axis");
     return make_kernel([axis](const KernelContext& context) -> Status {
         const TensorView& x = context.input(0);

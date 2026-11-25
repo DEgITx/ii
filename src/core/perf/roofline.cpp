@@ -31,6 +31,7 @@ FmaKernel fma_kernel(Isa isa) noexcept {
     switch (isa) {
 #if defined(II_HAVE_ISA_AVX2)
     case Isa::kAvx2:
+    case Isa::kAvxVnni:  // same floating-point instructions
         return II_FMA_KERNEL(avx2);
 #endif
 #if defined(II_HAVE_ISA_AVX512)
@@ -39,6 +40,7 @@ FmaKernel fma_kernel(Isa isa) noexcept {
 #endif
 #if defined(II_HAVE_ISA_NEON)
     case Isa::kNeon:
+    case Isa::kNeonDotprod:
         return II_FMA_KERNEL(neon);
 #endif
     default:

@@ -227,7 +227,9 @@ double percentile(std::vector<double> values, double p) {
     return values[low] + (values[high] - values[low]) * (rank - static_cast<double>(low));
 }
 
-void print_summary(const std::vector<Profile>& profiles) {
+}  // namespace
+
+void print_profile_summary(const std::vector<Profile>& profiles) {
     struct Row {
         std::string op;
         std::string backend;
@@ -259,6 +261,8 @@ void print_summary(const std::vector<Profile>& profiles) {
                     total > 0 ? 100.0 * row.total_us / total : 0.0);
     }
 }
+
+namespace {
 
 /// Prints the K largest values of the last dimension (of the first row) of a float output.
 void print_top(const std::string& name, const Tensor& output, int k) {
@@ -544,7 +548,7 @@ int run_model(const std::vector<std::string>& args, bool bench) {
     }
 
     if (profile_path) {
-        print_summary(profiles);
+        print_profile_summary(profiles);
         std::ofstream file(to_path(*profile_path), std::ios::binary);
         file << to_chrome_trace(profiles);
         if (!file) {

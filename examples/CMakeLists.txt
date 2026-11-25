@@ -15,6 +15,10 @@ add_executable(ii_example_mlp mlp/main.cpp)
 target_link_libraries(ii_example_mlp PRIVATE ii::ii)
 target_compile_features(ii_example_mlp PRIVATE cxx_std_20)
 
+add_executable(ii_example_llm llm/main.cpp)
+target_link_libraries(ii_example_llm PRIVATE ii::ii)
+target_compile_features(ii_example_llm PRIVATE cxx_std_20)
+
 add_executable(ii_example_c_api c_api/main.c)
 target_link_libraries(ii_example_c_api PRIVATE ii::ii)
 set_target_properties(ii_example_c_api PROPERTIES
@@ -42,6 +46,7 @@ target_compile_features(ii_example_yolo PRIVATE cxx_std_20)
 
 if(TARGET ii_build_options)
     target_link_libraries(ii_example_mlp PRIVATE ii_build_options)
+    target_link_libraries(ii_example_llm PRIVATE ii_build_options)
     target_link_libraries(ii_example_yolo PRIVATE ii_build_options)
 endif()
 
@@ -49,6 +54,11 @@ endif()
 if(BUILD_TESTING OR II_BUILD_TESTS)
     add_test(NAME example_mlp COMMAND ii_example_mlp)
     add_test(NAME example_c_api COMMAND ii_example_c_api)
+    # A tiny random model of the test data (part of the ii repository, not of a standalone examples build).
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../tests/data/llm/qwen3.gguf")
+        add_test(NAME example_llm COMMAND ii_example_llm "${CMAKE_CURRENT_SOURCE_DIR}/../tests/data/llm/qwen3.gguf" "Hi")
+        set_tests_properties(example_llm PROPERTIES PASS_REGULAR_EXPRESSION "generated")
+    endif()
     # The YOLO example needs a model and an image (not in the repository): set II_EXAMPLE_YOLO_MODEL and
     # II_EXAMPLE_YOLO_IMAGE to run it as a test (the model tests in CI do).
     if(II_EXAMPLE_YOLO_MODEL AND II_EXAMPLE_YOLO_IMAGE)
@@ -59,5 +69,9 @@ if(BUILD_TESTING OR II_BUILD_TESTS)
         # Find ii.dll of a shared build next to the test executables.
         set_tests_properties(example_mlp example_c_api PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:ii::ii>")
+        if(TEST example_llm)
+            set_tests_properties(example_llm PROPERTIES
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:ii::ii>")
+        endif()
     endif()
 endif()

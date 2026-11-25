@@ -8,6 +8,8 @@ ii_add_component(backend_cpu SOURCES
     elementwise.cpp
     gemm.cpp
     movement.cpp
+    llm_ops.cpp
+    qmatmul.cpp
     reduction.cpp
     scalar_math.cpp)
 
@@ -17,6 +19,8 @@ foreach(isa IN LISTS II_ISA_VARIANTS)
         isa/conv.cpp
         isa/elementwise.cpp
         isa/gemm.cpp
+        isa/qgemm.cpp
+        isa/quant.cpp
         isa/rows.cpp
         isa/table.cpp)
 endforeach()

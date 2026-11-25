@@ -251,6 +251,14 @@ II_API Var rms_norm(const Var& x, const Var& scale = {}, std::int64_t axis = -1,
 II_API Var linear(const Var& x, const Var& w, const Var& bias = {}, bool transpose_w = true);
 /// Scaled dot-product attention; scale 0 means 1 / sqrt(head size).
 II_API Var sdpa(const Var& q, const Var& k, const Var& v, const Var& mask = {}, bool causal = false, double scale = 0);
+/// Attention over a preallocated KV cache: only the first `kv_len` (an i32 / i64 scalar) keys and values are used;
+/// `window` > 0 limits causal attention to the last `window` positions; `softcap` > 0 squashes the scores.
+II_API Var sdpa(const Var& q, const Var& k, const Var& v, const Var& mask, bool causal, double scale, const Var& kv_len,
+                std::int64_t window = 0, double softcap = 0);
+/// Rotary position embedding of the first 2 * cos.shape[-1] features of x (see `rope` in docs/opset.md).
+II_API Var rope(const Var& x, const Var& cos, const Var& sin, bool interleaved = false);
+/// x with `update` written at offset `start` (an i32 / i64 scalar) along `axis`.
+II_API Var slice_update(const Var& x, const Var& update, const Var& start, std::int64_t axis);
 
 }  // namespace ii
 

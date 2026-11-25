@@ -113,7 +113,7 @@ Triggers: `schedule` (e.g. 02:00 UTC), `workflow_dispatch`.
 
 | Job | Runner | What it does |
 |-----|--------|--------------|
-| `models` | hosted (small models), self-hosted (large) | `scripts/fetch_models.py` downloads models listed in `tests/models/manifest.json` (URL + sha256), cached by manifest hash; logits / detections / perplexity vs references (ONNX Runtime, transformers) |
+| `models` | hosted (small models), self-hosted (large) | `scripts/fetch_models.py` downloads models listed in `tests/models/manifest.json` (URL + sha256), cached by manifest hash; `scripts/model_tests.py` compares outputs and detections with ONNX Runtime, `scripts/llm_tests.py` compares language models with transformers (logits, greedy generation, perplexity on wikitext-2) |
 | `fuzz-long` | `ubuntu-24.04` | 30 min per target; corpus persisted between runs (cache/artifact); crashes uploaded as artifacts and turned into regression tests |
 | `bench` | self-hosted (fixed machine) | micro + e2e benchmarks → JSON; history and charts via `github-action-benchmark` on the `gh-pages` branch (`/bench`); alert comment / issue on > 5% regression |
 | `coverage` | `ubuntu-24.04` | llvm-cov report (optionally uploaded to Codecov) |
@@ -147,7 +147,7 @@ Every release: full test suite on the packaged binaries, `SHA256SUMS`, build pro
 | 1 | done: `examples` (package installed, examples built with `find_package(ii)` and run on Linux, Windows, macOS), fuzz smoke (`linux-clang-fuzz` preset: libFuzzer on the IR text parser and JSON, 60 s each; other builds replay the corpora). Moved to stage 3: `abi-interop`, `docs.yml`, `nightly.yml` |
 | 2 | done: `avx512-sde` (ii-cpu tests under Intel SDE), `android` (arm64-v8a build, x86_64 tests on an emulator through `scripts/android_run.py`), `generic` kernel variant tested on Linux. Moved: self-hosted runner for nightly benchmarks — with `nightly.yml` (stage 3) |
 | 3 | done: `onnx-conformance` (operator test cases of the `onnx` package on ii-ref and ii-cpu against `tests/onnx/expected_passes.txt`), `models` (MobileNetV2, YOLOv8n vs ONNX Runtime, YOLO example) in PR; `nightly.yml` with all models (ResNet-50, BERT-base) and 30-minute fuzzing of every target (ONNX and `.npy`/`.npz` fuzzers added). Moved: `release.yml` → v0.1, `abi-interop`, `docs.yml`, nightly benchmarks on the self-hosted runner |
-| 4 | LLM model tests (tiny-llama in PR, real GGUF nightly on self-hosted), GGUF/tokenizer/Jinja fuzzers, LLM benchmarks vs llama.cpp |
+| 4 | done: unit tests with tiny random language models of six architectures against transformers (in every build), `models` in PR also asks Qwen2.5-0.5B-Instruct (GGUF q4_k_m) a question; nightly: Qwen2.5-0.5B and TinyLlama-1.1B against transformers (logits, greedy generation, perplexity) and TinyLlama q4_k_m (perplexity), 30-minute fuzzing of `fuzz_gguf` and `fuzz_tokenizer`; the `avx_vnni` and `neon_dotprod` kernel variants run in the ISA matrix and on Android |
 | 5 | `gpu.yml` (ii-cuda, TensorRT), GPU benchmarks, GPU plugin artifacts in releases |
 | 6+ | iOS, WebAssembly (Emscripten), Windows ARM64 (`windows-11-arm`), Vulkan (lavapipe software driver on hosted Linux), Metal on macOS |
 

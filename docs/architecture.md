@@ -126,8 +126,8 @@ int main() {
 
 ```cpp
 auto llm  = ii::llm::Llm::load(ctx, "qwen2.5-1.5b-instruct-q4_k_m.gguf").value();
-auto chat = llm.new_chat({.temperature = 0.7f, .top_p = 0.9f});
-chat.send("Hi! Who are you?", [](std::string_view piece) { std::cout << piece << std::flush; });
+auto chat = llm.new_chat({.temperature = 0.7f, .top_p = 0.9f}).value();
+chat.send("Hi! Who are you?", [](std::string_view piece) { std::cout << piece << std::flush; return true; });
 ```
 
 ### Example: training
@@ -206,6 +206,8 @@ view must start on a block boundary.
   mmap-ed), state, node output. Graph outputs are named references to values.
 - **State values** are read at the start of `run()` and written at the end; they live in the `Session` between runs.
   One mechanism covers transformer KV caches, RNN hidden states and, for training, parameters and optimizer moments.
+  A state updated by an in-place operation that reads it last (`slice_update` writing new keys into a preallocated
+  KV cache) is updated in its own memory: no arena buffer and no copy at the end of the run (§10).
 - **Symbolic dimensions**: a `Dim` (public, `include/ii/dim.h`) is a constant or an integer expression over symbols
   (`N`, `seq`, `past`) kept in a canonical polynomial form whose variables are symbols and floor divisions by
   constants — so `N*2 + N == 3*N` and conv/pool output sizes `(H + 2p - k) / s + 1` stay symbolic. Symbols are bound
@@ -256,8 +258,13 @@ view must start on a block boundary.
 
 **Composites** (have a decomposition rule; a backend may implement them natively — which is what is done for
 speed): gelu, silu, softmax, log_softmax, layer_norm, rms_norm, linear (matmul + bias), sdpa (scaled dot-product
-attention: mask, causal, GQA, KV cache) — OpSet v1; later group_norm, batch_norm, rope, swiglu, cross_entropy,
-adamw_step, …
+attention: mask, causal, GQA; for LLMs `kv_len` over a preallocated KV cache, sliding `window`, `softcap`, 16-bit
+keys and values with f32 queries) — OpSet v1; rope (rotary embedding, halves or interleaved pairs, partial) and
+slice_update (write into a tensor at a run-time offset; in place) — stage 4; later group_norm, batch_norm, swiglu,
+cross_entropy, adamw_step, …
+
+`matmul` and `linear` take weights in a narrower type than the activations: f16 / bf16 with f32 activations
+(widened while computing) and the GGUF block-quantized types (`q4_0` … `q6_k`).
 
 The generated reference of every operation (signature, semantics, attributes with defaults) is
 [opset.md](opset.md) (`ii ops --markdown`).
@@ -443,8 +450,12 @@ nodes ("ii-vulkan: op `scatter` with dtype i64 is not supported").
 - **Dynamic shapes**: a `Program` is compiled once for symbolic shapes. When a session sees new input shapes it binds
   the symbols, re-runs (concrete) shape inference node by node — checking the results against the symbolic types —
   and re-plans memory; the arena is reallocated only when it must grow. Unchanged shapes reuse the plan, so the steady
-  state performs zero allocations (verified by a test that counts every `operator new`). Planned later: symbol upper
-  bounds (`seq ≤ 4096`) to plan once for the maximum, and a cache of shape buckets.
+  state performs zero allocations (verified by a test that counts every `operator new`); the last four plans are kept,
+  so alternating shapes (an LLM's prompt steps and single-token steps) do not re-plan. Planned later: symbol upper
+  bounds (`seq ≤ 4096`) to plan once for the maximum.
+- **In-place state updates**: when the step producing a state's update runs in place on the state itself and nothing
+  reads the old state afterwards, its output is the state's memory. A KV cache [1, heads, context, head size] written
+  by `slice_update` therefore costs only the new rows per step.
 - **I/O binding**: the user may pass their own input and output buffers (zero-copy), including GPU buffers.
 - **Profiler**: `Session::set_profiling(true)` times every step (two clock reads, no allocations); `profile()` returns
   the steps with operation, backend, shapes and times; `to_chrome_trace()` exports runs as Chrome trace JSON
@@ -463,9 +474,10 @@ supports and leaves the rest (other dtypes, rare operations) to ii-ref; `ii insp
 
 - The sources in `src/backends/cpu/isa/` are compiled **once per variant** (`ii_add_isa_component`) into namespace
   `ii::cpu::<isa>` with that variant's flags: `generic` (baseline C++: SSE2 / NEON), `avx2` (AVX2 + FMA + F16C),
-  `avx512` (F/BW/VL/DQ), `neon` (Arm64 intrinsics). Each variant exposes one `KernelTable` of function pointers
-  (`kernel_table.h`); the backend picks the table at creation. Variants for int8 dot products (`avx_vnni`,
-  `avx512_vnni`, `neon_dotprod`, `neon_i8mm`) arrive with the quantized kernels (stage 4).
+  `avx_vnni` (the AVX2 kernels plus `vpdpbusd` int8 dot products), `avx512` (F/BW/VL/DQ), `neon` (Arm64 intrinsics),
+  `neon_dotprod` (NEON plus the Armv8.2 `sdot` instructions). An extension variant defines its base's
+  `II_ISA_IS_<BASE>` too, so it compiles all of the base's code paths. Each variant exposes one `KernelTable` of
+  function pointers (`kernel_table.h`); the backend picks the table at creation. Later: `avx512_vnni`, `neon_i8mm`.
 - `CpuInfo` picks the best usable variant; `II_CPU_ISA=generic|avx2|…` or `ContextOptions::cpu_isa` forces one, so all
   paths are tested on one machine (the tests are parameterized over every usable variant; AVX-512 runs under Intel SDE
   in CI).
@@ -499,8 +511,8 @@ minimax polynomials). Accuracy is stated in the header and verified by sweeps ag
   panels (decode) stream B over the whole depth with software prefetch.
 - The driver (`gemm_driver.h`) is shared with convolution: B may also be packed by a callback (implicit im2col),
   A may be prepacked (constant convolution weights), and an epilogue callback sees every finished f32 block.
-- Not yet: activations in the epilogue of `matmul` / `linear` (a following activation is a separate fused
-  elementwise pass), quantized weights (stage 4).
+- f16 / bf16 weights with f32 activations use the same driver (B widened in the micro-kernel). Not yet: activations
+  in the epilogue of `matmul` / `linear` (a following activation is a separate fused elementwise pass).
 
 ### Convolution, pooling, resize (stage 3)
 
@@ -517,10 +529,26 @@ minimax polynomials). Accuracy is stated in the header and verified by sweeps ag
 
 ### Quantized kernels (the key to weak hardware) — stage 4
 
-- **LLM decode (GEMV, batch 1)** is memory-bound: dequantize on the fly inside the dot product; target ≥ 85–90% of
-  memory bandwidth.
-- **Prefill / batch** is compute-bound: activations are quantized to int8 per block, then int8×int4/int8 dot products
-  (`vpdpbusd` AVX-VNNI/AVX512-VNNI, `sdot`/`smmla` on ARM).
+`linear` / `matmul` with GGUF block-quantized weights (`qmatmul.cpp`, kernels in `isa/quant.cpp` and `isa/qgemm.cpp`):
+
+- The activation rows are quantized to 8 bits first, as llama.cpp does: blocks of 32 (`d`, `d * sum`, 32 int8) for
+  `q4_0` … `q8_0` weights, ggml's `q8_K` (256 values with sums of groups of 16) for the K-quants. Integer dot products
+  then replace dequantization: `maddubs` / `madd` on AVX2, `vpdpbusd` on AVX-VNNI, `sdot` on Armv8.2. Unsigned weight
+  codes are multiplied directly and their offset (`q4_0`: 8, `q6_K`: 32, …) and minimums come from the activation sums.
+- **Row kernels** (every type, every variant; scalar in `generic`) multiply one weight row with up to four activation
+  rows, so a weight block is decoded once per four rows.
+- **Panel kernels** (`q4_0`, `q5_0`, `q8_0`, `q4_K`, `q6_K` on AVX2 / AVX-VNNI / NEON dotprod): constant weights are
+  repacked when the program is compiled into panels of 8 rows interleaved by 4 values (layouts in `kernel_table.h`).
+  Four activation bytes are broadcast against 32 weight bytes (8 rows), so one dot-product instruction does 32
+  multiply-adds without horizontal sums and every decoded weight byte serves four activation rows: 2.5-3× the row
+  kernels for prompt processing (160-190 GMAC/s on one Arrow Lake core), and contiguous 8-column outputs.
+- Work items are blocks of 64 activation rows × columns (several per thread); the activation quantization is
+  parallel too. Decode (one row) reads the weights once: ~65-75% of the measured memory bandwidth with all cores;
+  per core it is limited by the outstanding cache misses rather than by the kernel (one core decodes 45-50 GB/s of
+  weights held in cache).
+- Exactness: the kernels of every variant are checked against a double-precision computation on the same quantized
+  activations, and the panel kernels against the row kernels (`tests/unit/backends/cpu_quant_test.cpp`); models are
+  checked end to end against transformers (§13).
 
 ### Elementwise operations and fusion
 
@@ -538,8 +566,10 @@ minimax polynomials). Accuracy is stated in the header and verified by sweeps ag
 - Reductions over adjacent axes, `softmax`/`log_softmax` (any axis; vectorized across the inner dimension when the
   axis is not the last), `layer_norm`, `rms_norm`: row kernels; sums are accumulated in double precision.
 - `sdpa`: one query row at a time (scores, softmax and the weighted sum of values in a per-thread row of scratch, so
-  the attention matrix is never materialized); grouped-query attention, causal masking, bool and additive masks.
-  Tiled flash attention with a KV cache arrives with the LLM stage.
+  the attention matrix is never materialized); grouped-query attention, causal masking, bool and additive masks, and
+  for LLMs the keys in use (`kv_len` of a preallocated cache), sliding windows, soft-capping and f16 caches (only the
+  keys a query can attend are visited). Later: tiled flash attention for long prompts.
+- `rope` and `slice_update` (in place) for the LLM graphs.
 - `reshape`, `permute` (tiled transposes), `concat`: dtype-agnostic copies. Everything else falls back to ii-ref
   (`ii inspect` shows which nodes).
 
@@ -577,19 +607,37 @@ CUDA C / GLSL / MSL).
 ## 13. LLM subsystem (`ii::llm`)
 
 Built **on top of** the common IR and runtime rather than as a separate engine — so it automatically gets every
-backend, the planner, offload and the profiler.
+backend, the planner, offload and the profiler. Public API: `include/ii/llm.h` (`Llm`, `Sequence`, `Chat`,
+`Tokenizer`, `Sampler`); implementation in `src/llm/`.
 
-- **Architectures as code**: `src/llm/arch/llama.cpp`, `qwen.cpp`, `gemma.cpp`, `phi.cpp`, … build the graph with the
-  builder API from hyper-parameters in GGUF metadata or HF `config.json`. MoE (Mixtral, Qwen-MoE) — later.
-- **KV cache** — session state values; later a paged KV cache for continuous batching.
-- **Prefill and decode** — one graph with a `seq` symbol; the planner may choose different kernels / thread counts for
-  `seq = 1`.
-- **Tokenizers**: byte-level BPE (GPT-2 / Llama 3 / Qwen), SentencePiece (BPE / Unigram); from GGUF or
-  `tokenizer.json`.
-- **Chat templates**: an interpreter for the subset of Jinja2 that real GGUF templates use.
-- **Sampling**: greedy / temperature / top-k / top-p / min-p / repetition penalty chain; later grammars (JSON),
-  speculative decoding.
-- **Token streaming** via callback; generation cancellation.
+- **Loading**: a GGUF file (`gguf::File`, tensors used in place from the mapping) or a Hugging Face directory
+  (`config.json`, safetensors shards, `tokenizer.json`, `tokenizer_config.json`). Hugging Face tensor names are mapped
+  to GGUF names so one graph builder serves both (`hparams.cpp`).
+- **Architectures as data**: `graph.cpp` builds the decoder for llama (Llama 2/3, Mistral, TinyLlama, SmolLM), qwen2,
+  qwen3, gemma, gemma2 and gemma3 (logit soft-capping, sliding windows with their own rope base, extra norms, scaled
+  embeddings) and phi3 (fused qkv and gate/up) from the hyper-parameters. Rotary embeddings: interleaved pairs for
+  GGUF llama (whose converter permutes q / k) and halves otherwise; llama-3 scaling from `rope_scaling` or the
+  `rope_freqs` tensor; linear scaling.
+- **One graph for prompt and decode**: inputs `tokens` i32[1, S] and `pos` i64[] (tokens already cached), output
+  `logits` (the last position, or all with `LoadOptions::all_logits`). Positions `pos + iota(S)` feed the rotary
+  tables; `kv_len = pos + S`.
+- **KV cache**: per layer two states [1, kv heads, context, head size] (f32 or f16), written by `slice_update` at
+  `pos` (in place, §10) and read by `sdpa` with `kv_len` and the causal mask. A `Sequence` owns a session (its cache)
+  and the token list; `rewind(n)` drops tokens, which `Chat` uses to reuse the cached prefix of a conversation.
+- **Tokenizers** (`tokenizer.cpp`): SentencePiece merging by score (GGUF "llama" vocabularies; token order when a
+  file has no scores), byte-level BPE by merge rank with the GPT-2, Llama 3 and Qwen 2 pre-tokenizer splits
+  (hand-written matchers over Unicode category tables generated from Python's `unicodedata`), BPE over characters
+  with byte fallback (Hugging Face exports of SentencePiece models); special tokens, end-of-generation tokens,
+  streaming-safe UTF-8 decoding.
+- **Chat templates** (`jinja.cpp`): an interpreter for the Jinja subset of real templates, rendered like transformers
+  (trim_blocks, lstrip_blocks, `tojson`, `raise_exception`, namespaces, loop controls, macros); resource limits for
+  untrusted templates. ChatML when a model has none.
+- **Sampling**: repetition penalty, top-k, top-p, min-p, temperature (llama.cpp's order), deterministic seeds; greedy
+  at temperature 0. Token streaming via callback (returning false stops).
+- **Checked against transformers**: tiny random models of every architecture (both formats, `tests/data/llm`) match
+  per position, through the KV cache; real models (`scripts/llm_tests.py`): logits within ~4e-6, greedy generation
+  equal for 64-128 tokens, perplexity equal to 4 digits.
+- Later: MoE, paged KV cache and batching of sequences, speculative decoding, grammars, multimodal inputs.
 
 ---
 
@@ -615,8 +663,8 @@ rules in `OpSchema`, and the "one IR" principle.
 
 | Format | Purpose | Implementation |
 |--------|---------|----------------|
-| GGUF | quantized LLMs | header/metadata parser, tensor mmap, GGML type → ii dtype mapping |
-| safetensors + `config.json` | HF models | JSON header + mmap; architecture from `config.json` |
+| GGUF | quantized LLMs | `include/ii/gguf.h`: reader (versions 2-3, typed metadata, tensors as views of the mapping) and writer (`ii quantize`); GGML type ↔ ii dtype |
+| safetensors + `config.json` | HF models | JSON header + mmap, sharded models (`model.safetensors.index.json`); architecture from `config.json` |
 | ONNX | general models (CV, audio, encoders) | **own protobuf wire-format decoder** (no libprotobuf dependency), external data, `onnx op@opset → ii ops` mapping table (stage 3, see below) |
 | `.npy` / `.npz` | tensors (inputs, outputs, test data) | `ii/io.h`: NumPy format 1.0–3.0, stored and DEFLATE-compressed archives (own inflate) |
 | `.ii` | native, fast startup | header + sections; graph in a compact TLV encoding, weights aligned for mmap, optional weights pre-packed for a specific ISA; versioned format |
@@ -681,12 +729,14 @@ ii info                          hardware, ISA, devices, backends, plugins; --ro
 ii run <model> [--dims N=8]      run an ONNX or ii text model; inputs from --inputs a.npz, --input x=a.npy or
                                  images (--input images=cat.jpg, --letterbox, --mean/--std), otherwise random;
                                  --save-outputs out.npz, --top K, --profile trace.json
-ii generate <llm> -p "…"         text generation
+ii generate <llm> -p "…"         text generation (--chat applies the chat template; --save-logits, --profile)
 ii chat <llm>                    interactive chat
-ii bench <model> [--llm]         benchmark: latency p50/p90/p99 and throughput (stage 3); for LLMs pp/tg tokens/s
+ii perplexity <llm> -f text      perplexity like llama-perplexity (chunks of --ctx tokens)
+ii tokenize <llm> -p "…"         the tokens of a text
+ii bench <model> [--llm]         benchmark: latency p50/p90/p99 and throughput; for LLMs pp / tg tokens per second
 ii inspect <model> [--plan]      inputs and outputs, the execution plan with backends; --graph, --imported
 ii convert <in> <out.ii>         conversion to the native format (+ pre-packing)
-ii quantize <in> <out> --type q4_k
+ii quantize <in.gguf> <out.gguf> --type q4_k_m   GGUF weights to q8_0 … q6_k or the llama.cpp mixes
 ii check-backends [<model>]      verify every available backend against the reference on this machine
 ii train <config>                training from a config (later)
 ```
@@ -714,8 +764,8 @@ ii/
 │   │   ├── cpu/       ii-cpu: drivers; isa/ (SIMD layer, math, kernels compiled per ISA)
 │   │   ├── cuda/  vulkan/  metal/
 │   │   └── plugins/   tensorrt/, onnxruntime/, openvino/, coreml/, …
-│   ├── formats/       onnx/ (+ protobuf wire decoder), npy/npz; later gguf/, safetensors/, native/
-│   ├── llm/           arch/, tokenizer/, sampling/, chat_template/
+│   ├── formats/       onnx/ (+ protobuf wire decoder), npy/npz, gguf, safetensors; later native/
+│   ├── llm/           hparams (+ weight names), graph, tokenizer, unicode, jinja, sampler, llm (API)
 │   ├── train/         nn/, optim/, loss/, data/
 │   └── capi/          C ABI implementation
 ├── tools/ii/          CLI

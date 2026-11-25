@@ -2,6 +2,7 @@
 // Reference kernels: matmul, conv, conv_transpose, max_pool, avg_pool.
 #include "backends/ref/common.h"
 #include "ops/infer_util.h"
+#include "tensor/quant.h"
 
 #include <array>
 #include <vector>
@@ -14,13 +15,31 @@ namespace {
 // matmul
 
 Status check_matmul(const ir::Node& node) {
-    if (is_block_quantized(node.input(1)->dtype())) {
-        return errors::unsupported("matmul with block-quantized weights is not implemented yet");
+    if (is_block_quantized(node.input(1)->dtype()) &&
+        (node.input(0)->dtype() == DType::kF64 || node.attrs().get_bool("transpose_a"))) {
+        return errors::unsupported("matmul with block-quantized weights needs a non-transposed f32, f16 or bf16 a");
     }
     return ok_status();
 }
 
+/// a [..., M, K] times a block-quantized b [N, K] (transpose_b).
+std::unique_ptr<Kernel> block_matmul_kernel() {
+    return make_kernel(
+        [](const KernelContext& context) -> Status {
+            const TensorView& a = context.input(0);
+            const TensorView& b = context.input(1);
+            const std::int64_t k = a.shape[a.rank() - 1];
+            const std::int64_t rows = k == 0 ? 0 : a.numel() / k;
+            return block_quantized_product(a.dtype, a.data, rows, k, b.data, b.dtype, b.shape[0], nullptr,
+                                           context.output(0).data, reinterpret_cast<float*>(context.workspace.data()));
+        },
+        [](std::span<const Shape> inputs, std::span<const Shape>) { return block_quantized_workspace(inputs[1]); });
+}
+
 Result<std::unique_ptr<Kernel>> matmul_kernel(const ir::Node& node) {
+    if (is_block_quantized(node.input(1)->dtype())) {
+        return block_matmul_kernel();
+    }
     const bool transpose_a = node.attrs().get_bool("transpose_a");
     const bool transpose_b = node.attrs().get_bool("transpose_b");
     return make_kernel([transpose_a, transpose_b](const KernelContext& context) -> Status {
@@ -59,37 +78,86 @@ Result<std::unique_ptr<Kernel>> matmul_kernel(const ir::Node& node) {
         return dispatch(a.dtype, [&](auto tag) -> Status {
             using S = typename decltype(tag)::type;
             using C = ComputeOf<S>;
-            const S* pa = a.as<S>();
-            const S* pb = b.as<S>();
-            S* py = y.as<S>();
-            std::int64_t index[kMaxRank] = {};
-            for (std::int64_t bi = 0; bi < batches; ++bi) {
-                unravel_index(bi, batch, index);
-                const S* ma = pa + offset_of(index, a_strides) * m * k;
-                const S* mb = pb + offset_of(index, b_strides) * k * n;
-                S* my = py + bi * m * n;
-                for (std::int64_t i = 0; i < m; ++i) {
-                    for (std::int64_t j = 0; j < n; ++j) {
-                        C acc{};
-                        for (std::int64_t p = 0; p < k; ++p) {
-                            const C x = load(ma[ta ? p * m + i : i * k + p]);
-                            const C w = load(mb[tb ? j * k + p : p * n + j]);
-                            if constexpr (std::is_floating_point_v<C>) {
-                                acc += x * w;
-                            } else if constexpr (std::is_same_v<C, bool>) {
-                                acc = acc || (x && w);
-                            } else {
-                                acc = wrap_add(acc, wrap_mul(x, w));
+            // W: the dtype of b (S, or f16 / bf16 weights with an f32 a).
+            auto multiply = [&](auto weight_tag) -> Status {
+                using W = typename decltype(weight_tag)::type;
+                const S* pa = a.as<S>();
+                const W* pb = b.as<W>();
+                S* py = y.as<S>();
+                std::int64_t index[kMaxRank] = {};
+                for (std::int64_t bi = 0; bi < batches; ++bi) {
+                    unravel_index(bi, batch, index);
+                    const S* ma = pa + offset_of(index, a_strides) * m * k;
+                    const W* mb = pb + offset_of(index, b_strides) * k * n;
+                    S* my = py + bi * m * n;
+                    for (std::int64_t i = 0; i < m; ++i) {
+                        for (std::int64_t j = 0; j < n; ++j) {
+                            C acc{};
+                            for (std::int64_t p = 0; p < k; ++p) {
+                                const C x = load(ma[ta ? p * m + i : i * k + p]);
+                                const C w = static_cast<C>(load(mb[tb ? j * k + p : p * n + j]));
+                                if constexpr (std::is_floating_point_v<C>) {
+                                    acc += x * w;
+                                } else if constexpr (std::is_same_v<C, bool>) {
+                                    acc = acc || (x && w);
+                                } else {
+                                    acc = wrap_add(acc, wrap_mul(x, w));
+                                }
                             }
+                            my[i * n + j] = store<S>(acc);
                         }
-                        my[i * n + j] = store<S>(acc);
                     }
                 }
+                return ok_status();
+            };
+            if (b.dtype == a.dtype) {
+                return multiply(Tag<S>{});
             }
-            return ok_status();
+            if constexpr (std::is_same_v<S, float>) {
+                if (b.dtype == DType::kF16) {
+                    return multiply(Tag<f16>{});
+                }
+                if (b.dtype == DType::kBF16) {
+                    return multiply(Tag<bf16>{});
+                }
+            }
+            return errors::unsupported("matmul of {} and {}", to_string(a.dtype), to_string(b.dtype));
         });
     });
 }
+
+}  // namespace
+
+Status block_quantized_product(DType dtype, const void* x, std::int64_t rows, std::int64_t k, const void* w,
+                               DType w_dtype, std::int64_t n, const void* bias, void* y, float* scratch) {
+    II_TRY(quant::check_row(w_dtype, k));
+    const std::size_t row_bytes = storage_size(w_dtype, k);
+    return dispatch(dtype, [&](auto tag) -> Status {
+        using S = typename decltype(tag)::type;
+        if constexpr (!kIsFloatStorage<S>) {
+            return errors::unsupported("block-quantized products need a float input");
+        } else {
+            const auto* px = static_cast<const S*>(x);
+            const auto* pbias = static_cast<const S*>(bias);
+            auto* py = static_cast<S*>(y);
+            for (std::int64_t j = 0; j < n; ++j) {
+                quant::dequantize(w_dtype, static_cast<const std::byte*>(w) + static_cast<std::size_t>(j) * row_bytes,
+                                  scratch, k);
+                for (std::int64_t r = 0; r < rows; ++r) {
+                    double acc = pbias != nullptr ? static_cast<double>(load(pbias[j])) : 0.0;
+                    const S* row = px + r * k;
+                    for (std::int64_t p = 0; p < k; ++p) {
+                        acc += static_cast<double>(load(row[p])) * static_cast<double>(scratch[p]);
+                    }
+                    py[r * n + j] = store<S>(acc);
+                }
+            }
+            return ok_status();
+        }
+    });
+}
+
+namespace {
 
 // ------------------------------------------------------------------------------------------------------------------
 // Sliding windows

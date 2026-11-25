@@ -120,6 +120,17 @@ Status SessionImpl::prepare() {
         if (same) {
             return ok_status();
         }
+        for (std::size_t c = 0; c < plan_cache.size(); ++c) {
+            bool match = true;
+            for (std::size_t i = 0; i < p.inputs.size() && match; ++i) {
+                match = inputs[i].shape() == plan_cache[c].input_shapes[i];
+            }
+            if (match) {
+                // The arena only grows, so a cached plan still fits.
+                std::swap(plan, plan_cache[c]);
+                return allocate_states();
+            }
+        }
     }
 
     ExecutionPlan next;
@@ -282,6 +293,7 @@ Status SessionImpl::prepare() {
     std::vector<int> buffer_last(p.values.size(), -1);  // per root: last step using the buffer
     std::vector<std::size_t> buffer_size(p.values.size(), 0);
     next.alias_steps.assign(p.steps.size(), 0);
+    next.state_alias.assign(p.values.size(), -1);
     auto last_use_of = [&](int v) {
         const ValueInfo& info = p.values[static_cast<std::size_t>(v)];
         return std::max(info.last_use, info.producer);
@@ -317,6 +329,27 @@ Status SessionImpl::prepare() {
                 root[static_cast<std::size_t>(out)] = -1;
                 next.alias_steps[s] = 1;
             }
+            continue;
+        }
+        // An in-place step that turns a state into its own update (a KV cache write) works directly in the state's
+        // memory when nothing reads the old state value afterwards: no arena buffer and no copy at the end of run().
+        bool into_state = false;
+        for (std::size_t i = 0; i < step.inputs.size() && !into_state; ++i) {
+            const int in = step.inputs[i];
+            if (in < 0 || p.values[static_cast<std::size_t>(in)].kind != ir::ValueKind::kState ||
+                !step.kernel->can_run_in_place(static_cast<int>(i))) {
+                continue;
+            }
+            const int state = p.values[static_cast<std::size_t>(in)].state_index;
+            if (p.states[static_cast<std::size_t>(state)].update != out ||
+                p.values[static_cast<std::size_t>(in)].last_use != step_index || nbytes_of(in) != nbytes_of(out)) {
+                continue;
+            }
+            root[static_cast<std::size_t>(out)] = -1;
+            next.state_alias[static_cast<std::size_t>(out)] = state;
+            into_state = true;
+        }
+        if (into_state) {
             continue;
         }
         for (std::size_t i = 0; i < step.inputs.size(); ++i) {
@@ -434,6 +467,12 @@ Status SessionImpl::prepare() {
     if (!arena || arena->size() < next.arena_size) {
         II_ASSIGN_OR_RETURN(arena, Buffer::allocate(next.arena_size, p.context.allocator()));
     }
+    if (planned) {
+        if (plan_cache.size() == kPlanCacheSize) {
+            plan_cache.erase(plan_cache.begin());
+        }
+        plan_cache.push_back(std::move(plan));
+    }
     plan = std::move(next);
     planned = true;
     return allocate_states();
@@ -462,7 +501,11 @@ Status SessionImpl::run() {
             value_data[v] = states[static_cast<std::size_t>(info.state_index)].data();
             break;
         case ir::ValueKind::kNode:
-            value_data[v] = plan.offsets[v] != ExecutionPlan::kNotInArena ? base + plan.offsets[v] : nullptr;
+            if (plan.state_alias[v] >= 0) {
+                value_data[v] = states[static_cast<std::size_t>(plan.state_alias[v])].data();
+            } else {
+                value_data[v] = plan.offsets[v] != ExecutionPlan::kNotInArena ? base + plan.offsets[v] : nullptr;
+            }
             break;
         }
     }
@@ -574,6 +617,9 @@ Result<Tensor> SessionImpl::value_tensor(int value) const {
         return states[static_cast<std::size_t>(info.state_index)];
     case ir::ValueKind::kNode:
         break;
+    }
+    if (const int state = plan.state_alias[static_cast<std::size_t>(value)]; state >= 0) {
+        return states[static_cast<std::size_t>(state)];
     }
     const Shape& shape = plan.shapes[static_cast<std::size_t>(value)];
     return Tensor::view(arena, info.type.dtype, shape, contiguous_strides(shape),

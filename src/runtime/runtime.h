@@ -91,6 +91,8 @@ struct ExecutionPlan {
     std::vector<std::size_t> workspace_sizes;                   ///< per step
     std::vector<std::size_t> state_staging_offsets;             ///< per state: staging buffer, or kNotInArena
     std::vector<char> alias_steps;  ///< per step: the output is the input's memory (a view), the kernel is skipped
+    /// Per value: the state whose memory holds it (an in-place update of that state, e.g. a KV cache write), or -1.
+    std::vector<int> state_alias;
     std::size_t arena_size = 0;
     std::vector<backend::TensorView> views;  ///< per step: inputs then outputs
     std::vector<std::size_t> view_begin;     ///< per step, plus a final end entry
@@ -107,6 +109,9 @@ struct SessionImpl {
     std::shared_ptr<Buffer> arena;
     ExecutionPlan plan;
     bool planned = false;
+    /// Recently used plans for other input shapes (an LLM alternates prompt and single-token shapes).
+    std::vector<ExecutionPlan> plan_cache;
+    static constexpr std::size_t kPlanCacheSize = 4;
     bool has_run = false;
     std::vector<void*> value_data;  ///< per value, rebuilt by every run (no allocation)
     bool profiling = false;

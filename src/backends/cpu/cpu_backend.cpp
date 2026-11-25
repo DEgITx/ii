@@ -25,6 +25,14 @@ const KernelTable& kernel_table(Isa isa) noexcept {
     case Isa::kNeon:
         return neon::kernel_table();
 #endif
+#if defined(II_HAVE_ISA_AVX_VNNI)
+    case Isa::kAvxVnni:
+        return avx_vnni::kernel_table();
+#endif
+#if defined(II_HAVE_ISA_NEON_DOTPROD)
+    case Isa::kNeonDotprod:
+        return neon_dotprod::kernel_table();
+#endif
     default:
         return generic::kernel_table();
     }
@@ -57,6 +65,7 @@ CpuBackend::CpuBackend(CpuConfig config) : config_(config) {
     register_attention_kernels(*this);
     register_movement_kernels(*this);
     register_conv_kernels(*this);
+    register_llm_kernels(*this);
 }
 
 Status CpuBackend::supports(const ir::Node& node) const {

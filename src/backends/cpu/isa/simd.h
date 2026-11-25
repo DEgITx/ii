@@ -250,7 +250,11 @@ II_SIMD_INLINE double vd_reduce_add(VD a) {
 #elif defined(II_ISA_IS_AVX2)
 
 inline constexpr int kLanes = 8;
+#if defined(II_ISA_IS_AVX_VNNI)
+inline constexpr const char* kIsaName = "avx_vnni";
+#else
 inline constexpr const char* kIsaName = "avx2";
+#endif
 
 struct VF {
     __m256 v;

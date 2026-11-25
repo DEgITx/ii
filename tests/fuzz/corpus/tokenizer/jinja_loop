@@ -1,0 +1,2 @@
+{% for m in messages %}{{ m.role | upper }}: {{ m['content'] | trim }}{% if not loop.last %}
+{% endif %}{% endfor %}{% if add_generation_prompt %}{{ bos_token ~ 'x' * 3 }}{% endif %}

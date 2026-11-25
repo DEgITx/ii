@@ -192,6 +192,11 @@ public:
     /// This tensor if it is already contiguous, otherwise a contiguous copy.
     Result<Tensor> contiguous(Allocator& allocator = default_allocator()) const;
 
+    /// A contiguous copy converted to `dtype`. Supported: between f32, f16, bf16 and f64 (round to nearest even),
+    /// float to a block-quantized dtype (quantization, rows must be whole blocks) and back (dequantization to f32 or
+    /// any float type). The same dtype gives a plain copy.
+    Result<Tensor> to(DType dtype, Allocator& allocator = default_allocator()) const;
+
     /// Copies the elements of `source` (same dtype and shape, any strides) into this tensor.
     Status copy_from(const Tensor& source) const;
 

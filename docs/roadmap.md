@@ -153,6 +153,33 @@ OpenBLAS — в `bench/results/`.
 
 ## Этап 4 — LLM
 
+> **Статус: реализован.** Локально проверен на Windows (MinGW GCC/Clang, MSVC, MSVC shared, MSVC+ASan, clang-cl)
+> и на телефоне Android (Snapdragon 732G); Linux, macOS и эмулятор — в CI. Сделано: кодеки всех блочных типов GGUF
+> (`q4_0` … `q8_K`, побайтно совместимы с gguf-py / llama.cpp), чтение и запись GGUF (`ii/gguf.h`, тензоры —
+> представления mmap), safetensors (в т.ч. шардированные), библиотека `ii::llm` (`ii/llm.h`: `Llm`, `Sequence`,
+> `Chat`, `Tokenizer`, `Sampler`) с архитектурами llama, qwen2, qwen3, gemma, gemma2, gemma3, phi3 из GGUF или
+> каталога Hugging Face; новые операции `rope`, `slice_update`, у `sdpa` — `kv_len` (предвыделенный KV-кэш),
+> скользящее окно, `softcap`, 16-битные K/V; веса f16/bf16 и блочные кванты в `matmul`/`linear`; KV-кэш — state,
+> который `slice_update` пишет на месте (runtime не копирует), кэш планов для чередования prefill/decode;
+> токенизаторы SentencePiece и byte-level BPE (пре-токенизаторы GPT-2 / Llama 3 / Qwen 2 на таблицах Unicode),
+> интерпретатор Jinja для шаблонов чата, сэмплеры. В ii-cpu: квантованные произведения с 8-битными активациями
+> (как в llama.cpp), панели по 8 строк для q4_0/q5_0/q8_0/q4_K/q6_K (перепаковка при компиляции), новые
+> ISA-варианты `avx_vnni` и `neon_dotprod`, `sdpa` с кэшем, `rope`. CLI: `ii generate`, `ii chat`,
+> `ii bench --llm` (pp/tg), `ii perplexity`, `ii quantize` (в т.ч. смеси q4_k_m/q5_k_m), `ii tokenize`,
+> `ii inspect` для GGUF. Тесты: крошечные случайные модели шести архитектур в обоих форматах совпадают с
+> transformers по логитам всех позиций (в т.ч. пошагово через KV-кэш), 66 рендеров 11 реальных шаблонов чата —
+> байт в байт как в transformers, фаззеры GGUF/safetensors и токенизаторов/Jinja, точные тесты квантованных ядер
+> каждого ISA. Реальные модели (`scripts/llm_tests.py`, nightly): TinyLlama-1.1B и Qwen2.5-0.5B — логиты
+> ~4e-6 от transformers, жадная генерация совпадает на 128 / 64 токенах, перплексия wikitext-2 совпадает до 4 знаков
+> (9.1393 против 9.1365 на 8 фрагментах; 9.2903 = 9.2903 на 20), q4_k_m — +3.9%. Скорость (Core Ultra 7 265KF,
+> 20 потоков): Qwen2.5-0.5B q4_k_m pp512 ≈ 2570 / tg128 ≈ 157 ток/с, TinyLlama q4_k_m ≈ 1170 / 99, Llama-3.2-1B
+> q4_k_m ≈ 1180 / 85; телефон: Qwen2.5-0.5B pp128 134 / tg64 21 ток/с —
+> [bench/results/stage4-llm.md](../bench/results/stage4-llm.md). Сравнение с llama.cpp на этой машине не выполнено
+> (запуск скачанного бинарника llama.cpp был заблокирован политикой песочницы) — команда для сравнения в
+> stage4-llm.md. Перенесено: tiled flash-attention для длинных промптов, панели для q5_K и типов q2_K/q3_K,
+> `avx512_vnni`/`neon_i8mm`, yarn/longrope, MoE, пакетная обработка последовательностей, конвертация HF → GGUF в
+> `ii quantize`.
+
 **Цель:** `ii chat model.gguf` быстро работает на обычном CPU (в т.ч. на Android).
 
 - Загрузчики: GGUF (mmap, zero-copy квант-тензоры), safetensors + HF `config.json`; фаззинг.

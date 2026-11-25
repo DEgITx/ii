@@ -51,6 +51,8 @@ Status infer_matmul(const InferContext& context, std::vector<TensorType>& output
             return errors::invalid_argument(
                 "a block-quantized 'matmul' operand b must be [N, K] with transpose_b = true and a float a");
         }
+    } else if (a->dtype == DType::kF32 && (b->dtype == DType::kF16 || b->dtype == DType::kBF16)) {
+        // 16-bit weights with f32 activations: b is widened, the result is f32.
     } else {
         II_TRY(expect_input(context, 1, &is_numeric_dtype, "a numeric type"));
         II_TRY(expect_same_dtype(context, 1));
@@ -299,7 +301,8 @@ void register_linalg_ops(ir::OpRegistry& registry) {
         .category = "linalg",
         .doc = "Matrix product with numpy semantics: batch dimensions broadcast, 1-D operands are promoted to "
                "matrices and the promoted dimension is removed. transpose_a / transpose_b swap the last two "
-               "dimensions of an operand of rank >= 2. b may be block-quantized ([N, K], transpose_b = true).",
+               "dimensions of an operand of rank >= 2. With an f32 a, b may be f16 / bf16 (widened; the result is "
+               "f32). b may be block-quantized ([N, K], transpose_b = true; the result has a's dtype).",
         .inputs = {InputSpec{"a"}, InputSpec{"b"}},
         .outputs = {OutputSpec{"y"}},
         .attrs = {AttrSpec{"transpose_a", AttrKind::kBool, false}, AttrSpec{"transpose_b", AttrKind::kBool, false}},

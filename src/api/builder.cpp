@@ -478,5 +478,16 @@ Var linear(const Var& x, const Var& w, const Var& bias, bool transpose_w) {
 Var sdpa(const Var& q, const Var& k, const Var& v, const Var& mask, bool causal, double scale) {
     return apply("sdpa", {q, k, v, mask}, {{"causal", causal}, {"scale", scale}});
 }
+Var sdpa(const Var& q, const Var& k, const Var& v, const Var& mask, bool causal, double scale, const Var& kv_len,
+         std::int64_t window, double softcap) {
+    return apply("sdpa", {q, k, v, mask, kv_len},
+                 {{"causal", causal}, {"scale", scale}, {"window", window}, {"softcap", softcap}});
+}
+Var rope(const Var& x, const Var& cos, const Var& sin, bool interleaved) {
+    return apply("rope", {x, cos, sin}, {{"interleaved", interleaved}});
+}
+Var slice_update(const Var& x, const Var& update, const Var& start, std::int64_t axis) {
+    return apply("slice_update", {x, update, start}, {{"axis", axis}});
+}
 
 }  // namespace ii

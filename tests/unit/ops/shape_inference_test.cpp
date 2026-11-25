@@ -185,6 +185,39 @@ const Case kCases[] = {
      "input %q : f32[1, 3, 4, 8]\n input %k : f32[1, 2, 4, 8]\n input %v : f32[1, 2, 4, 8]\n %y : "
      "f32[1, 3, 4, 8] = sdpa(%q, %k, %v)",
      "multiple of key/value heads"},
+    {"sdpa_kv_cache",
+     "input %q : f32[1, 8, S, 16]\n input %k : f32[1, 2, 64, 16]\n input %n : i64[]\n %y : f32[1, 8, S, 16] = "
+     "sdpa(%q, %k, %k, _, %n) {causal = true, window = 8}",
+     nullptr},
+    {"sdpa_kv_len_not_scalar",
+     "input %q : f32[1, 2, 4, 8]\n input %n : i64[1]\n %y : f32[1, 2, 4, 8] = sdpa(%q, %q, %q, _, %n)", "scalar"},
+    {"sdpa_window_needs_causal", "input %q : f32[1, 2, 4, 8]\n %y : f32[1, 2, 4, 8] = sdpa(%q, %q, %q) {window = 2}",
+     "requires causal"},
+    // LLM operations
+    {"rope", "input %x : f32[B, S, 4, 64]\n input %c : f32[S, 1, 32]\n %y : f32[B, S, 4, 64] = rope(%x, %c, %c)",
+     nullptr},
+    {"rope_partial",
+     "input %x : f16[S, 80]\n input %c : f16[S, 16]\n %y : f16[S, 80] = rope(%x, %c, %c) {interleaved = true}",
+     nullptr},
+    {"rope_too_wide", "input %x : f32[S, 8]\n input %c : f32[S, 5]\n %y : f32[S, 8] = rope(%x, %c, %c)", "<="},
+    {"rope_bad_broadcast", "input %x : f32[2, 8]\n input %c : f32[3, 4]\n %y : f32[2, 8] = rope(%x, %c, %c)",
+     "broadcast"},
+    {"slice_update",
+     "input %c : f16[1, 4, 128, 64]\n input %u : f16[1, 4, S, 64]\n input %p : i32[]\n %y : f16[1, 4, 128, 64] = "
+     "slice_update(%c, %u, %p) {axis = 2}",
+     nullptr},
+    {"slice_update_too_long",
+     "input %c : f32[4, 2]\n input %u : f32[5, 2]\n input %p : i64[]\n %y : f32[4, 2] = slice_update(%c, %u, %p) "
+     "{axis = 0}",
+     "longer"},
+    {"slice_update_shape_mismatch",
+     "input %c : f32[4, 2]\n input %u : f32[1, 3]\n input %p : i64[]\n %y : f32[4, 2] = slice_update(%c, %u, %p) "
+     "{axis = 0}",
+     "dimension"},
+    {"gather_block_rows", "input %t : q4_k[100, 256]\n input %i : i32[S]\n %y : q4_k[S, 256] = gather(%t, %i)",
+     nullptr},
+    {"gather_block_inner_rejected",
+     "input %t : q4_k[100, 256]\n input %i : i32[S]\n %y : q4_k[100, S] = gather(%t, %i) {axis = 1}", "innermost"},
 };
 
 class ShapeInferenceTest : public ::testing::TestWithParam<Case> {};

@@ -268,9 +268,11 @@ MatmulShape matmul_shape(const Shape& sa, const Shape& sb, bool transpose_a, boo
 
 class GemmKernel final : public Kernel {
 public:
-    GemmKernel(const CpuConfig& config, Elem elem, bool linear, bool transpose_a, bool transpose_b, bool has_bias)
+    GemmKernel(const CpuConfig& config, Elem elem, Elem b_elem, bool linear, bool transpose_a, bool transpose_b,
+               bool has_bias)
         : config_(config),
           elem_(elem),
+          b_elem_(b_elem),
           linear_(linear),
           transpose_a_(transpose_a),
           transpose_b_(transpose_b),
@@ -289,13 +291,13 @@ public:
         const std::int64_t cs = transpose_b_ ? cols : 1;
         const std::int64_t matrices = rows * cols == 0 ? 0 : shape.numel() / (rows * cols);
         const std::int64_t nr = config_.table->gemm_nr;
-        const std::int64_t size = elem_bytes(elem_);
+        const std::int64_t size = elem_bytes(b_elem_);
         packed_stride_ = round_up(n, nr) * k;
         II_ASSIGN_OR_RETURN(packed_b_, AlignedBuffer::allocate(static_cast<std::size_t>(
                                            std::max<std::int64_t>(packed_stride_ * matrices * size, 64))));
         for (std::int64_t i = 0; i < matrices; ++i) {
             config_.table->gemm_pack_b(static_cast<const std::uint8_t*>(contiguous.data()) + i * rows * cols * size,
-                                       elem_, rs, cs, k, n,
+                                       b_elem_, rs, cs, k, n,
                                        static_cast<std::uint8_t*>(packed_b_.data()) + i * packed_stride_ * size);
         }
         prepacked_ = true;
@@ -361,7 +363,7 @@ public:
         call.a.elem = elem_;
         call.b = s.b;
         call.b.data = b.data;
-        call.b.elem = elem_;
+        call.b.elem = b_elem_;
         call.packed_b = prepacked_ ? packed_b_.data() : nullptr;
         call.packed_b_stride = packed_stride_;
         call.c = y.data;
@@ -395,7 +397,8 @@ private:
     }
 
     CpuConfig config_;
-    Elem elem_;
+    Elem elem_;    ///< a, bias and the result
+    Elem b_elem_;  ///< b: elem_, or f16 / bf16 weights with f32 activations
     bool linear_;
     bool transpose_a_;
     bool transpose_b_;
@@ -406,12 +409,21 @@ private:
 };
 
 Status check_gemm(const ir::Node& node) {
+    if (is_block_quantized(node.input(1)->dtype())) {
+        return check_quantized_matmul(node);
+    }
     const DType dtype = node.output()->dtype();
     if (dtype != DType::kF32 && dtype != DType::kF16 && dtype != DType::kBF16) {
         return errors::unsupported("'{}' is accelerated for f32, f16 and bf16 only", node.op_name());
     }
-    for (const ir::Value* input : node.inputs()) {
-        if (input != nullptr && input->dtype() != dtype) {
+    for (int i = 0; i < static_cast<int>(node.inputs().size()); ++i) {
+        const ir::Value* input = node.input(i);
+        if (input == nullptr || input->dtype() == dtype) {
+            continue;
+        }
+        const bool widened_weight =
+            i == 1 && dtype == DType::kF32 && (input->dtype() == DType::kF16 || input->dtype() == DType::kBF16);
+        if (!widened_weight) {
             return errors::unsupported("'{}' with mixed or block-quantized operands", node.op_name());
         }
     }
@@ -422,12 +434,16 @@ Status check_gemm(const ir::Node& node) {
 }
 
 Result<std::unique_ptr<Kernel>> create_gemm(const ir::Node& node, const CpuConfig& config) {
+    if (is_block_quantized(node.input(1)->dtype())) {
+        return create_quantized_matmul(node, config);
+    }
     const bool linear = node.op_name() == "linear";
     const Elem elem = *elem_of(node.output()->dtype());
+    const Elem b_elem = *elem_of(node.input(1)->dtype());
     const bool transpose_a = !linear && node.attrs().get_bool("transpose_a");
     const bool transpose_b = linear ? node.attrs().get_bool("transpose_w") : node.attrs().get_bool("transpose_b");
     const bool has_bias = linear && node.input(2) != nullptr;
-    auto kernel = std::make_unique<GemmKernel>(config, elem, linear, transpose_a, transpose_b, has_bias);
+    auto kernel = std::make_unique<GemmKernel>(config, elem, b_elem, linear, transpose_a, transpose_b, has_bias);
     const ir::Value* b = node.input(1);
     if (b->kind() == ir::ValueKind::kConstant && b->rank() >= 2) {
         II_TRY(kernel->prepack(b->data()));

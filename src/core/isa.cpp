@@ -11,9 +11,9 @@ namespace ii {
 namespace {
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)
-constexpr std::array kTargetIsas{Isa::kGeneric, Isa::kAvx2, Isa::kAvx512};
+constexpr std::array kTargetIsas{Isa::kGeneric, Isa::kAvx2, Isa::kAvxVnni, Isa::kAvx512};
 #elif defined(__aarch64__) || defined(_M_ARM64)
-constexpr std::array kTargetIsas{Isa::kGeneric, Isa::kNeon};
+constexpr std::array kTargetIsas{Isa::kGeneric, Isa::kNeon, Isa::kNeonDotprod};
 #else
 constexpr std::array kTargetIsas{Isa::kGeneric};
 #endif
@@ -30,12 +30,16 @@ std::string_view isa_name(Isa isa) noexcept {
         return "avx512";
     case Isa::kNeon:
         return "neon";
+    case Isa::kAvxVnni:
+        return "avx_vnni";
+    case Isa::kNeonDotprod:
+        return "neon_dotprod";
     }
     return "unknown";
 }
 
 std::optional<Isa> parse_isa(std::string_view name) noexcept {
-    for (const Isa isa : {Isa::kGeneric, Isa::kAvx2, Isa::kAvx512, Isa::kNeon}) {
+    for (const Isa isa : {Isa::kGeneric, Isa::kAvx2, Isa::kAvx512, Isa::kNeon, Isa::kAvxVnni, Isa::kNeonDotprod}) {
         if (isa_name(isa) == name) {
             return isa;
         }
@@ -64,6 +68,16 @@ bool isa_compiled(Isa isa) noexcept {
 #else
     constexpr bool kHaveNeon = false;
 #endif
+#if defined(II_HAVE_ISA_AVX_VNNI)
+    constexpr bool kHaveAvxVnni = true;
+#else
+    constexpr bool kHaveAvxVnni = false;
+#endif
+#if defined(II_HAVE_ISA_NEON_DOTPROD)
+    constexpr bool kHaveNeonDotprod = true;
+#else
+    constexpr bool kHaveNeonDotprod = false;
+#endif
     switch (isa) {
     case Isa::kGeneric:
         return true;
@@ -73,6 +87,10 @@ bool isa_compiled(Isa isa) noexcept {
         return kHaveAvx512;
     case Isa::kNeon:
         return kHaveNeon;
+    case Isa::kAvxVnni:
+        return kHaveAvxVnni;
+    case Isa::kNeonDotprod:
+        return kHaveNeonDotprod;
     }
     return false;
 }
@@ -88,6 +106,10 @@ bool isa_supported(Isa isa, const CpuInfo& cpu) noexcept {
                cpu.has(CpuFeature::kAvx512Dq) && isa_supported(Isa::kAvx2, cpu);
     case Isa::kNeon:
         return cpu.has(CpuFeature::kNeon);
+    case Isa::kAvxVnni:
+        return cpu.has(CpuFeature::kAvxVnni) && isa_supported(Isa::kAvx2, cpu);
+    case Isa::kNeonDotprod:
+        return cpu.has(CpuFeature::kArmDotProd) && cpu.has(CpuFeature::kNeon);
     }
     return false;
 }

@@ -8,6 +8,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <numeric>
 #include <vector>
@@ -22,6 +23,10 @@ using ::testing::HasSubstr;
 /// Test access to the session's execution plan (Session keeps its implementation private).
 struct SessionTestAccess {
     static std::size_t arena_size(const Session& session) { return session.impl_->plan.arena_size; }
+    static std::ptrdiff_t state_aliases(const Session& session) {
+        const auto& alias = session.impl_->plan.state_alias;
+        return std::count_if(alias.begin(), alias.end(), [](int state) { return state >= 0; });
+    }
 };
 
 namespace {
@@ -179,6 +184,74 @@ TEST(SessionTest, StatesCanSwap) {
     ASSERT_TRUE(session.run().ok());
     EXPECT_EQ(values_of(session.state("a").value()), std::vector<float>{2});
     EXPECT_EQ(values_of(session.state("c").value()), std::vector<float>{1});
+}
+
+/// The LLM pattern: a preallocated KV cache state, written in place by slice_update and read by sdpa with kv_len.
+TEST(SessionTest, KvCacheStateIsUpdatedInPlace) {
+    const Context context = make_context();
+    GraphBuilder b;
+    const Var x = b.input("x", DType::kF32, {1, 1, "S", 4});
+    const Var pos = b.input("pos", DType::kI64, {});
+    const Var cache = b.state("cache", DType::kF32, {1, 1, 8, 4});
+    const Var written = slice_update(cache, x, pos, 2);
+    b.update_state(cache, written);
+    const Var used = pos + reshape(reduce_sum(fill(b, {"S"}, DType::kI64, 1)), {});
+    b.output("y", sdpa(x, written, written, {}, true, 0.0, used));
+    const Program program = Model::from_builder(context, std::move(b)).value().compile().value();
+    Session session = program.new_session().value();
+    const void* cache_memory = session.state("cache").value().data();
+    std::vector<float> all;
+    std::int64_t position = 0;
+    for (const int length : {3, 1, 1, 2, 1}) {
+        std::vector<float> chunk;
+        chunk.reserve(static_cast<std::size_t>(length) * 4);
+        for (int i = 0; i < length * 4; ++i) {
+            chunk.push_back(static_cast<float>(position * 4 + i) * 0.1f);
+        }
+        all.insert(all.end(), chunk.begin(), chunk.end());
+        ASSERT_TRUE(session.set_input("x", floats(chunk, Shape{1, 1, length, 4})).ok());
+        ASSERT_TRUE(session.set_input("pos", Tensor::scalar<std::int64_t>(position).value()).ok());
+        ASSERT_TRUE(session.run().ok());
+        position += length;
+        // slice_update wrote straight into the state (no arena buffer, no copy at the end of the run).
+        EXPECT_EQ(SessionTestAccess::state_aliases(session), 1);
+        // Every token so far is in the cache, which never moved.
+        const Tensor state = session.state("cache").value();
+        EXPECT_EQ(state.data(), cache_memory);
+        const auto values = state.values<float>();
+        for (std::size_t i = 0; i < all.size(); ++i) {
+            ASSERT_EQ(values[i], all[i]) << "cache element " << i << " after " << position << " tokens";
+        }
+        // Causal attention of the last new token over all tokens: compare with a full recomputation.
+        const auto y = session.output("y").value().values<float>();
+        const auto last = static_cast<std::size_t>(position - 1);
+        std::vector<double> weights;
+        double max = -1e300;
+        for (std::size_t j = 0; j <= last; ++j) {
+            double s = 0;
+            for (std::size_t d = 0; d < 4; ++d) {
+                s += static_cast<double>(all[last * 4 + d]) * static_cast<double>(all[j * 4 + d]);
+            }
+            weights.push_back(s / 2.0);
+            max = std::max(max, s / 2.0);
+        }
+        double sum = 0;
+        for (double& w : weights) {
+            w = std::exp(w - max);
+            sum += w;
+        }
+        for (std::size_t d = 0; d < 4; ++d) {
+            double expected = 0;
+            for (std::size_t j = 0; j <= last; ++j) {
+                expected += weights[j] / sum * static_cast<double>(all[j * 4 + d]);
+            }
+            EXPECT_NEAR(y[static_cast<std::size_t>(length - 1) * 4 + d], expected, 1e-5);
+        }
+    }
+    // Writing past the end of the cache is a run-time error.
+    ASSERT_TRUE(session.set_input("x", floats(std::vector<float>(4, 0.0f), Shape{1, 1, 1, 4})).ok());
+    ASSERT_TRUE(session.set_input("pos", Tensor::scalar<std::int64_t>(8).value()).ok());
+    EXPECT_THAT(session.run().to_string(), HasSubstr("slice_update"));
 }
 
 TEST(SessionTest, BoundOutputsAreWrittenInPlace) {

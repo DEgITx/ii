@@ -192,14 +192,19 @@ Status infer_pad(const InferContext& context, std::vector<TensorType>& outputs) 
 }
 
 Status infer_gather(const InferContext& context, std::vector<TensorType>& outputs) {
-    II_TRY(expect_input(context, 0, &is_plain_dtype, "a non-quantized type"));
-    II_TRY(expect_input(context, 1, &is_index_dtype, "i32 or i64"));
     const TensorType& data = *context.input(0);
+    if (!is_block_quantized(data.dtype)) {
+        II_TRY(expect_input(context, 0, &is_plain_dtype, "a valid type"));
+    }
+    II_TRY(expect_input(context, 1, &is_index_dtype, "i32 or i64"));
     const TensorType& indices = *context.input(1);
     if (data.rank() == 0) {
         return errors::invalid_argument("'gather' data must have rank >= 1");
     }
     II_ASSIGN_OR_RETURN(const int axis, normalize_axis(context.attrs.get_int("axis"), data.rank()));
+    if (is_block_quantized(data.dtype) && axis == data.rank() - 1) {
+        return errors::invalid_argument("'gather' of block-quantized data must not index the innermost dimension");
+    }
     Dims shape(data.shape.begin(), data.shape.begin() + axis);
     shape.insert(shape.end(), indices.shape.begin(), indices.shape.end());
     shape.insert(shape.end(), data.shape.begin() + axis + 1, data.shape.end());

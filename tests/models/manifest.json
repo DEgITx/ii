@@ -1,5 +1,5 @@
 {
-  "comment": "Real models checked against ONNX Runtime by scripts/model_tests.py (fetched by scripts/fetch_models.py). suite 'pr' runs on every change, 'nightly' adds large models.",
+  "comment": "Real models checked by scripts/model_tests.py against ONNX Runtime ('models') and by scripts/llm_tests.py against transformers ('llms'), fetched by scripts/fetch_models.py. suite 'pr' runs on every change, 'nightly' adds large models.",
   "models": [
     {
       "name": "mobilenetv2-12",
@@ -21,7 +21,10 @@
       "dims": "",
       "detect": {
         "image_url": "https://ultralytics.com/images/bus.jpg",
-        "expect": ["person", "bus"]
+        "expect": [
+          "person",
+          "bus"
+        ]
       }
     },
     {
@@ -40,6 +43,105 @@
       "size": 438327788,
       "dims": "batch_size=2,sequence_length=32",
       "int_high": 2
+    }
+  ],
+  "text": {
+    "name": "wikitext-2-raw",
+    "url": "https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip",
+    "sha256": "ef7edb566e3e2b2d31b29c1fdb0c89a4cc683597484c3dc2517919c615435a11",
+    "member": "wikitext-2-raw/wiki.test.raw"
+  },
+  "llms": [
+    {
+      "name": "qwen2.5-0.5b-instruct-q4_k_m",
+      "suite": "pr",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/9217f5db79a29953eb74d5343926648285ec7e67/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+      "chat": {
+        "prompt": "What is the capital of France? Answer in one word.",
+        "expect": "Paris"
+      }
+    },
+    {
+      "name": "qwen2.5-0.5b-instruct",
+      "suite": "nightly",
+      "files": [
+        {
+          "path": "config.json",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/7ae557604adf67be50417f59c2c2f167def9a775/config.json",
+          "sha256": "18e18afcaccafade98daf13a54092927904649e1dd4eba8299ab717d5d94ff45"
+        },
+        {
+          "path": "generation_config.json",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/7ae557604adf67be50417f59c2c2f167def9a775/generation_config.json",
+          "sha256": "e558847a8b4402616f1273797b015104dc266fe4b520056fca88823ba8f8ebe6"
+        },
+        {
+          "path": "tokenizer.json",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/7ae557604adf67be50417f59c2c2f167def9a775/tokenizer.json",
+          "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/7ae557604adf67be50417f59c2c2f167def9a775/tokenizer_config.json",
+          "sha256": "5b5d4f65d0acd3b2d56a35b56d374a36cbc1c8fa5cf3b3febbbfabf22f359583"
+        },
+        {
+          "path": "model.safetensors",
+          "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct/resolve/7ae557604adf67be50417f59c2c2f167def9a775/model.safetensors",
+          "sha256": "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe"
+        }
+      ],
+      "logits_tolerance": 0.0001,
+      "greedy_tokens": 64
+    },
+    {
+      "name": "tinyllama-1.1b-chat",
+      "suite": "nightly",
+      "files": [
+        {
+          "path": "config.json",
+          "url": "https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/resolve/fe8a4ea1ffedaf415f4da2f062534de366a451e6/config.json",
+          "sha256": "486bedda3a6988332e60d9638a09ca4b260d34ebcf1b19e22cf3b140b63d8fe9"
+        },
+        {
+          "path": "generation_config.json",
+          "url": "https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/resolve/fe8a4ea1ffedaf415f4da2f062534de366a451e6/generation_config.json",
+          "sha256": "18046d04f5bd8b4998095ecabdd17a1bf0053d9acdccead4a05be4a3575f3c5c"
+        },
+        {
+          "path": "tokenizer.json",
+          "url": "https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/resolve/fe8a4ea1ffedaf415f4da2f062534de366a451e6/tokenizer.json",
+          "sha256": "bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "url": "https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/resolve/fe8a4ea1ffedaf415f4da2f062534de366a451e6/tokenizer_config.json",
+          "sha256": "7b41ba7d0eb91e77914ca3dafde559ea3e19878769b7e68409e89bed5222e77a"
+        },
+        {
+          "path": "model.safetensors",
+          "url": "https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0/resolve/fe8a4ea1ffedaf415f4da2f062534de366a451e6/model.safetensors",
+          "sha256": "6e6001da2106d4757498752a021df6c2bdc332c650aae4bae6b0c004dcf14933"
+        }
+      ],
+      "logits_tolerance": 0.0001,
+      "greedy_tokens": 128,
+      "perplexity_chunks": 8,
+      "perplexity_tolerance": 0.001
+    },
+    {
+      "name": "tinyllama-1.1b-chat-q4_k_m",
+      "suite": "nightly",
+      "url": "https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/52e7645ba7c309695bec7ac98f4f005b139cf465/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf",
+      "sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+      "reference": "tinyllama-1.1b-chat",
+      "perplexity_chunks": 8,
+      "perplexity_max_increase": 0.06,
+      "chat": {
+        "prompt": "Name the largest planet of the solar system in one word.",
+        "expect": "Jupiter"
+      }
     }
   ]
 }

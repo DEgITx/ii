@@ -391,57 +391,118 @@ void rms_norm(const float* x, const float* scale, float* y, std::int64_t rows, s
     }
 }
 
+II_SIMD_INLINE float dot_f16(const float* a, const std::uint16_t* b, std::int64_t n) {
+    VF acc0 = vzero();
+    VF acc1 = vzero();
+    std::int64_t i = 0;
+    for (; i + 2 * kLanes <= n; i += 2 * kLanes) {
+        acc0 = vfma(vload(a + i), vload_f16(b + i), acc0);
+        acc1 = vfma(vload(a + i + kLanes), vload_f16(b + i + kLanes), acc1);
+    }
+    for (; i + kLanes <= n; i += kLanes) {
+        acc0 = vfma(vload(a + i), vload_f16(b + i), acc0);
+    }
+    float sum = vreduce_add(vadd(acc0, acc1));
+    if (i < n) {
+        alignas(64) std::uint16_t tail[kLanes] = {};
+        for (std::int64_t t = 0; t < n - i; ++t) {
+            tail[t] = b[i + t];
+        }
+        sum += vreduce_add(vmul(vload_partial(a + i, n - i), vload_f16(tail)));
+    }
+    return sum;
+}
+
+II_SIMD_INLINE void axpy_f16(float alpha, const std::uint16_t* x, float* y, std::int64_t n) {
+    const VF a = vset1(alpha);
+    std::int64_t i = 0;
+    for (; i + kLanes <= n; i += kLanes) {
+        vstore(y + i, vfma(a, vload_f16(x + i), vload(y + i)));
+    }
+    if (i < n) {
+        alignas(64) std::uint16_t tail[kLanes] = {};
+        for (std::int64_t t = 0; t < n - i; ++t) {
+            tail[t] = x[i + t];
+        }
+        vstore_partial(y + i, vfma(a, vload_f16(tail), vload_partial(y + i, n - i)), n - i);
+    }
+}
+
 void attention_row(const AttentionRowArgs& args) {
-    float* scores = args.scratch;
+    // Only keys in [start, limit) can be attended; the others have probability 0.
+    const std::int64_t start = args.kv_start;
+    const std::int64_t limit = args.kv_limit;
+    const std::int64_t count = limit > start ? limit - start : 0;
+    float* scores = args.scratch;  // [count]
+    const bool half = args.kv_elem == Elem::kF16;
+    for (std::int64_t j = 0; j < count; ++j) {
+        const std::int64_t key = start + j;
+        scores[j] = (half ? dot_f16(args.q, static_cast<const std::uint16_t*>(args.k) + key * args.k_stride, args.d)
+                          : dot(args.q, static_cast<const float*>(args.k) + key * args.k_stride, args.d)) *
+                    args.scale;
+    }
+    if (args.softcap > 0.0f) {
+        const VF cap = vset1(args.softcap);
+        const VF inv_cap = vset1(1.0f / args.softcap);
+        std::int64_t j = 0;
+        for (; j + kLanes <= count; j += kLanes) {
+            vstore(scores + j, vmul(cap, vtanh(vmul(vload(scores + j), inv_cap))));
+        }
+        if (j < count) {
+            vstore_partial(scores + j, vmul(cap, vtanh(vmul(vload_partial(scores + j, count - j), inv_cap))),
+                           count - j);
+        }
+    }
     float max = -kInf;
     bool has_nan = false;
-    for (std::int64_t j = 0; j < args.kv_len; ++j) {
-        float s;
-        if (j >= args.kv_limit) {
-            s = -kInf;
-        } else {
-            s = dot(args.q, args.k + j * args.k_stride, args.d) * args.scale;
-            if (args.mask_kind == MaskKind::kBool) {
-                if (static_cast<const std::uint8_t*>(args.mask)[j * args.mask_stride] == 0) {
-                    s = -kInf;
-                }
-            } else if (args.mask_kind == MaskKind::kAdditive) {
-                s += static_cast<const float*>(args.mask)[j * args.mask_stride];
+    for (std::int64_t j = 0; j < count; ++j) {
+        float s = scores[j];
+        const std::int64_t key = start + j;
+        if (args.mask_kind == MaskKind::kBool) {
+            if (static_cast<const std::uint8_t*>(args.mask)[key * args.mask_stride] == 0) {
+                s = -kInf;
             }
+        } else if (args.mask_kind == MaskKind::kAdditive) {
+            s += static_cast<const float*>(args.mask)[key * args.mask_stride];
         }
         has_nan = has_nan || s != s;
         max = s > max ? s : max;
         scores[j] = s;
     }
-    if (has_nan) {
-        max = scalar_nan();
+    if (has_nan || count == 0) {
+        max = scalar_nan();  // a fully masked row is NaN, as in ii-ref
     }
     // exp(s - max), vectorized.
     const VF m = vset1(max);
     VF vsum = vzero();
     std::int64_t j = 0;
-    for (; j + kLanes <= args.kv_len; j += kLanes) {
+    for (; j + kLanes <= count; j += kLanes) {
         const VF e = vexp(vsub(vload(scores + j), m));
         vsum = vadd(vsum, e);
         vstore(scores + j, e);
     }
     float sum = vreduce_add(vsum);
-    if (j < args.kv_len) {
-        const VF e = vexp(vsub(vload_partial(scores + j, args.kv_len - j), m));
+    if (j < count) {
+        const VF e = vexp(vsub(vload_partial(scores + j, count - j), m));
         float tail[kLanes];
         vstore(tail, e);
-        for (std::int64_t t = 0; t < args.kv_len - j; ++t) {
+        for (std::int64_t t = 0; t < count - j; ++t) {
             sum += tail[t];
             scores[j + t] = tail[t];
         }
     }
     for (std::int64_t i = 0; i < args.dv; ++i) {
-        args.out[i] = 0.0f;
+        args.out[i] = count == 0 ? scalar_nan() : 0.0f;
     }
-    for (j = 0; j < args.kv_len; ++j) {
+    for (j = 0; j < count; ++j) {
         const float p = scores[j];
         if (p != 0.0f) {  // NaN included
-            axpy(p, args.v + j * args.v_stride, args.out, args.dv);
+            const std::int64_t key = start + j;
+            if (half) {
+                axpy_f16(p, static_cast<const std::uint16_t*>(args.v) + key * args.v_stride, args.out, args.dv);
+            } else {
+                axpy(p, static_cast<const float*>(args.v) + key * args.v_stride, args.out, args.dv);
+            }
         }
     }
     const float inv = 1.0f / sum;

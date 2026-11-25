@@ -183,19 +183,22 @@ enum class MaskKind : std::uint8_t {
 
 struct AttentionRowArgs {
     const float* q;  ///< [d]
-    const float* k;  ///< [kv_len, d] with row stride k_stride
+    const void* k;   ///< [kv_len, d] with row stride k_stride (elements of kv_elem)
     std::int64_t k_stride;
-    const float* v;  ///< [kv_len, dv] with row stride v_stride
+    const void* v;  ///< [kv_len, dv] with row stride v_stride
     std::int64_t v_stride;
+    Elem kv_elem;  ///< f32 or f16 keys and values
     std::int64_t d;
     std::int64_t dv;
     std::int64_t kv_len;
+    std::int64_t kv_start;  ///< keys [0, kv_start) are masked (sliding window); 0 otherwise
     std::int64_t kv_limit;  ///< keys [kv_limit, kv_len) are masked (causal attention); kv_len otherwise
     float scale;
+    float softcap;  ///< > 0: scores become softcap * tanh(score / softcap) before masking
     MaskKind mask_kind;
     const void* mask;  ///< mask row: kv_len elements with stride mask_stride (0 = broadcast)
     std::int64_t mask_stride;
-    float* scratch;  ///< kv_len floats
+    float* scratch;  ///< kv_len + dv floats
     float* out;      ///< [dv]
 };
 
@@ -229,6 +232,45 @@ inline std::int64_t depthwise_scratch_floats(std::int64_t oh, std::int64_t ow, s
     return sw * rows * ((cols + sw - 1) / sw + 16) + 64;
 }
 
+// --------------------------------------------------------------------------------------------------------------------
+// Quantized products (block-quantized weights, GGUF layouts)
+//
+// Activations are quantized to 8 bits per row first, in one of two layouts:
+//   kQ8x32: blocks of 32 values: f32 scale d, f32 s = d * sum(q), 32 int8 q   (40 bytes)
+//   kQ8K:   blocks of 256 values: f32 scale d, 256 int8 q, 16 int16 sums of groups of 16 (292 bytes, ggml's q8_K)
+// and each weight row is multiplied with several activation rows at once, so it is decoded once for all of them.
+
+enum class QType : std::uint8_t { kQ4_0, kQ4_1, kQ5_0, kQ5_1, kQ8_0, kQ2_K, kQ3_K, kQ4_K, kQ5_K, kQ6_K, kCount };
+
+enum class QAct : std::uint8_t { kQ8x32, kQ8K };
+
+/// Quantizes k floats (a multiple of the block size) into activation blocks.
+using QuantizeActFn = void (*)(const float* x, void* out, std::int64_t k);
+
+/// out[r * out_stride] = dot(weight row w (k values), activation row r) for r < rows (1 <= rows <= 4); activation
+/// rows are `a_stride` bytes apart.
+using QDotFn = void (*)(std::int64_t k, const void* w, const void* a, std::int64_t a_stride, int rows, float* out,
+                        std::int64_t out_stride);
+
+/// Panels of 8 weight rows (repacked at compile time, see qmatmul.cpp) make prompt processing a small GEMM: four bytes
+/// of one activation row are broadcast against 8 weight rows, so every weight byte decoded serves 4 activation rows and
+/// every activation byte 8 weight rows. One panel block (one weight block of each of the 8 rows) holds, per type:
+///   q4_0: f32 d[8]; 8 steps x 16 bytes of nibbles               (160 bytes per 32 values)
+///   q5_0: f32 d[8]; 8 steps x 16 bytes of nibbles; 8 x u32 high bits (192 bytes)
+///   q8_0: f32 d[8]; 8 steps x 32 int8                            (288 bytes)
+///   q4_K: f32 d[8], dmin[8]; u8 scale[8][8], min[8][8] (sub-block, row); 64 steps x 16 bytes of nibbles (1216 bytes)
+///   q6_K: f32 d[8]; i8 scale[16][8]; 16 x (4 steps x 16 bytes of low nibbles, 32 bytes of 2-bit high parts)
+///         (1696 bytes per 256 values)
+/// A step covers 4 consecutive values of each of the 8 rows: 32 values, ordered row 0 (4 values), row 1, ... For
+/// nibbles, byte j of a step holds row j / 4 in its low half and row 4 + j / 4 in its high half (value j % 4); high
+/// bits use bit i of a 32-bit word for value i of the step; the q6_K high parts of 4 steps share 32 bytes (bits
+/// 2t..2t+1 of byte i for step t, value i).
+inline constexpr int kPanelRows = 8;
+
+/// out[r * out_stride + c] = dot(weight row c of the panel, activation row r) for c < 8 and r < rows (1..4).
+using QGemm8Fn = void (*)(std::int64_t k, const void* panel, const void* a, std::int64_t a_stride, int rows, float* out,
+                          std::int64_t out_stride);
+
 /// y[i] += a * x[i] (f32).
 using AxpyFn = void (*)(float* y, const float* x, float a, std::int64_t n);
 /// y[i] = max(y[i], x[i]) (f32).
@@ -251,6 +293,10 @@ struct KernelTable {
     AxpyFn axpy;
     MaxInplaceFn max_inplace;
     DepthwiseFn depthwise;
+    QuantizeActFn quantize_q8x32;
+    QuantizeActFn quantize_q8k;
+    QDotFn qdot[static_cast<int>(QType::kCount)];
+    QGemm8Fn qgemm8[static_cast<int>(QType::kCount)];  ///< nullptr: no panel kernel for the type in this variant
 };
 
 // Scalar fallbacks for rare functions, compiled once without ISA flags (src/backends/cpu/scalar_math.cpp).
@@ -275,6 +321,12 @@ II_DECLARE_CPU_KERNEL_TABLE(avx512)
 #endif
 #if defined(II_HAVE_ISA_NEON)
 II_DECLARE_CPU_KERNEL_TABLE(neon)
+#endif
+#if defined(II_HAVE_ISA_AVX_VNNI)
+II_DECLARE_CPU_KERNEL_TABLE(avx_vnni)
+#endif
+#if defined(II_HAVE_ISA_NEON_DOTPROD)
+II_DECLARE_CPU_KERNEL_TABLE(neon_dotprod)
 #endif
 
 #undef II_DECLARE_CPU_KERNEL_TABLE

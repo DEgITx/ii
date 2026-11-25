@@ -2,12 +2,14 @@
 #include <ii/tensor.h>
 
 #include "core/assert.h"
+#include "tensor/quant.h"
 #include "tensor/strided.h"
 
 #include <algorithm>
 #include <cstring>
 #include <format>
 #include <limits>
+#include <vector>
 
 namespace ii {
 
@@ -374,6 +376,85 @@ Result<Tensor> Tensor::clone(Allocator& allocator) const {
     II_ASSIGN_OR_RETURN(Tensor copy, empty(dtype_, shape_, allocator));
     strided_copy(copy, *this);
     return copy;
+}
+
+Result<Tensor> Tensor::to(DType dtype, Allocator& allocator) const {
+    if (!defined()) {
+        return Tensor();
+    }
+    if (dtype == dtype_) {
+        return clone(allocator);
+    }
+    auto float_like = [](DType t) {
+        return t == DType::kF32 || t == DType::kF16 || t == DType::kBF16 || t == DType::kF64;
+    };
+    if (!(float_like(dtype_) || is_block_quantized(dtype_)) || !(float_like(dtype) || is_block_quantized(dtype))) {
+        return errors::unsupported("conversion from {} to {}", ii::to_string(dtype_), ii::to_string(dtype));
+    }
+    if (is_block_quantized(dtype) && !quant::can_quantize(dtype)) {
+        return errors::unsupported("quantization to {}", ii::to_string(dtype));
+    }
+    const std::int64_t row = rank() == 0 ? 1 : shape_[rank() - 1];
+    if (is_block_quantized(dtype)) {
+        II_TRY(quant::check_row(dtype, row));
+    }
+    II_ASSIGN_OR_RETURN(const Tensor source, contiguous(allocator));
+    II_ASSIGN_OR_RETURN(Tensor result, empty(dtype, shape_, allocator));
+    const std::int64_t n = numel();
+    // Through f32, one row at a time.
+    std::vector<float> values(static_cast<std::size_t>(std::max<std::int64_t>(row, 1)));
+    const std::int64_t rows = row == 0 ? 0 : n / row;
+    for (std::int64_t r = 0; r < rows; ++r) {
+        const auto* in = static_cast<const std::byte*>(source.data()) + storage_size(dtype_, r * row);
+        auto* out = static_cast<std::byte*>(result.data()) + storage_size(dtype, r * row);
+        switch (dtype_) {
+        case DType::kF32:
+            std::memcpy(values.data(), in, static_cast<std::size_t>(row) * 4);
+            break;
+        case DType::kF16:
+            for (std::int64_t i = 0; i < row; ++i) {
+                values[static_cast<std::size_t>(i)] = reinterpret_cast<const f16*>(in)[i].to_float();
+            }
+            break;
+        case DType::kBF16:
+            for (std::int64_t i = 0; i < row; ++i) {
+                values[static_cast<std::size_t>(i)] = reinterpret_cast<const bf16*>(in)[i].to_float();
+            }
+            break;
+        case DType::kF64:
+            for (std::int64_t i = 0; i < row; ++i) {
+                values[static_cast<std::size_t>(i)] = static_cast<float>(reinterpret_cast<const double*>(in)[i]);
+            }
+            break;
+        default:
+            quant::dequantize(dtype_, in, values.data(), row);
+        }
+        switch (dtype) {
+        case DType::kF32:
+            std::memcpy(out, values.data(), static_cast<std::size_t>(row) * 4);
+            break;
+        case DType::kF16:
+            for (std::int64_t i = 0; i < row; ++i) {
+                reinterpret_cast<f16*>(out)[i] = dtype_ == DType::kF64
+                                                     ? f16(static_cast<float>(reinterpret_cast<const double*>(in)[i]))
+                                                     : f16(values[static_cast<std::size_t>(i)]);
+            }
+            break;
+        case DType::kBF16:
+            for (std::int64_t i = 0; i < row; ++i) {
+                reinterpret_cast<bf16*>(out)[i] = bf16(values[static_cast<std::size_t>(i)]);
+            }
+            break;
+        case DType::kF64:
+            for (std::int64_t i = 0; i < row; ++i) {
+                reinterpret_cast<double*>(out)[i] = static_cast<double>(values[static_cast<std::size_t>(i)]);
+            }
+            break;
+        default:
+            quant::quantize(dtype, values.data(), out, row);
+        }
+    }
+    return result;
 }
 
 Result<Tensor> Tensor::contiguous(Allocator& allocator) const {
