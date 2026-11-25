@@ -4,6 +4,7 @@ include(IiDependencies)
 ii_require_benchmark()
 
 add_executable(ii_bench_micro
+    micro/bench_cpu.cpp
     micro/bench_half.cpp
     micro/bench_runtime.cpp
     micro/bench_thread_pool.cpp)

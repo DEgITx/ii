@@ -80,6 +80,102 @@ TEST(PassesTest, ConstantFoldingDoesNotInflate) {
     EXPECT_THAT(graph->to_text(), HasSubstr("= expand(%one) {shape = [1024, 1024]}"));
 }
 
+TEST(PassesTest, CommonSubexpressionElimination) {
+    auto graph = parse(R"(graph {
+      input %x : f32[2]
+      %a : f32[2] = exp(%x)
+      %b : f32[2] = exp(%x)
+      %c : f32[2] = clamp(%x) {max = 1, min = 0}
+      %d : f32[2] = clamp(%x) {max = 2, min = 0}
+      %s : f32[2] = add(%a, %b)
+      %t : f32[2] = add(%a, %b)
+      %r1 : f32[2] = random_uniform() {shape = [2]}
+      %r2 : f32[2] = random_uniform() {shape = [2]}
+      %u : f32[2] = mul(%s, %t)
+      %v : f32[2] = add(%c, %d)
+      %w : f32[2] = add(%r1, %r2)
+      output u = %u
+      output v = %v
+      output w = %w
+    })");
+    EXPECT_EQ(compiler::eliminate_common_subexpressions(*graph), 2u);  // %b, %t; different attributes and random
+    ASSERT_TRUE(graph->verify().ok());
+    EXPECT_THAT(graph->to_text(), HasSubstr("%u : f32[2] = mul(%s, %s)"));
+}
+
+TEST(PassesTest, FusesMatmulAndBiasIntoLinear) {
+    auto graph = parse(R"(graph {
+      input %x : f32[N, 3]
+      const %w : f32[3, 2] = f32[3, 2] {1, 2, 3, 4, 5, 6}
+      const %b : f32[2] = f32[2] {1, 2}
+      const %wt : f32[2, 3] = f32[2, 3] {1, 2, 3, 4, 5, 6}
+      %m : f32[N, 2] = matmul(%x, %w)
+      %y : f32[N, 2] = add(%b, %m)
+      %m2 : f32[N, 2] = matmul(%x, %wt) {transpose_b = true}
+      %y2 : f32[N, 2] = add(%m2, %b)
+      %m3 : f32[N, 2] = matmul(%x, %w)
+      %y3 : f32[N, 2] = add(%m3, %m3)
+      output y = %y
+      output y2 = %y2
+      output y3 = %y3
+    })");
+    EXPECT_EQ(compiler::fuse_patterns(*graph).value(), 2u);
+    ASSERT_TRUE(graph->verify().ok());
+    const std::string text = graph->to_text();
+    EXPECT_THAT(text, HasSubstr("%y : f32[N, 2] = linear(%x, %w, %b) {transpose_w = false}"));
+    EXPECT_THAT(text, HasSubstr("%y2 : f32[N, 2] = linear(%x, %wt, %b) {transpose_w = true}"));
+    EXPECT_THAT(text, HasSubstr("matmul(%x, %w)"));  // %m3 has two uses: not a bias pattern
+}
+
+TEST(PassesTest, FusesElementwiseChains) {
+    auto graph = parse(R"(graph {
+      input %x : f32[N, 8]
+      input %b : f32[8]
+      input %m : bool[N, 8]
+      %a : f32[N, 8] = add(%x, %b)
+      %s : f32[N, 8] = silu(%a)
+      %c : f32[N, 8] = where(%m, %s, %x)
+      %r : f32[N] = reduce_sum(%c) {axes = [1]}
+      %e : f32[N] = exp(%r)
+      %h : f16[N] = cast(%e) {to = f16}
+      output y = %h
+      output c = %c
+    })");
+    EXPECT_EQ(compiler::fuse_elementwise(*graph).value(), 2u);
+    ASSERT_TRUE(graph->verify().ok());
+    const std::string text = graph->to_text();
+    EXPECT_THAT(text, HasSubstr("%c : f32[N, 8] = fused_elementwise(%x, %b, %m)"));
+    EXPECT_THAT(text, HasSubstr("%h : f16[N] = fused_elementwise(%r)"));
+    EXPECT_THAT(text, HasSubstr("reduce_sum"));
+    EXPECT_THAT(text, Not(HasSubstr("%s : f32[N, 8] = silu")));
+    // The fused program decomposes back into the original operations.
+    EXPECT_EQ(
+        compiler::decompose(*graph, [](const ir::Node& node) { return node.op_name() == "fused_elementwise"; }).value(),
+        2u);
+    ASSERT_TRUE(graph->verify().ok());
+    EXPECT_THAT(graph->to_text(), HasSubstr("silu("));
+}
+
+TEST(PassesTest, ElementwiseFusionKeepsSharedAndBroadcastValues) {
+    auto graph = parse(R"(graph {
+      input %x : f32[4, 8]
+      input %v : f32[8]
+      %e : f32[8] = exp(%v)
+      %a : f32[4, 8] = mul(%x, %e)
+      %t : f32[4, 8] = tanh(%a)
+      %u : f32[4, 8] = neg(%t)
+      output u = %u
+      output t = %t
+    })");
+    // %e has a different shape (it would be recomputed per row) and %t is a graph output: neither is absorbed.
+    EXPECT_EQ(compiler::fuse_elementwise(*graph).value(), 1u);
+    ASSERT_TRUE(graph->verify().ok());
+    const std::string text = graph->to_text();
+    EXPECT_THAT(text, HasSubstr("%e : f32[8] = exp(%v)"));
+    EXPECT_THAT(text, HasSubstr("%t : f32[4, 8] = fused_elementwise(%x, %e)"));
+    EXPECT_THAT(text, HasSubstr("%u : f32[4, 8] = neg(%t)"));
+}
+
 TEST(PassesTest, DecompositionKeepsTypes) {
     auto graph = parse(R"(graph {
       input %q : f32[B, 4, S, 8]

@@ -5,6 +5,7 @@
 #include "runtime/memory_planner.h"
 #include "runtime/runtime.h"
 
+#include <chrono>
 #include <cstring>
 #include <format>
 
@@ -272,16 +273,80 @@ Status SessionImpl::prepare() {
         }
     }
 
+    // --- Buffer sharing ---
+    // Values are grouped into buffers: a view (reshape) shares its input's buffer, and an operation that can run in
+    // place writes into the buffer of an input that dies at that step. A buffer lives from its first producer to the
+    // last use of any of its values.
+    const int end_step = static_cast<int>(p.steps.size());
+    std::vector<int> root(p.values.size(), -1);         // buffer root per kNode value (-1: external memory)
+    std::vector<int> buffer_last(p.values.size(), -1);  // per root: last step using the buffer
+    std::vector<std::size_t> buffer_size(p.values.size(), 0);
+    next.alias_steps.assign(p.steps.size(), 0);
+    auto last_use_of = [&](int v) {
+        const ValueInfo& info = p.values[static_cast<std::size_t>(v)];
+        return std::max(info.last_use, info.producer);
+    };
+    auto nbytes_of = [&](int v) {
+        return storage_size(p.values[static_cast<std::size_t>(v)].type.dtype,
+                            next.shapes[static_cast<std::size_t>(v)].numel());
+    };
+    auto is_result = [&](int v) { return p.values[static_cast<std::size_t>(v)].last_use == end_step; };
+    for (std::size_t s = 0; s < p.steps.size(); ++s) {
+        const Step& step = p.steps[s];
+        const int step_index = static_cast<int>(s);
+        for (const int v : step.outputs) {
+            root[static_cast<std::size_t>(v)] = v;
+            buffer_last[static_cast<std::size_t>(v)] = last_use_of(v);
+            buffer_size[static_cast<std::size_t>(v)] = nbytes_of(v);
+        }
+        if (step.outputs.size() != 1 || step.inputs.empty() || step.inputs[0] < 0) {
+            continue;
+        }
+        const int out = step.outputs[0];
+        if (step.node->op().has_flag(ir::kOpView)) {
+            const int in = step.inputs[0];
+            const ir::ValueKind kind = p.values[static_cast<std::size_t>(in)].kind;
+            const int r = kind == ir::ValueKind::kNode ? root[static_cast<std::size_t>(in)] : -1;
+            if (r >= 0) {
+                root[static_cast<std::size_t>(out)] = r;
+                buffer_last[static_cast<std::size_t>(r)] =
+                    std::max(buffer_last[static_cast<std::size_t>(r)], last_use_of(out));
+                next.alias_steps[s] = 1;
+            } else if (!is_result(out) && kind != ir::ValueKind::kState) {
+                // A view of external memory (an input, a constant, or a view of one): valid while the steps run.
+                root[static_cast<std::size_t>(out)] = -1;
+                next.alias_steps[s] = 1;
+            }
+            continue;
+        }
+        for (std::size_t i = 0; i < step.inputs.size(); ++i) {
+            const int in = step.inputs[i];
+            if (in < 0 || p.values[static_cast<std::size_t>(in)].kind != ir::ValueKind::kNode ||
+                !step.kernel->can_run_in_place(static_cast<int>(i))) {
+                continue;
+            }
+            const int r = root[static_cast<std::size_t>(in)];
+            if (r < 0 || buffer_last[static_cast<std::size_t>(r)] != step_index ||
+                next.shapes[static_cast<std::size_t>(in)].numel() !=
+                    next.shapes[static_cast<std::size_t>(out)].numel() ||
+                nbytes_of(in) != nbytes_of(out) || buffer_size[static_cast<std::size_t>(r)] < nbytes_of(out)) {
+                continue;
+            }
+            root[static_cast<std::size_t>(out)] = r;
+            buffer_last[static_cast<std::size_t>(r)] = std::max(step_index, last_use_of(out));
+            break;
+        }
+    }
+
     // --- Memory plan ---
     std::vector<runtime::MemoryRequest> requests;
     std::vector<int> request_value;  // value index, or -(step + 1) for a workspace
     for (std::size_t v = 0; v < p.values.size(); ++v) {
         const ValueInfo& info = p.values[v];
-        if (info.kind != ir::ValueKind::kNode) {
+        if (info.kind != ir::ValueKind::kNode || root[v] != static_cast<int>(v)) {
             continue;
         }
-        const std::size_t size = storage_size(info.type.dtype, next.shapes[v].numel());
-        requests.push_back(runtime::MemoryRequest{size, info.producer, std::max(info.last_use, info.producer)});
+        requests.push_back(runtime::MemoryRequest{buffer_size[v], info.producer, buffer_last[v]});
         request_value.push_back(static_cast<int>(v));
     }
     next.workspace_sizes.assign(p.steps.size(), 0);
@@ -329,6 +394,12 @@ Status SessionImpl::prepare() {
             next.offsets[static_cast<std::size_t>(target)] = memory.offsets[r];
         } else if (target != std::numeric_limits<int>::min()) {
             next.workspace_offsets[static_cast<std::size_t>(-target - 1)] = memory.offsets[r];
+        }
+    }
+    for (std::size_t v = 0; v < p.values.size(); ++v) {
+        if (p.values[v].kind == ir::ValueKind::kNode && root[v] != static_cast<int>(v)) {
+            next.offsets[v] =
+                root[v] >= 0 ? next.offsets[static_cast<std::size_t>(root[v])] : ExecutionPlan::kNotInArena;
         }
     }
     next.state_staging_offsets.assign(p.states.size(), ExecutionPlan::kNotInArena);
@@ -391,7 +462,7 @@ Status SessionImpl::run() {
             value_data[v] = states[static_cast<std::size_t>(info.state_index)].data();
             break;
         case ir::ValueKind::kNode:
-            value_data[v] = base + plan.offsets[v];
+            value_data[v] = plan.offsets[v] != ExecutionPlan::kNotInArena ? base + plan.offsets[v] : nullptr;
             break;
         }
     }
@@ -414,8 +485,23 @@ Status SessionImpl::run() {
 
     backend::KernelContext context;
     context.executor = p.context.impl()->executor;
+    using Clock = std::chrono::steady_clock;
+    const Clock::time_point run_start = Clock::now();
+    auto elapsed_ns = [&] {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - run_start).count();
+    };
+    profiled = false;
     for (std::size_t s = 0; s < p.steps.size(); ++s) {
         const Step& step = p.steps[s];
+        if (profiling) {
+            step_times[2 * s] = elapsed_ns();
+            step_times[2 * s + 1] = step_times[2 * s];
+        }
+        if (plan.alias_steps[s] != 0) {
+            value_data[static_cast<std::size_t>(step.outputs[0])] =
+                value_data[static_cast<std::size_t>(step.inputs[0])];
+            continue;
+        }
         const std::size_t begin = plan.view_begin[s];
         const std::size_t middle = begin + step.inputs.size();
         const std::size_t end = plan.view_begin[s + 1];
@@ -433,6 +519,9 @@ Status SessionImpl::run() {
             const std::string& name = step.node->name();
             return status.add_context(std::format("step {} ('{}'{}, {})", s, step.node->op_name(),
                                                   name.empty() ? "" : " " + name, step.backend->name()));
+        }
+        if (profiling) {
+            step_times[2 * s + 1] = elapsed_ns();
         }
     }
 
@@ -466,6 +555,10 @@ Status SessionImpl::run() {
         }
     }
     has_run = true;
+    if (profiling) {
+        run_time_ns = elapsed_ns();
+        profiled = true;
+    }
     return ok_status();
 }
 
@@ -602,6 +695,91 @@ Result<Tensor> Session::state(std::string_view name) const {
 
 Status Session::reset_states() {
     return impl_->reset_states();
+}
+
+void Session::set_profiling(bool enabled) {
+    impl_->profiling = enabled;
+    impl_->step_times.assign(2 * impl_->program->steps.size(), 0);
+}
+
+Result<Profile> Session::profile() const {
+    const detail::SessionImpl& s = *impl_;
+    if (!s.profiled) {
+        return errors::invalid_argument("the last run was not profiled (call set_profiling(true) before run())");
+    }
+    const detail::ProgramImpl& p = *s.program;
+    Profile profile;
+    profile.total_us = static_cast<double>(s.run_time_ns) / 1000.0;
+    for (std::size_t i = 0; i < p.steps.size(); ++i) {
+        const detail::Step& step = p.steps[i];
+        StepProfile item;
+        item.op = std::string(step.node->op_name());
+        item.name = step.node->name();
+        item.backend = s.plan.alias_steps[i] != 0 ? "view" : std::string(step.backend->name());
+        if (!step.outputs.empty()) {
+            const auto v = static_cast<std::size_t>(step.outputs[0]);
+            item.output = std::string(to_string(p.values[v].type.dtype)) + s.plan.shapes[v].to_string();
+        }
+        item.start_us = static_cast<double>(s.step_times[2 * i]) / 1000.0;
+        item.duration_us = static_cast<double>(s.step_times[2 * i + 1] - s.step_times[2 * i]) / 1000.0;
+        profile.steps.push_back(std::move(item));
+    }
+    return profile;
+}
+
+namespace {
+
+std::string json_escape(std::string_view text) {
+    std::string out;
+    for (const char c : text) {
+        switch (c) {
+        case '"':
+            out += "\\\"";
+            break;
+        case '\\':
+            out += "\\\\";
+            break;
+        case '\n':
+            out += "\\n";
+            break;
+        default:
+            if (static_cast<unsigned char>(c) < 0x20) {
+                out += std::format("\\u{:04x}", static_cast<unsigned>(c));
+            } else {
+                out += c;
+            }
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
+std::string to_chrome_trace(std::span<const Profile> runs) {
+    std::string json = "{\"traceEvents\": [\n";
+    double offset = 0;
+    bool first = true;
+    auto event = [&](std::string_view name, std::string_view category, double start, double duration,
+                     const std::string& args, int thread) {
+        json += std::format(
+            "{}  {{\"name\": \"{}\", \"cat\": \"{}\", \"ph\": \"X\", \"ts\": {:.3f}, \"dur\": {:.3f}, \"pid\": 1, "
+            "\"tid\": {}, \"args\": {{{}}}}}",
+            first ? "" : ",\n", json_escape(name), json_escape(category), start, duration, thread, args);
+        first = false;
+    };
+    for (std::size_t r = 0; r < runs.size(); ++r) {
+        const Profile& run = runs[r];
+        event(std::format("run {}", r), "run", offset, run.total_us, std::string(), 1);
+        for (const StepProfile& step : run.steps) {
+            const std::string args =
+                std::format("\"backend\": \"{}\", \"output\": \"{}\", \"node\": \"{}\"", json_escape(step.backend),
+                            json_escape(step.output), json_escape(step.name));
+            event(step.op, step.backend, offset + step.start_us, step.duration_us, args, 2);
+        }
+        offset += run.total_us + 1.0;
+    }
+    json += "\n], \"displayTimeUnit\": \"ms\"}\n";
+    return json;
 }
 
 }  // namespace ii

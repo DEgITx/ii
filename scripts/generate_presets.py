@@ -120,7 +120,25 @@ TOOLCHAINS = {
         ["debug", "release"],
         {},
     ),
+    # Android: cross-compiled with the NDK (ANDROID_NDK_HOME); ctest runs the binaries on the device or emulator
+    # selected by adb (ANDROID_SERIAL) through scripts/android_run.py.
+    "android-arm64": (
+        "Android arm64-v8a (NDK from ANDROID_NDK_HOME; tests run through adb)",
+        None,
+        {"ANDROID_ABI": "arm64-v8a", "ANDROID_PLATFORM": "android-26"},
+        ["debug", "release"],
+        {},
+    ),
+    "android-x86_64": (
+        "Android x86_64 (NDK from ANDROID_NDK_HOME; tests run through adb, e.g. on an emulator)",
+        None,
+        {"ANDROID_ABI": "x86_64", "ANDROID_PLATFORM": "android-26"},
+        ["release"],
+        {},
+    ),
 }
+
+ANDROID_TOOLCHAIN = "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake"
 
 CONFIGS = {"debug": "Debug", "release": "Release", "relwithdebinfo": "RelWithDebInfo"}
 
@@ -144,13 +162,17 @@ def main() -> None:
     ]
     build, test, workflow = [], [], []
     for name, (description, condition, cache, configs, test_env) in TOOLCHAINS.items():
-        configure.append({
+        preset = {
             "name": name,
             "displayName": description,
             "inherits": "base",
-            "condition": condition,
             "cacheVariables": cache,
-        })
+        }
+        if condition is not None:
+            preset["condition"] = condition
+        if name.startswith("android-"):
+            preset["toolchainFile"] = ANDROID_TOOLCHAIN
+        configure.append(preset)
         for config in configs:
             preset = f"{name}-{config}"
             build.append({"name": preset, "configurePreset": name, "configuration": CONFIGS[config]})

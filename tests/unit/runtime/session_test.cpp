@@ -2,11 +2,13 @@
 #include <ii/builder.h>
 #include <ii/model.h>
 
+#include "runtime/runtime.h"
 #include "support/alloc_counter.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <numeric>
 #include <vector>
 
@@ -14,6 +16,19 @@ namespace ii {
 namespace {
 
 using ::testing::HasSubstr;
+
+}  // namespace
+
+/// Test access to the session's execution plan (Session keeps its implementation private).
+struct SessionTestAccess {
+    static std::size_t arena_size(const Session& session) { return session.impl_->plan.arena_size; }
+};
+
+namespace {
+
+std::size_t session_arena_size(const Session& session) {
+    return SessionTestAccess::arena_size(session);
+}
 
 Context make_context() {
     ContextOptions options;
@@ -72,8 +87,8 @@ TEST(SessionTest, RunsMlpWithDynamicBatch) {
         EXPECT_EQ(y.shape(), (Shape{batch, 2}));
         EXPECT_EQ(values_of(y), mlp_reference(x));
     }
-    EXPECT_THAT(program.describe(), HasSubstr("matmul"));
-    EXPECT_THAT(program.describe(), HasSubstr("ii-ref"));
+    EXPECT_THAT(program.describe(), HasSubstr("linear"));  // matmul + bias fused
+    EXPECT_THAT(program.describe(), HasSubstr("ii-cpu"));
 }
 
 TEST(SessionTest, ConvenienceRunReturnsCopies) {
@@ -215,6 +230,70 @@ TEST(SessionTest, SteadyStateRunDoesNotAllocate) {
     }
     EXPECT_EQ(allocator.allocations.load(), arena_allocations);
     EXPECT_EQ(session.state("counter").value().values<std::int64_t>()[0], 6);
+}
+
+TEST(SessionTest, ViewsAndInPlaceOperationsShareMemory) {
+    const Context context = make_context();
+    GraphBuilder b;
+    const Var x = b.input("x", DType::kF32, {64, 64});
+    Var h = exp(x);  // a node output: views and in-place ops below can reuse its buffer
+    for (int i = 0; i < 6; ++i) {
+        h = reshape(i % 2 == 0 ? abs(h) : -h, i % 2 == 0 ? Dims{4096} : Dims{64, 64});
+    }
+    b.output("y", h);
+    b.output("view_of_input", reshape(reshape(x, {4096}), {64, 64}) * 2.0);  // a view of a view of an input
+    CompileOptions options;
+    options.fuse = false;  // keep the chain as separate steps
+    const Program program = Model::from_builder(context, std::move(b)).value().compile(options).value();
+    Session session = program.new_session().value();
+    std::vector<float> data(64 * 64);
+    std::iota(data.begin(), data.end(), -2000.0f);
+    for (float& v : data) {
+        v /= 1000.0f;
+    }
+    ASSERT_TRUE(session.set_input("x", Tensor::wrap(data.data(), DType::kF32, Shape{64, 64})).ok());
+    ASSERT_TRUE(session.run().ok());
+    const Tensor y = session.output("y").value();
+    const Tensor z = session.output("view_of_input").value();
+    for (std::size_t i = 0; i < data.size(); ++i) {
+        // abs, neg, abs, neg, abs, neg of exp(x) > 0: -exp(x)
+        EXPECT_FLOAT_EQ(static_cast<const float*>(y.data())[i], -std::exp(data[i]));
+        EXPECT_FLOAT_EQ(static_cast<const float*>(z.data())[i], 2.0f * data[i]);
+    }
+    // One 16 KB buffer for the whole chain (plus one for the second output), instead of one per step.
+    const std::size_t buffer = 64 * 64 * sizeof(float);
+    EXPECT_LE(session_arena_size(session), 2 * buffer + 1024);
+}
+
+TEST(SessionTest, ProfilesSteps) {
+    const Context context = make_context();
+    const Program program = mlp_model(context).compile().value();
+    Session session = program.new_session().value();
+    std::vector<float> x(6, 1.0f);
+    ASSERT_TRUE(session.set_input("x", floats(x, Shape{2, 3})).ok());
+    ASSERT_TRUE(session.run().ok());
+    EXPECT_FALSE(session.profile().ok());  // not enabled
+
+    session.set_profiling(true);
+    ASSERT_TRUE(session.run().ok());
+    const Profile profile = session.profile().value();
+    ASSERT_EQ(profile.steps.size(), program.impl()->steps.size());
+    double sum = 0;
+    for (const StepProfile& step : profile.steps) {
+        EXPECT_FALSE(step.op.empty());
+        EXPECT_EQ(step.backend, "ii-cpu");
+        EXPECT_GE(step.duration_us, 0.0);
+        EXPECT_GE(step.start_us, sum - 1e-9);  // steps run one after another
+        sum = step.start_us + step.duration_us;
+    }
+    EXPECT_LE(sum, profile.total_us + 1e-6);
+    EXPECT_EQ(profile.steps[0].output, "f32[2, 2]");
+
+    const Profile runs[] = {profile, profile};
+    const std::string trace = to_chrome_trace(runs);
+    EXPECT_THAT(trace, HasSubstr("\"traceEvents\""));
+    EXPECT_THAT(trace, HasSubstr("\"name\": \"run 1\""));
+    EXPECT_THAT(trace, HasSubstr("\"name\": \"linear\""));
 }
 
 TEST(SessionTest, CompileErrors) {

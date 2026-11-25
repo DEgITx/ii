@@ -24,6 +24,7 @@ Options:
   --graph             Print the optimized graph
   --backends LIST     Comma-separated backends to compile for (default: all)
   --no-fold           Disable constant folding
+  --no-fuse           Disable fusion (common subexpressions, patterns, elementwise chains)
   --decompose         Decompose all composite operations
   --help              Show this help
 )";
@@ -50,7 +51,7 @@ Result<std::string> read_file(const std::string& utf8_path) {
 }  // namespace
 
 int run_inspect(const std::vector<std::string>& args) {
-    auto parsed = Args::parse(args, {"graph", "no-fold", "decompose", "help"}, {"backends"});
+    auto parsed = Args::parse(args, {"graph", "no-fold", "no-fuse", "decompose", "help"}, {"backends"});
     if (!parsed.ok()) {
         std::fprintf(stderr, "ii inspect: %s\n\n%s", std::string(parsed.status().message()).c_str(), kUsage);
         return 2;
@@ -87,6 +88,7 @@ int run_inspect(const std::vector<std::string>& args) {
 
     CompileOptions options;
     options.fold_constants = !parsed->flag("no-fold");
+    options.fuse = !parsed->flag("no-fuse");
     options.decompose_composites = parsed->flag("decompose");
     if (const std::optional<std::string> list = parsed->option("backends")) {
         std::string_view rest = *list;

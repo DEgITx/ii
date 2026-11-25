@@ -51,8 +51,15 @@ backend gets thousands of tests on day one.
 boundaries, in passes, in fusion, in the memory planner and in backend partitioning
 (`tests/unit/compiler/pass_invariance_test.cpp`).
 
-**ISA matrix**: `ii-cpu` tests run for every level via `II_CPU_ISA=generic|avx2|avx_vnni|…`. Instruction sets missing
-on the machine (AVX-512, AMX) run under Intel SDE in CI; ARM on ARM runners (Linux ARM64, macOS, Android).
+**ISA matrix**: the ii-cpu tests are parameterized over every kernel variant the machine can run
+(`usable_isas()`: generic, avx2, avx512, neon): all conformance cases (`CpuConformanceTest`), differential tests
+against ii-ref with the model compiled for ii-cpu alone, so nothing silently falls back (`tests/unit/backends/` —
+GEMM edge shapes, layouts, batch broadcasting, f16/bf16, broadcasting patterns, every elementwise op, reductions,
+softmax over every axis, normalizations, attention with GQA / causal / masks, permutations of 1-, 2-, 4- and 8-byte
+elements), and sweeps of the vectorized math functions against double precision (max ulp error per function, special
+values, f16/bf16 rounding of random bit patterns). Instruction sets missing on the machine (AVX-512) run under Intel
+SDE in CI; ARM on ARM runners (Linux ARM64, macOS) and on Android (emulator in CI, phones over adb). `II_CPU_ISA`
+forces a variant for any test or tool.
 
 **Fake remote device**: the test backend `ii-test-remote` has a separate "memory domain" (copies through a separate
 arena) — cross-device transfers, events and offload are tested without a GPU.
@@ -61,7 +68,8 @@ arena) — cross-device transfers, events and offload are tested without a GPU.
 additionally tests engine-cache invalidation (different shapes / precision / version produce a rebuild).
 
 ### 2.4 Pass tests (`tests/unit/compiler/`)
-- "input text IR → expected text IR" (structural check);
+- "input text IR → expected text IR" (structural check), e.g. which nodes CSE merges, which chains elementwise
+  fusion groups and that fused programs decompose back;
 - **numerical equivalence**: the graph is executed before and after the pass on random inputs and results must match
   within tolerance. Applied to every pass automatically.
 
@@ -119,7 +127,7 @@ test) and stores the profile. Every benchmark reports not only absolute time but
 
 | Group | Metric | Target (ii-cpu) |
 |-------|--------|-----------------|
-| GEMM f32 (large sizes) | GFLOPS, % of peak | ≥ 85% of peak single-threaded, ≥ 75% multi-threaded; parity ±10% with OpenBLAS/oneDNN |
+| GEMM f32 (large sizes) | GFLOPS, % of peak | ≥ 85% of peak single-threaded, ≥ 75% multi-threaded; parity ±10% with OpenBLAS/oneDNN (stage 2: parity with OpenBLAS reached, see `bench/results/`) |
 | quantized GEMV (q4_k, q8_0) | GB/s, % of bandwidth | ≥ 85% of memory bandwidth |
 | quantized GEMM (prefill) | GOPS | parity ±10% with llama.cpp |
 | elementwise / reductions | GB/s | ≥ 90% of memcpy |
@@ -138,6 +146,12 @@ GPU backends get the same groups with their own targets (% of GPU peak; parity w
   for a fair comparison; plus time to first token and memory. Models: TinyLlama-1.1B, Llama-3.2-1B/3B, Qwen2.5-1.5B
   in f16 / q8_0 / q4_k_m.
 - **Baselines**: llama.cpp, ONNX Runtime, OpenBLAS/oneDNN, TensorRT (`trtexec`) — run scripts in `bench/baselines/`.
+
+`bench/micro/bench_cpu.cpp` measures ii-cpu end to end (one-node compiled models): `BM_Linear` (prepacked f32 /
+f16 / bf16 weights: square GEMMs, GEMV, prefill shapes), `BM_Matmul` (both operands at run time),
+`BM_Elementwise` (one op vs a fused chain), `BM_Softmax`, `BM_LayerNorm`; `II_CPU_ISA` selects the variant.
+`scripts/bench_openblas.py` measures OpenBLAS (through NumPy) on the same shapes; results with the machine
+description go to `bench/results/`.
 
 ### 4.4 Methodology
 - warm-up, repeated runs, median and confidence interval, outlier rejection;
@@ -162,7 +176,7 @@ Summary only; workflows, triggers, runners and security rules are defined in [ci
 | Linux x86-64 | GCC, Clang | all tests, sanitizers, short fuzzing, coverage, SDE for AVX-512/AMX | stage 0 |
 | Linux ARM64 | GCC, Clang | all tests, NEON/dotprod/i8mm paths | stage 0 |
 | macOS ARM64 / x86-64 | Apple Clang | all tests (+ Metal later) | stage 0 |
-| Android ARM64 / x86-64 | NDK Clang | build, tests on emulator/device | stage 2 |
+| Android ARM64 / x86-64 | NDK Clang | build, tests on emulator (CI) and devices (`ctest --preset android-arm64-release` over adb) | stage 2 (done) |
 | GPU runner (self-hosted, NVIDIA) | MSVC / GCC + CUDA | differential tests for ii-cuda and TensorRT, GPU benchmarks | stage 5 |
 | iOS, WebAssembly | Apple Clang, Emscripten | build, tests where possible | stage 6 |
 | Nightly | — | real models, long fuzzing, benchmarks with history | stage 1+ |

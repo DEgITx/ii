@@ -2,8 +2,8 @@
 
 An efficient, embeddable C++ library for neural network inference (first and foremost) and training.
 
-- **Runs everywhere** — from weak CPUs without a GPU to discrete accelerators; Windows, Linux, macOS, with Android
-  next. One binary for any x86-64 / ARM64 CPU.
+- **Runs everywhere** — from weak CPUs without a GPU to discrete accelerators; Windows, Linux, macOS, Android.
+  One binary for any x86-64 / ARM64 CPU: SIMD kernels for every instruction set level, chosen at run time.
 - **Chooses the backend itself** — own backends (`ii-cpu`, `ii-cuda`, `ii-vulkan`, …) and third-party ones
   (TensorRT, ONNX Runtime, OpenVINO, CoreML), based on cost, memory and transfers; splits a model across devices
   automatically.
@@ -28,7 +28,8 @@ auto session = program.new_session().value();
 auto outputs = session.run({{"x", batch}}).value();
 ```
 
-More: [examples/](examples) (C++ and C), `ii inspect examples/models/attention.ii.txt`, `ii ops`.
+More: [examples/](examples) (C++ and C), `ii inspect examples/models/attention.ii.txt`,
+`ii run examples/models/attention.ii.txt --dims B=4,S=128 --profile trace.json`, `ii ops`.
 
 ## Build
 
@@ -39,8 +40,9 @@ cmake --workflow --preset linux-gcc-release        # or windows-msvc-release, ma
 
 Details: [building guide](docs/guides/building.md), [contributing](CONTRIBUTING.md).
 
-> Status: stages 0 (foundation) and 1 (tensors, IR, OpSet v1, the reference backend `ii-ref`, runtime, C++ and C
-> APIs) are implemented. See [architecture](docs/architecture.md), [OpSet reference](docs/opset.md),
+> Status: stages 0 (foundation), 1 (tensors, IR, OpSet v1, the reference backend `ii-ref`, runtime, C++ and C
+> APIs) and 2 (the optimized CPU backend `ii-cpu`: SIMD for generic / AVX2 / AVX-512 / NEON, GEMM on par with
+> OpenBLAS, operation fusion, profiler, Android) are implemented. See [architecture](docs/architecture.md), [OpSet reference](docs/opset.md),
 > [roadmap](docs/roadmap.md) (in Russian), [testing and benchmarks](docs/testing-and-benchmarks.md),
 > [CI/CD](docs/ci.md), [adding an operation](docs/guides/adding-an-op.md).
 

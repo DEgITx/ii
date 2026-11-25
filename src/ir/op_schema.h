@@ -89,6 +89,8 @@ enum OpFlags : std::uint32_t {
     kOpRandom = 1u << 2,          ///< Produces pseudo-random values (never constant-folded or deduplicated).
     kOpDataMovement = 1u << 3,    ///< Only moves/copies elements (reshape, permute, slice, ...).
     kOpNoConstantFold = 1u << 4,  ///< Never constant-folded (e.g. results would be very large).
+    kOpInternal = 1u << 5,        ///< Created by compiler passes only (fusion); not part of the public OpSet.
+    kOpView = 1u << 6,            ///< Output 0 is input 0 reinterpreted (same bytes): the runtime may alias them.
 };
 
 struct OpSchema {

@@ -76,6 +76,14 @@ public:
     /// Executes the kernel. Must be thread-safe (sessions may run concurrently) and must not allocate.
     virtual Status run(const KernelContext& context) const = 0;
 
+    /// True if output 0 may share memory with input `input` when both have the same shape and element size and the
+    /// input is not needed afterwards (the runtime decides; the kernel must then work with `output.data ==
+    /// input.data`). Elementwise kernels that read each element before writing the same position return true.
+    virtual bool can_run_in_place(int input) const {
+        (void)input;
+        return false;
+    }
+
 protected:
     Kernel() = default;
     Kernel(const Kernel&) = default;

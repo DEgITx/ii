@@ -293,8 +293,14 @@ import → canonicalize → shape inference → constant folding → DCE/CSE →
 
 - **PassManager** with explicit pass dependencies; `verify()` after every pass in debug builds.
 - **Constant folding** executes subgraphs through `ii-ref` — no separate "evaluator".
-- **Pattern matching** — a small declarative DSL: `matmul → add(bias) → gelu` ⇒ `linear{act=gelu}`;
-  recognizing "unrolled" attention from ONNX ⇒ `sdpa`; `x * rsqrt(mean(x²) + eps) * w` ⇒ `rms_norm`.
+- **CSE** merges nodes with the same operation, inputs and attributes (random operations excepted).
+- **Pattern fusion** (`compiler/fusion.cpp`): `add(matmul(x, w), bias)` ⇒ `linear(x, w, bias)` (bias in the GEMM
+  epilogue). Planned with the ONNX importer (stage 3), where such graphs appear: "unrolled" attention ⇒ `sdpa`,
+  `x * rsqrt(mean(x²) + eps) * w` ⇒ `rms_norm`, layer norm, GELU / SiLU written with primitives.
+- **Elementwise fusion** groups chains of elementwise operations of one shape (float and bool tensors; values used only
+  inside the chain) into an internal `fused_elementwise` node whose `program` attribute holds the subgraph in the IR
+  text format. It is a composite: backends without a fused kernel get the chain back by decomposition, so the pass is
+  safe for every backend. `CompileOptions::fuse` turns CSE and both fusions off.
 - **Pass invariant**: a pass never changes results beyond tolerance — verified automatically in tests (the graph is
   executed before and after the pass on random inputs).
 
@@ -422,7 +428,9 @@ nodes ("ii-vulkan: op `scatter` with dtype i64 is not supported").
 
 - **Memory planning**: value lifetimes → offsets in one arena per session via "greedy by size" (as in TFLite);
   kernel workspaces and state-update staging are planned like ordinary values. Constants (weights) live outside the
-  arena (mmap or packed copies). In-place reuse of dying elementwise inputs comes with `ii-cpu` (stage 2).
+  arena (mmap or packed copies). Values share buffers: a view (`reshape`, flag `kOpView`) aliases its input and its
+  step is skipped; a kernel that declares `can_run_in_place(i)` writes into input `i`'s buffer when that buffer dies
+  at the step and has the same size. A chain of elementwise steps then needs one buffer instead of one per step.
 - **ExecutionPlan** — a flat array of steps with pre-built kernel arguments (shapes, dtypes; data pointers patched per
   run); execution is a walk over the array — one virtual `Kernel::run` call per step, no allocations.
 - **Dynamic shapes**: a `Program` is compiled once for symbolic shapes. When a session sees new input shapes it binds
@@ -431,62 +439,97 @@ nodes ("ii-vulkan: op `scatter` with dtype i64 is not supported").
   state performs zero allocations (verified by a test that counts every `operator new`). Planned later: symbol upper
   bounds (`seq ≤ 4096`) to plan once for the maximum, and a cache of shape buckets.
 - **I/O binding**: the user may pass their own input and output buffers (zero-copy), including GPU buffers.
-- **Profiler**: time per step / partition / transfer, exported as Chrome trace JSON (viewable in Perfetto):
-  `ii run model --profile trace.json`.
+- **Profiler**: `Session::set_profiling(true)` times every step (two clock reads, no allocations); `profile()` returns
+  the steps with operation, backend, shapes and times; `to_chrome_trace()` exports runs as Chrome trace JSON
+  (viewable in Perfetto): `ii run model --profile trace.json` also prints a per-operation summary. Partitions and
+  transfers join the trace with multiple devices (stage 5).
 
 ---
 
 ## 11. The `ii-cpu` backend
 
+`src/backends/cpu/`: drivers (shapes, broadcasting, blocking, threading) are ordinary C++; kernels live in
+`isa/` and are compiled once per ISA variant. ii-cpu is registered before ii-ref, so the planner gives it every node it
+supports and leaves the rest (other dtypes, rare operations) to ii-ref; `ii inspect` shows the split.
+
 ### Runtime ISA dispatch
 
-- Kernels in `src/backends/cpu/kernels/<isa>/` are compiled **multiple times** with different flags:
-  `generic` (SSE2 / NEON / plain C++), `avx2` (AVX2 + FMA + F16C), `avx_vnni`, `avx512` (F/BW/VL/DQ),
-  `avx512_vnni_bf16`, `amx`, `neon_dotprod`, `neon_i8mm`, `sve`; later `rvv` and `wasm_simd128`.
-- `CpuInfo` (cpuid / `getauxval` / `sysctl` / Windows APIs) picks the best level; the kernel table is filled with
-  function pointers. Forced level: `II_CPU_ISA=generic|avx2|…` — so all paths can be tested on one machine.
+- The sources in `src/backends/cpu/isa/` are compiled **once per variant** (`ii_add_isa_component`) into namespace
+  `ii::cpu::<isa>` with that variant's flags: `generic` (baseline C++: SSE2 / NEON), `avx2` (AVX2 + FMA + F16C),
+  `avx512` (F/BW/VL/DQ), `neon` (Arm64 intrinsics). Each variant exposes one `KernelTable` of function pointers
+  (`kernel_table.h`); the backend picks the table at creation. Variants for int8 dot products (`avx_vnni`,
+  `avx512_vnni`, `neon_dotprod`, `neon_i8mm`) arrive with the quantized kernels (stage 4).
+- `CpuInfo` picks the best usable variant; `II_CPU_ISA=generic|avx2|…` or `ContextOptions::cpu_isa` forces one, so all
+  paths are tested on one machine (the tests are parameterized over every usable variant; AVX-512 runs under Intel SDE
+  in CI).
 - **ODR trap**: inline functions / templates instantiated in a TU built with `-mavx2` may be picked by the linker for
-  the generic path → SIGILL on older CPUs. Fix: all ISA-specific code (templates included) lives in a dedicated
-  namespace `ii::cpu::II_ISA_NS`; shared headers enter those TUs only through it.
-- Compiler differences (GCC/Clang `-m…` flags vs MSVC `/arch:…`, missing per-ISA flags on MSVC for some extensions)
-  are handled in one CMake helper; on MSVC, Clang-only kernels are compiled with clang-cl where required.
+  the generic path → SIGILL on older CPUs. Rules: all ISA code (templates included) lives in `ii::cpu::II_ISA_NS`;
+  ISA translation units use no inline code of shared headers (not even the standard library's — `<cmath>` only in the
+  generic variant); the table header holds only plain structs, enums and declarations. Rare scalar functions (`pow`,
+  `fmod`, `sin`, `cos`) are called through `scalar_math.cpp`, compiled without ISA flags.
+- Compiler differences (GCC/Clang `-m…` flags vs MSVC `/arch:…`) are handled in one CMake helper (`IiIsa.cmake`).
 
 ### SIMD layer
 
-A thin in-house abstraction `Vec<T, Isa>` (load/store/fma/reduce/convert) on top of intrinsics — for elementwise ops
-and reductions. Hot micro-kernels (GEMM, quantized dot products) are written directly with intrinsics.
+`isa/simd.h` — a thin vector abstraction (`VF` float, `VI` int32, `VM` mask, `VD` double vectors with load/store,
+arithmetic, FMA, compares, selects, rounding, bit operations, f16/bf16 conversions) over the intrinsics of one ISA;
+the generic variant uses 4-lane arrays that the compiler vectorizes for the baseline. `isa/vmath.h` builds `exp`,
+`log`, `tanh`, `sigmoid`, `erf`, `gelu`, `silu` on top of it once for every ISA (Cephes-style range reduction and
+minimax polynomials). Accuracy is stated in the header and verified by sweeps against double precision (2–8 ulp;
+`-ffast-math` is **not** used: NaN and infinities behave as in ii-ref).
 
 ### GEMM (the heart of performance)
 
-- BLIS approach: pack A and B into panels, an `MR×NR` register micro-kernel (e.g. AVX2 f32 6×16, AVX-512 14×32,
-  NEON 8×12), `MC/KC/NC` cache blocking from cache sizes reported by `CpuInfo`.
-- **Weights are pre-packed at compile time** (B is a constant): packing is not repeated on every run.
-- f16/bf16 weights — widened to f32 during packing or on the fly (F16C), f32 accumulation.
-- Parallelization over M/N blocks with awareness of the shared L3.
+- BLIS approach: an `MR×NR` register micro-kernel written once with the SIMD layer (AVX2 6×16, AVX-512 14×32,
+  NEON 8×12, generic 4×8) with variants for every row count `1..MR` (GEMV and edge tiles do only the work they need),
+  `MC/KC/NC` cache blocking from the cache sizes reported by `CpuInfo`.
+- **Constant weights are packed when the program is compiled** (B panels of NR columns over the full depth); a
+  non-constant B is packed per work item into per-thread scratch. A work item is an `MC×NC` block of C (of one batch
+  matrix); items are handed out dynamically to the threads (several per thread, so P/E cores and big.LITTLE balance).
+- f16/bf16 weights stay 16-bit in their panels and are widened in the micro-kernel (F16C / NEON / shift); f32
+  accumulation; 16-bit outputs are accumulated in f32 scratch and converted once.
+- `linear` adds the bias in the GEMM epilogue; `matmul` supports transposes and batch broadcasting. Single-row
+  panels (decode) stream B over the whole depth with software prefetch.
+- Not yet: activations in the GEMM epilogue (a following activation is a separate fused elementwise pass), conv
+  through GEMM (stage 3), quantized weights (stage 4).
 
-### Quantized kernels (the key to weak hardware)
+### Quantized kernels (the key to weak hardware) — stage 4
 
 - **LLM decode (GEMV, batch 1)** is memory-bound: dequantize on the fly inside the dot product; target ≥ 85–90% of
   memory bandwidth.
 - **Prefill / batch** is compute-bound: activations are quantized to int8 per block, then int8×int4/int8 dot products
   (`vpdpbusd` AVX-VNNI/AVX512-VNNI, `sdot`/`smmla` on ARM).
 
-### Attention, normalizations, elementwise
+### Elementwise operations and fusion
 
-- `sdpa`: tiled flash-attention for CPU (online softmax, attention matrix never materialized), GQA, KV cache.
-- `rms_norm`, `layer_norm`, `rope`, `softmax`, `swiglu` — native fused kernels.
-- Chains of elementwise ops are fused into a single pass over memory (loop-level fusion).
-- Approximations (`exp`, `tanh`, `erf`) are explicit, with a documented max error and tests; `-ffast-math` is **not**
-  used globally (it breaks NaN/Inf).
+- Every elementwise operation (float and bool tensors: f32, f16, bf16, bool) compiles to a small **program** of
+  instructions over registers that each hold a tile of 128 f32 values; an interpreter in `isa/elementwise.cpp`
+  evaluates it tile by tile. A single operation is a one-instruction program; a `fused_elementwise` node (created by
+  the fusion pass, §7) is a longer one, so a chain of operations reads its inputs and writes its output once while the
+  intermediates stay in L1. The driver collapses dimensions and handles broadcasting (an input is either contiguous
+  or a repeated scalar along the innermost run) and splits the work over threads.
+- 16-bit inputs are widened on load and rounded once on store; inside a fused chain intermediates stay f32 (more
+  accurate than rounding every step; a `cast` to f16/bf16 inside a chain still rounds).
+
+### Reductions, normalizations, attention
+
+- Reductions over adjacent axes, `softmax`/`log_softmax` (any axis; vectorized across the inner dimension when the
+  axis is not the last), `layer_norm`, `rms_norm`: row kernels; sums are accumulated in double precision.
+- `sdpa`: one query row at a time (scores, softmax and the weighted sum of values in a per-thread row of scratch, so
+  the attention matrix is never materialized); grouped-query attention, causal masking, bool and additive masks.
+  Tiled flash attention with a KV cache arrives with the LLM stage.
+- `reshape`, `permute` (tiled transposes), `concat`: dtype-agnostic copies. Everything else falls back to ii-ref.
 
 ### Threads
 
 - Own `ThreadPool`: `parallel_for(range, grain, fn)`; the calling thread participates; brief spinning, then sleeping
-  on a futex / condition variable; target launch overhead < 5 µs.
+  on a condition variable. Kernels parallelize through `parallel_range` (skipped below ~32K units of work) or
+  `parallel_slots` (a fixed number of workers, each with its own scratch, pulling work items from an atomic counter).
 - **Hybrid CPUs** (P/E cores: Intel Core Ultra, Apple M-series, big.LITTLE on Android): static equal splits leave fast
-  cores idle, so work is handed out dynamically in chunks via an atomic counter. Optional pinning to performance cores
-  for latency-sensitive work (per-OS topology: `GetLogicalProcessorInformationEx`, sysfs, `hw.perflevel*`).
-- For memory-bound decode the optimal thread count is often lower than the core count — picked by autotuning.
+  cores idle, so work is handed out dynamically. Optional pinning to performance cores for latency-sensitive work
+  (per-OS topology: `GetLogicalProcessorInformationEx`, sysfs, `hw.perflevel*`) — later.
+- For memory-bound decode the optimal thread count is often lower than the core count (measured on a Snapdragon 732G:
+  GEMV is not faster on 8 threads than on one big core) — picked by autotuning (stage 4).
 - External pool: an embedding application may supply its own implementation of the `ii::Executor` interface (an
   engine's job system).
 - **Deterministic mode**: fixed reduction order (static split) → bitwise reproducibility for the same thread count.
@@ -595,7 +638,8 @@ CUDA compute capability 7.5+ (matches TensorRT 10).
 
 ```
 ii info                          hardware, ISA, devices, backends, plugins; --roofline measures peaks
-ii run <model> [-i name=file]    run any model (.npy/.npz/raw/images), output .npy/JSON/top-k
+ii run <model> [--dims N=8]      run a model on random inputs: timings, --profile trace.json (stage 2);
+                                 later: inputs from .npy/.npz/raw/images, outputs to .npy/JSON/top-k
 ii generate <llm> -p "…"         text generation
 ii chat <llm>                    interactive chat
 ii bench <model> [--llm]         benchmark: latency p50/p90/p99, throughput, memory; for LLMs pp/tg tokens/s
@@ -626,7 +670,7 @@ ii/
 │   ├── backend_api/   Backend, Device, Buffer, Stream, KernelBackend, plugin ABI
 │   ├── backends/
 │   │   ├── ref/       reference kernels
-│   │   ├── cpu/       ii-cpu: simd/, gemm/, quant/, kernels/<isa>/
+│   │   ├── cpu/       ii-cpu: drivers; isa/ (SIMD layer, math, kernels compiled per ISA)
 │   │   ├── cuda/  vulkan/  metal/
 │   │   └── plugins/   tensorrt/, onnxruntime/, openvino/, coreml/, …
 │   ├── formats/       gguf/, safetensors/, onnx/ (+ protobuf wire), native/

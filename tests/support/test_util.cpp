@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "support/test_util.h"
 
+#include "core/platform/platform.h"
+
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -15,6 +17,14 @@ T* typed(const ii::Tensor& tensor) {
 }
 
 }  // namespace
+
+std::string test_data_dir() {
+    return ii::platform::get_env("II_TEST_DATA_DIR").value_or(II_TEST_DATA_DIR);
+}
+
+std::string test_dynlib_path() {
+    return ii::platform::get_env("II_TEST_DYNLIB_PATH").value_or(II_TEST_DYNLIB_PATH);
+}
 
 ii::Tensor random_tensor(ii::DType dtype, const ii::Shape& shape, std::uint32_t seed, double low, double high) {
     ii::Tensor tensor = ii::Tensor::empty(dtype, shape).value();
@@ -182,10 +192,17 @@ ii::Result<std::vector<ii::Tensor>> run_model(const ii::Model& model, const std:
 
 ii::Result<std::string> compare_backends(const ii::Model& model, const std::vector<ii::Tensor>& inputs,
                                          std::string_view a, std::string_view b, Tolerance tolerance) {
-    ii::CompileOptions options_a;
-    options_a.backends = {std::string(a)};
-    ii::CompileOptions options_b;
-    options_b.backends = {std::string(b)};
+    // Each backend gets ii-ref as the fallback for the nodes it does not support.
+    auto options_for = [](std::string_view backend) {
+        ii::CompileOptions options;
+        options.backends = {std::string(backend)};
+        if (backend != "ii-ref") {
+            options.backends.emplace_back("ii-ref");
+        }
+        return options;
+    };
+    const ii::CompileOptions options_a = options_for(a);
+    const ii::CompileOptions options_b = options_for(b);
     II_ASSIGN_OR_RETURN(const std::vector<ii::Tensor> outputs_a, run_model(model, inputs, options_a));
     II_ASSIGN_OR_RETURN(const std::vector<ii::Tensor> outputs_b, run_model(model, inputs, options_b));
     std::string report;

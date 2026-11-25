@@ -173,10 +173,20 @@ Result<Program> Model::compile(const CompileOptions& options) const {
         II_TRY(compiler::decompose(graph, [](const ir::Node&) { return true; }));
         II_TRY(check("decomposition"));
     }
+    if (options.fuse) {
+        compiler::eliminate_common_subexpressions(graph);
+        II_TRY(check("common subexpression elimination"));
+    }
     if (options.fold_constants) {
         II_TRY(compiler::fold_constants(graph, context.reference()));
         compiler::eliminate_dead_code(graph);
         II_TRY(check("constant folding"));
+    }
+    if (options.fuse && !options.decompose_composites) {
+        II_TRY(compiler::fuse_patterns(graph));
+        II_TRY(check("pattern fusion"));
+        II_TRY(compiler::fuse_elementwise(graph));
+        II_TRY(check("elementwise fusion"));
     }
     II_ASSIGN_OR_RETURN(const auto assignment, assign_backends(graph, backends));
     compiler::eliminate_dead_code(graph);

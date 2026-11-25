@@ -36,4 +36,23 @@ Result<std::size_t> decompose(ir::Graph& graph, FunctionRef<bool(const ir::Node&
 /// Decomposes a single composite node.
 Status decompose_node(ir::Graph& graph, ir::Node& node);
 
+/// Replaces nodes that repeat an earlier node (same operation, inputs and attributes) by that node. Random
+/// operations are never merged. Returns the number of removed nodes.
+std::size_t eliminate_common_subexpressions(ir::Graph& graph);
+
+/// Rewrites known subgraphs into composite operations that backends implement natively:
+///   add(matmul(x, w), bias)  =>  linear(x, w, bias)   (2-D weight, 1-D bias over the output features)
+/// Returns the number of rewrites.
+Result<std::size_t> fuse_patterns(ir::Graph& graph);
+
+struct ElementwiseFusionOptions {
+    int max_nodes = 24;   ///< operations per fused node
+    int max_inputs = 12;  ///< distinct inputs per fused node
+};
+
+/// Groups chains of elementwise operations (float and bool tensors of one shape) into `fused_elementwise` nodes, so
+/// that backends can evaluate a chain in one pass over memory. Backends without a fused kernel get the chain back
+/// through the decomposition of `fused_elementwise`. Returns the number of fused nodes created.
+Result<std::size_t> fuse_elementwise(ir::Graph& graph, const ElementwiseFusionOptions& options = {});
+
 }  // namespace ii::compiler

@@ -19,6 +19,7 @@ Commands:
   info        Describe the machine: OS, CPU, memory, kernel variants, roofline
   inspect     Describe a model and its execution plan
   ops         List the operations of the OpSet
+  run         Run a model on random inputs and measure it (--profile for a trace)
   version     Print the version
   help        Show this help
 
@@ -51,6 +52,9 @@ int main(int argc, char** argv) {
     }
     if (command == "ops") {
         return ii::cli::run_ops(rest);
+    }
+    if (command == "run") {
+        return ii::cli::run_run(rest);
     }
     if (command == "version" || command == "--version" || command == "-V") {
         return print_version();

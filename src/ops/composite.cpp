@@ -419,6 +419,7 @@ void register_opset(ir::OpRegistry& registry) {
     register_creation_ops(registry);
     register_quantization_ops(registry);
     register_composite_ops(registry);
+    register_internal_ops(registry);
 }
 
 }  // namespace ii::ops

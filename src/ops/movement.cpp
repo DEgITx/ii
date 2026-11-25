@@ -275,7 +275,7 @@ void register_movement_ops(ir::OpRegistry& registry) {
         .outputs = {OutputSpec{"y"}},
         .attrs = {AttrSpec{"shape", AttrKind::kDims, std::nullopt}},
         .infer = infer_reshape,
-        .flags = kMove,
+        .flags = kMove | ir::kOpView,
     });
     registry.add(OpSchema{
         .name = "permute",

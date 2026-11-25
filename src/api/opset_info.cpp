@@ -8,6 +8,9 @@ namespace ii {
 std::vector<OperationInfo> list_operations() {
     std::vector<OperationInfo> result;
     for (const auto& schema : ir::default_op_registry().all()) {
+        if (schema->has_flag(ir::kOpInternal)) {
+            continue;  // implementation details of the compiler, not part of the OpSet
+        }
         OperationInfo info;
         info.name = std::string(schema->name);
         info.category = std::string(schema->category);

@@ -106,7 +106,28 @@ specific variant, force it with `II_CPU_ISA`:
 II_CPU_ISA=generic ctest --preset linux-gcc-release
 ```
 
+The ii-cpu tests also iterate over every variant the CPU supports by themselves. Variants the CPU lacks (e.g. AVX-512
+on most desktops) can be tested under [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html):
+`sde64 -spr -- ii_tests --gtest_filter='Isa/*'`.
+
 `ii info` lists the compiled variants and which of them the CPU supports.
+
+## Android
+
+Install the Android NDK (r27 or newer) and point `ANDROID_NDK_HOME` at it, then use the `android-arm64` or
+`android-x86_64` presets:
+
+```sh
+export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/<version>
+cmake --preset android-arm64
+cmake --build --preset android-arm64-release
+ctest --preset android-arm64-release     # runs on the device selected by adb (ANDROID_SERIAL)
+```
+
+The minimum API level is 26 (Android 8.0). For Android builds CMake runs every test executable through
+`scripts/android_run.py`, which copies it (plus test data and other host paths it needs) to `/data/local/tmp/ii` with
+`adb` and runs it there, so `ctest` works unchanged on a connected phone or an emulator. Benchmarks and the CLI run
+the same way: `python scripts/android_run.py build/android-arm64/bin/Release/ii info`.
 
 ## Benchmarks
 

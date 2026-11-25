@@ -24,5 +24,7 @@ void register_movement_ops(ir::OpRegistry& registry);
 void register_creation_ops(ir::OpRegistry& registry);
 void register_quantization_ops(ir::OpRegistry& registry);
 void register_composite_ops(ir::OpRegistry& registry);
+/// Internal operations created by compiler passes (`fused_elementwise`); flagged `kOpInternal`.
+void register_internal_ops(ir::OpRegistry& registry);
 
 }  // namespace ii::ops

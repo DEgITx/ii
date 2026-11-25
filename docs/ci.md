@@ -79,14 +79,17 @@ Notes:
 `lint`, all `build-test` entries, `sanitizers`, `isa-matrix`, `abi-interop`, `examples`; later `android` (stage 2)
 and model tests (stage 3). Branch protection: PR required, linear history, required checks green.
 
-## 4. `android.yml` (stage 2)
+## 4. Android and AVX-512 jobs (stage 2, in `ci.yml`)
 
-- NDK from the runner image (`$ANDROID_NDK_LATEST_HOME`), pinned version via preset; ABIs `arm64-v8a`, `x86_64`;
-  `ANDROID_PLATFORM=26`.
-- `arm64-v8a`: build only on hosted runners (NEON code paths are executed on `ubuntu-24.04-arm` and macOS ARM64
-  natively); later — a real device or a device farm.
-- `x86_64`: tests executed in an emulator (`reactivecircus/android-emulator-runner`, KVM enabled): test binaries are
-  pushed with `adb` and run via `ctest`-compatible wrapper script.
+- `android`: NDK from the runner image (`$ANDROID_NDK_LATEST_HOME`); presets `android-arm64` and `android-x86_64`
+  (`ANDROID_PLATFORM=26`). `arm64-v8a` is built only (its NEON code paths run natively on `ubuntu-24.04-arm` and
+  macOS ARM64, and on real devices through the same presets); `x86_64` is tested on an emulator
+  (`reactivecircus/android-emulator-runner`, KVM enabled). For Android builds CMake sets
+  `CMAKE_CROSSCOMPILING_EMULATOR` to `scripts/android_run.py`, which pushes each executable (and any host paths in its
+  arguments and `II_*` variables) with `adb` and runs it, so the job simply calls `ctest`. The same works locally
+  with a phone connected over adb.
+- `avx512-sde`: the AVX-512 kernels on hosted runners without AVX-512 — the ii-cpu tests run under Intel SDE
+  (`-spr`, `petarpetrovt/setup-sde`), where the ISA-parameterized tests include `avx512`.
 
 ## 5. `gpu.yml` — self-hosted NVIDIA runner (stage 5)
 
@@ -142,7 +145,7 @@ Every release: full test suite on the packaged binaries, `SHA256SUMS`, build pro
 |-------|--------------|
 | 0 | `ci.yml` (`lint`, `build-test` tier-1 matrix, `sanitizers`, `msvc-asan`), `codeql.yml`, composite `setup` action, Dependabot, PR/issue templates, branch protection |
 | 1 | done: `examples` (package installed, examples built with `find_package(ii)` and run on Linux, Windows, macOS), fuzz smoke (`linux-clang-fuzz` preset: libFuzzer on the IR text parser and JSON, 60 s each; other builds replay the corpora). Moved to stage 3: `abi-interop`, `docs.yml`, `nightly.yml` |
-| 2 | `isa-matrix` with Intel SDE, `android.yml`; self-hosted runner registered for nightly benchmarks |
+| 2 | done: `avx512-sde` (ii-cpu tests under Intel SDE), `android` (arm64-v8a build, x86_64 tests on an emulator through `scripts/android_run.py`), `generic` kernel variant tested on Linux. Moved: self-hosted runner for nightly benchmarks — with `nightly.yml` (stage 3) |
 | 3 | model tests (YOLOv8, ResNet, MobileNet, BERT) in PR (tiny/small) and nightly (full); ONNX/protobuf fuzzers; `release.yml` → v0.1 |
 | 4 | LLM model tests (tiny-llama in PR, real GGUF nightly on self-hosted), GGUF/tokenizer/Jinja fuzzers, LLM benchmarks vs llama.cpp |
 | 5 | `gpu.yml` (ii-cuda, TensorRT), GPU benchmarks, GPU plugin artifacts in releases |

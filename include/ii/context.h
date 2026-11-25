@@ -37,6 +37,10 @@ struct ContextOptions {
     /// Threads of the context's own pool (including the calling thread). 0: all logical CPUs.
     int num_threads = 0;
 
+    /// Kernel instruction-set variant of the ii-cpu backend, e.g. "generic", "avx2", "avx512", "neon". Empty: the
+    /// `II_CPU_ISA` environment variable if set, otherwise the most advanced variant the CPU supports.
+    std::string cpu_isa;
+
     /// Receives diagnostics. The default logs warnings and errors to stderr.
     Logger logger{LogLevel::kWarning, stderr_log_sink()};
 };
@@ -51,7 +55,7 @@ public:
     Executor& executor() const noexcept;
     const Logger& logger() const noexcept;
 
-    /// Names of the available backends in priority order, e.g. {"ii-ref"}.
+    /// Names of the available backends in priority order, e.g. {"ii-cpu", "ii-ref"}.
     std::vector<std::string> backend_names() const;
 
     /// Internal: the implementation object.

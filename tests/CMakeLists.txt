@@ -13,6 +13,7 @@ add_executable(ii_tests
     support/random_graph.cpp
     support/test_util.cpp
     unit/api/c_api_test.cpp
+    unit/backends/cpu_backend_test.cpp
     unit/compiler/pass_invariance_test.cpp
     unit/compiler/passes_test.cpp
     unit/core/allocator_test.cpp
@@ -47,8 +48,18 @@ add_dependencies(ii_tests ii_test_dynlib)
 
 add_subdirectory(fuzz)
 
-# PRE_TEST discovery lists tests when ctest runs (not at build time), which keeps cross-compiled builds working.
-gtest_discover_tests(ii_tests
-    DISCOVERY_MODE PRE_TEST
-    DISCOVERY_TIMEOUT 60
-    PROPERTIES TIMEOUT 300)
+if(CMAKE_CROSSCOMPILING)
+    # Cross-compiled tests run on another machine (CMAKE_CROSSCOMPILING_EMULATOR, e.g. an Android device via adb):
+    # one ctest entry for the whole binary keeps the number of round trips small. Host paths in II_* variables are
+    # copied to the device by the runner.
+    add_test(NAME ii_tests COMMAND ii_tests --gtest_brief=1)
+    set_tests_properties(ii_tests PROPERTIES
+        TIMEOUT 3600
+        ENVIRONMENT "II_TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data;II_TEST_DYNLIB_PATH=$<TARGET_FILE:ii_test_dynlib>")
+else()
+    # PRE_TEST discovery lists tests when ctest runs (not at build time), which keeps cross-compiled builds working.
+    gtest_discover_tests(ii_tests
+        DISCOVERY_MODE PRE_TEST
+        DISCOVERY_TIMEOUT 60
+        PROPERTIES TIMEOUT 300)
+endif()

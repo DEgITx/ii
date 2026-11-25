@@ -47,6 +47,14 @@ include(IiVersion)
 
 find_package(Threads REQUIRED)
 
+# Android: ctest runs executables on a device or emulator through adb (scripts/android_run.py).
+if(ANDROID AND PROJECT_IS_TOP_LEVEL AND NOT CMAKE_CROSSCOMPILING_EMULATOR)
+    find_package(Python3 COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        set(CMAKE_CROSSCOMPILING_EMULATOR "${Python3_EXECUTABLE};${PROJECT_SOURCE_DIR}/scripts/android_run.py")
+    endif()
+endif()
+
 if(II_BUILD_FUZZERS)
     if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         message(FATAL_ERROR "ii: II_BUILD_FUZZERS requires Clang (libFuzzer)")
@@ -58,6 +66,10 @@ endif()
 # ---------------------------------------------------------------------------------------------------------------------
 # Targets
 # ---------------------------------------------------------------------------------------------------------------------
+if(II_BUILD_TESTS)
+    enable_testing()  # before any directory that registers tests (tests, CLI smoke tests, examples)
+endif()
+
 add_subdirectory(src)
 
 if(II_BUILD_CLI)
@@ -65,7 +77,6 @@ if(II_BUILD_CLI)
 endif()
 
 if(II_BUILD_TESTS)
-    enable_testing()
     add_subdirectory(tests)
 endif()
 

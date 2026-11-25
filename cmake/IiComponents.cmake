@@ -11,7 +11,7 @@
 #   ii_add_component(<name> SOURCES <src>...)
 #       Adds OBJECT library ii_<name>.
 #   ii_add_isa_component(<name> ISA <isa> SOURCES <src>...)
-#       Adds OBJECT library ii_<name>_<isa> compiled with the ISA's flags and II_ISA_NS=<isa>.
+#       Adds OBJECT library ii_<name>_<isa> compiled with the ISA's flags, II_ISA_NS=<isa> and II_ISA_IS_<ISA>=1.
 #       Does nothing when <isa> is not in II_ISA_VARIANTS.
 #   ii_add_link_libraries(<lib>...)
 #       System libraries required by components (linked into ii and ii_internal).
@@ -52,7 +52,8 @@ function(ii_add_isa_component name)
     _ii_configure_component(${target})
     ii_isa_compile_options(${ARG_ISA} _flags)
     target_compile_options(${target} PRIVATE ${_flags})
-    target_compile_definitions(${target} PRIVATE II_ISA_NS=${ARG_ISA})
+    string(TOUPPER "${ARG_ISA}" isa_upper)
+    target_compile_definitions(${target} PRIVATE II_ISA_NS=${ARG_ISA} II_ISA_IS_${isa_upper}=1)
 endfunction()
 
 function(ii_add_link_libraries)

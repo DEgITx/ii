@@ -3,6 +3,7 @@
 // NumPy / PyTorch) is compiled and run end to end, and the results are compared with the references.
 #include <ii/model.h>
 
+#include "core/isa.h"
 #include "core/json.h"
 #include "ir/op_schema.h"
 #include "support/test_util.h"
@@ -10,6 +11,8 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <string>
@@ -43,7 +46,7 @@ Result<Tensor> decode_tensor(const Json& json) {
 }
 
 std::vector<ConformanceCase> load_cases() {
-    std::ifstream file(II_TEST_DATA_DIR "/op_references.json", std::ios::binary);
+    std::ifstream file(ii_test::test_data_dir() + "/op_references.json", std::ios::binary);
     std::stringstream buffer;
     buffer << file.rdbuf();
     Result<Json> document = Json::parse(buffer.str());
@@ -92,8 +95,7 @@ const ConformanceCase& find_case(const std::string& name) {
 
 class ConformanceTest : public ::testing::TestWithParam<std::string> {};
 
-void check_case(const ConformanceCase& c, const CompileOptions& options) {
-    static const Context context = ii_test::test_context();
+void check_case(const ConformanceCase& c, const CompileOptions& options, const Context& context) {
     const Result<Model> model = Model::from_text(context, c.graph);
     ASSERT_TRUE(model.ok()) << model.status().to_string() << "\n" << c.graph;
     const Result<std::vector<Tensor>> outputs = ii_test::run_model(*model, c.inputs, options);
@@ -105,29 +107,81 @@ void check_case(const ConformanceCase& c, const CompileOptions& options) {
     }
 }
 
+const Context& default_context() {
+    static const Context context = ii_test::test_context();
+    return context;
+}
+
+/// The case with its tolerance raised to at least `factor` times the default tolerance of its dtype.
+ConformanceCase relaxed(const ConformanceCase& c, double factor) {
+    const ii_test::Tolerance base = ii_test::tolerance_for(c.outputs.empty() ? DType::kF32 : c.outputs[0].dtype());
+    ConformanceCase result = c;
+    result.tolerance.rtol = std::max(c.tolerance.rtol, factor * base.rtol);
+    result.tolerance.atol = std::max(c.tolerance.atol, factor * base.atol);
+    return result;
+}
+
+CompileOptions reference_only() {
+    CompileOptions options;
+    options.backends = {"ii-ref"};
+    return options;
+}
+
 TEST_P(ConformanceTest, MatchesReference) {
-    check_case(find_case(GetParam()), {});
+    check_case(find_case(GetParam()), reference_only(), default_context());
 }
 
 TEST_P(ConformanceTest, MatchesReferenceWithoutConstantFolding) {
     // With constant folding the inputs stay inputs anyway; this variant also covers decomposed composites.
-    CompileOptions options;
+    CompileOptions options = reference_only();
     options.fold_constants = false;
     options.decompose_composites = true;
-    const ConformanceCase& c = find_case(GetParam());
-    ii_test::Tolerance tolerance = c.tolerance;
     // Decompositions round intermediate results to the working type: allow a few more ulps.
-    tolerance.rtol = std::max(tolerance.rtol,
-                              4 * ii_test::tolerance_for(c.outputs.empty() ? DType::kF32 : c.outputs[0].dtype()).rtol);
-    tolerance.atol = std::max(tolerance.atol,
-                              4 * ii_test::tolerance_for(c.outputs.empty() ? DType::kF32 : c.outputs[0].dtype()).atol);
-    ConformanceCase relaxed = c;
-    relaxed.tolerance = tolerance;
-    check_case(relaxed, options);
+    check_case(relaxed(find_case(GetParam()), 4), options, default_context());
 }
 
 INSTANTIATE_TEST_SUITE_P(OpSet, ConformanceTest, ::testing::ValuesIn(case_names()),
                          [](const ::testing::TestParamInfo<std::string>& param_info) { return param_info.param; });
+
+// Every case on ii-cpu with every kernel ISA variant this machine can run (ii-ref executes what ii-cpu does not
+// support). ii-cpu computes in f32 (and fuses), so a few ulps more than the oracle are allowed.
+
+std::vector<std::string> cpu_isas() {
+    std::vector<std::string> names;
+    for (const Isa isa : usable_isas(cpu_info())) {
+        names.emplace_back(isa_name(isa));
+    }
+    return names;
+}
+
+const Context& cpu_context(const std::string& isa) {
+    static std::mutex mutex;
+    static std::map<std::string, Context> contexts;
+    const std::lock_guard lock(mutex);
+    auto it = contexts.find(isa);
+    if (it == contexts.end()) {
+        ContextOptions options;
+        options.cpu_isa = isa;
+        options.num_threads = 4;
+        it = contexts.emplace(isa, Context::create(std::move(options)).value()).first;
+    }
+    return it->second;
+}
+
+class CpuConformanceTest : public ::testing::TestWithParam<std::tuple<std::string, std::string>> {};
+
+TEST_P(CpuConformanceTest, MatchesReference) {
+    const auto& [isa, name] = GetParam();
+    CompileOptions options;
+    options.backends = {"ii-cpu", "ii-ref"};
+    check_case(relaxed(find_case(name), 4), options, cpu_context(isa));
+}
+
+INSTANTIATE_TEST_SUITE_P(OpSet, CpuConformanceTest,
+                         ::testing::Combine(::testing::ValuesIn(cpu_isas()), ::testing::ValuesIn(case_names())),
+                         [](const ::testing::TestParamInfo<std::tuple<std::string, std::string>>& param_info) {
+                             return std::get<0>(param_info.param) + "_" + std::get<1>(param_info.param);
+                         });
 
 TEST(ConformanceDataTest, CoversEveryOperation) {
     ASSERT_GT(cases().size(), 100u) << "tests/data/op_references.json is missing or invalid";
@@ -140,6 +194,9 @@ TEST(ConformanceDataTest, CoversEveryOperation) {
         }
     }
     for (const auto& schema : ir::default_op_registry().all()) {
+        if (schema->has_flag(ir::kOpInternal)) {
+            continue;  // covered by the fusion tests
+        }
         EXPECT_TRUE(covered.contains(schema->name)) << "no conformance case for '" << schema->name << "'";
     }
 }

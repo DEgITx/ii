@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: MIT
+#include "backends/cpu/cpu_backend.h"
 #include "backends/ref/ref_backend.h"
 #include "core/assert.h"
 #include "runtime/runtime.h"
+
+#include <optional>
+#include <string_view>
 
 namespace ii {
 
@@ -39,7 +43,15 @@ Result<Context> Context::create(ContextOptions options) {
         impl->executor = impl->own_pool.get();
     }
     impl->logger = std::move(options.logger);
-    // Built-in backends are registered explicitly, in priority order (no static registration).
+    // Built-in backends are registered explicitly, in priority order (no static registration): ii-cpu first,
+    // ii-ref as the fallback for everything ii-cpu does not accelerate.
+    std::optional<std::string_view> cpu_isa;
+    if (!options.cpu_isa.empty()) {
+        cpu_isa = options.cpu_isa;
+    }
+    II_ASSIGN_OR_RETURN(std::unique_ptr<backend::Backend> cpu,
+                        cpu::create_cpu_backend(cpu_isa, impl->executor->concurrency()));
+    impl->backends.push_back(std::move(cpu));
     impl->backends.push_back(ref::create_ref_backend());
     return Context(std::move(impl));
 }

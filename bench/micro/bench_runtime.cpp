@@ -79,7 +79,9 @@ void BM_RefMatmul(benchmark::State& state) {
     const ii::Var x = b.input("a", ii::DType::kF32, {n, n});
     const ii::Var y = b.input("b", ii::DType::kF32, {n, n});
     b.output("c", ii::matmul(x, y));
-    const ii::Program program = ii::Model::from_builder(context, std::move(b)).value().compile().value();
+    ii::CompileOptions options;
+    options.backends = {"ii-ref"};
+    const ii::Program program = ii::Model::from_builder(context, std::move(b)).value().compile(options).value();
     ii::Session session = program.new_session().value();
     const ii::Tensor m = ii::Tensor::zeros(ii::DType::kF32, ii::Shape{n, n}).value();
     (void)session.set_input("a", m);

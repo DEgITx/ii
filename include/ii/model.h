@@ -24,6 +24,7 @@
 
 #include <initializer_list>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -57,6 +58,10 @@ struct CompileOptions {
     /// Evaluate nodes whose inputs are all constants at compile time.
     bool fold_constants = true;
 
+    /// Merge operations: duplicates (common subexpressions), known patterns (matmul + bias into linear) and chains
+    /// of elementwise operations, which ii-cpu then evaluates in one pass over memory.
+    bool fuse = true;
+
     /// Decompose every composite operation into primitives, even when a backend implements it natively.
     /// Mostly useful for testing decompositions and backends.
     bool decompose_composites = false;
@@ -64,6 +69,26 @@ struct CompileOptions {
 
 class Program;
 class Session;
+
+/// Timing of one step (one kernel) of a profiled run.
+struct StepProfile {
+    std::string op;       ///< operation, e.g. "matmul"
+    std::string name;     ///< node name (may be empty)
+    std::string backend;  ///< backend executing the step, e.g. "ii-cpu"; "view" for steps that only alias memory
+    std::string output;   ///< type of the first output with concrete shapes, e.g. "f32[8, 1024]"
+    double start_us = 0;  ///< start relative to the beginning of the run
+    double duration_us = 0;
+};
+
+/// Timings of one run of a session (see `Session::set_profiling`).
+struct Profile {
+    std::vector<StepProfile> steps;
+    double total_us = 0;  ///< wall time of the whole run
+};
+
+/// Formats profiles as Chrome trace JSON (open in https://ui.perfetto.dev or chrome://tracing). Consecutive runs
+/// are laid out one after another on the time line.
+II_API std::string to_chrome_trace(std::span<const Profile> runs);
 
 /// A model: a computation graph with its weights. Immutable; copies share the same model.
 class II_API Model {
@@ -156,8 +181,15 @@ public:
     /// Resets all states to their initial values.
     Status reset_states();
 
+    /// Enables or disables timing of every step in subsequent runs (costs two clock reads per step; no allocations).
+    void set_profiling(bool enabled);
+
+    /// Step timings of the last run; fails unless profiling was enabled for it.
+    Result<Profile> profile() const;
+
 private:
     friend class Program;
+    friend struct SessionTestAccess;
     explicit Session(std::unique_ptr<detail::SessionImpl> impl) noexcept;
     std::unique_ptr<detail::SessionImpl> impl_;
 };

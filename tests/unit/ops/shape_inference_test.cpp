@@ -207,6 +207,9 @@ TEST(OpSetTest, EveryOperationHasAnInferenceCase) {
         }
     }
     for (const auto& schema : default_op_registry().all()) {
+        if (schema->has_flag(kOpInternal)) {
+            continue;  // covered by the fusion tests
+        }
         const bool unary_or_binary = schema->category == "unary" || schema->category == "binary";
         if (!unary_or_binary) {
             EXPECT_TRUE(covered.contains(schema->name)) << "no shape inference case for '" << schema->name << "'";

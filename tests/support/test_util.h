@@ -33,6 +33,13 @@ Tolerance tolerance_for(ii::DType dtype);
 /// Returns an empty string when they match, otherwise a description of the first mismatches.
 std::string compare(const ii::Tensor& actual, const ii::Tensor& expected, Tolerance tolerance);
 
+/// Directory with test data (tests/data). The II_TEST_DATA_DIR environment variable overrides the built-in path
+/// (used when tests run on another machine, e.g. an Android device).
+std::string test_data_dir();
+
+/// Path of the shared library loaded by the DynLib tests; II_TEST_DYNLIB_PATH overrides the built-in path.
+std::string test_dynlib_path();
+
 /// Creates a context with a small thread pool for tests.
 ii::Context test_context();
 
@@ -40,8 +47,9 @@ ii::Context test_context();
 ii::Result<std::vector<ii::Tensor>> run_model(const ii::Model& model, const std::vector<ii::Tensor>& inputs,
                                               const ii::CompileOptions& options = {});
 
-/// Runs `model` restricted to backend `a` and to backend `b` and compares all outputs; returns an empty string when
-/// they agree. The harness for differential backend tests (every backend against ii-ref).
+/// Runs `model` with backend `a` and with backend `b` (each with ii-ref as the fallback for nodes it does not
+/// support) and compares all outputs; returns an empty string when they agree. The harness for differential backend
+/// tests (every backend against ii-ref).
 ii::Result<std::string> compare_backends(const ii::Model& model, const std::vector<ii::Tensor>& inputs,
                                          std::string_view a, std::string_view b, Tolerance tolerance);
 

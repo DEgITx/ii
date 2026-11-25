@@ -1,16 +1,15 @@
 // SPDX-License-Identifier: MIT
 #include "core/platform/dynlib.h"
 #include "core/platform/platform.h"
+#include "support/test_util.h"
 
 #include <gtest/gtest.h>
 
 namespace ii::platform {
 namespace {
 
-const char* const kLibraryPath = II_TEST_DYNLIB_PATH;
-
 TEST(DynLib, LoadsLibraryAndResolvesFunction) {
-    Result<DynLib> library = DynLib::open(path_from_utf8(kLibraryPath));
+    Result<DynLib> library = DynLib::open(path_from_utf8(ii_test::test_dynlib_path()));
     ASSERT_TRUE(library.ok()) << library.status().to_string();
     EXPECT_TRUE(library->is_open());
 
@@ -21,7 +20,7 @@ TEST(DynLib, LoadsLibraryAndResolvesFunction) {
 }
 
 TEST(DynLib, MissingSymbol) {
-    Result<DynLib> library = DynLib::open(path_from_utf8(kLibraryPath));
+    Result<DynLib> library = DynLib::open(path_from_utf8(ii_test::test_dynlib_path()));
     ASSERT_TRUE(library.ok());
     const Result<void*> symbol = library->symbol("ii_no_such_symbol");
     ASSERT_FALSE(symbol.ok());
@@ -35,7 +34,7 @@ TEST(DynLib, MissingLibrary) {
 }
 
 TEST(DynLib, MoveTransfersOwnership) {
-    Result<DynLib> library = DynLib::open(path_from_utf8(kLibraryPath));
+    Result<DynLib> library = DynLib::open(path_from_utf8(ii_test::test_dynlib_path()));
     ASSERT_TRUE(library.ok());
     DynLib moved = std::move(library).value();
     EXPECT_TRUE(moved.is_open());

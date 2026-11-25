@@ -79,6 +79,21 @@ CI/CD спланирован в [ci.md](ci.md).
 
 ## Этап 2 — Быстрый ii-cpu + Android
 
+> **Статус: реализован.** Локально проверен на Windows (MSVC, MSVC shared, MSVC+ASan, clang-cl, MinGW GCC,
+> MinGW Clang) и на телефоне Android (Snapdragon 732G, NEON) через `ctest --preset android-arm64-release`.
+> AVX-512 проверяется в CI под Intel SDE (на машине разработки AVX-512 нет), Linux ARM64 и macOS — в CI.
+> Сделано: SIMD-слой (generic/avx2/avx512/neon) и векторная математика с измеренной точностью; GEMM (BLIS,
+> предупаковка константных весов, f16/bf16 веса, GEMV) на уровне OpenBLAS для больших матриц (на всех ядрах — быстрее),
+> f32 GEMV — ~80% OpenBLAS, разрыв и план — в [bench/results/stage2-cpu.md](../bench/results/stage2-cpu.md);
+> поэлементные операции через интерпретатор программ над тайлами + проход фьюзинга цепочек
+> (`fused_elementwise`); редукции, softmax, layer/rms_norm, sdpa (GQA, causal, маски); reshape/permute/concat;
+> CSE и шаблон `matmul + bias → linear`; совместное использование памяти (view для reshape, in-place для
+> поэлементных); профайлер (`Session::set_profiling`, Chrome trace) и `ii run`; Android (пресеты NDK, запуск тестов
+> через adb, эмулятор в CI). Перенесено: ISA-варианты `avx_vnni`/`neon_dotprod`/`neon_i8mm` и `rope` — в этап 4
+> (нужны квантованным ядрам и LLM); шаблоны нормализаций/GELU/SiLU из примитивов и conv через GEMM — в этап 3
+> (появляются вместе с импортом ONNX); активация в эпилоге GEMM (сейчас — отдельный фьюзнутый проход), автоподбор
+> числа потоков для memory-bound GEMV на big.LITTLE и освобождение исходных весов после предупаковки — этап 4.
+
 **Цель:** собственный CPU-бэкэнд, сопоставимый по скорости со зрелыми библиотеками, на любом CPU и ОС.
 
 - SIMD-слой, runtime-диспетчер ISA (`generic`, `avx2`, `avx_vnni`, `avx512`, `neon`, `neon_dotprod`, `neon_i8mm`),

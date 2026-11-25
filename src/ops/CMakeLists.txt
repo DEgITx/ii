@@ -4,6 +4,7 @@ ii_add_component(ops SOURCES
     composite.cpp
     creation_quant.cpp
     elementwise.cpp
+    fused.cpp
     infer_util.cpp
     linalg_conv.cpp
     movement.cpp

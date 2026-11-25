@@ -90,6 +90,7 @@ struct ExecutionPlan {
     std::vector<std::size_t> workspace_offsets;                 ///< per step
     std::vector<std::size_t> workspace_sizes;                   ///< per step
     std::vector<std::size_t> state_staging_offsets;             ///< per state: staging buffer, or kNotInArena
+    std::vector<char> alias_steps;  ///< per step: the output is the input's memory (a view), the kernel is skipped
     std::size_t arena_size = 0;
     std::vector<backend::TensorView> views;  ///< per step: inputs then outputs
     std::vector<std::size_t> view_begin;     ///< per step, plus a final end entry
@@ -108,6 +109,10 @@ struct SessionImpl {
     bool planned = false;
     bool has_run = false;
     std::vector<void*> value_data;  ///< per value, rebuilt by every run (no allocation)
+    bool profiling = false;
+    bool profiled = false;                 ///< the last run was profiled
+    std::vector<std::int64_t> step_times;  ///< per step: start and end in ns since the start of the run
+    std::int64_t run_time_ns = 0;
 
     Status prepare();  ///< builds or reuses the execution plan for the bound input shapes
     Status run();

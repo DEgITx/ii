@@ -24,14 +24,25 @@ void expect_same(const std::vector<Tensor>& actual, const std::vector<Tensor>& e
 TEST_P(PassInvarianceTest, PassesPreserveResults) {
     const Context context = ii_test::test_context();
     const ii_test::RandomModel random = ii_test::random_model(context, GetParam());
+    // The baseline: the reference backend without any optimization.
     CompileOptions plain;
     plain.fold_constants = false;
+    plain.fuse = false;
+    plain.backends = {"ii-ref"};
     const std::vector<Tensor> expected = ii_test::run_model(random.model, random.inputs, plain).value();
 
-    expect_same(ii_test::run_model(random.model, random.inputs).value(), expected, "constant folding");
-    CompileOptions decomposed;
+    CompileOptions folded = plain;
+    folded.fold_constants = true;
+    expect_same(ii_test::run_model(random.model, random.inputs, folded).value(), expected, "constant folding");
+    CompileOptions decomposed = plain;
     decomposed.decompose_composites = true;
     expect_same(ii_test::run_model(random.model, random.inputs, decomposed).value(), expected, "decomposition");
+    // Fusion on ii-ref: fused nodes are decomposed again, so this checks the fused programs round trip.
+    CompileOptions fused = plain;
+    fused.fuse = true;
+    expect_same(ii_test::run_model(random.model, random.inputs, fused).value(), expected, "fusion (ii-ref)");
+    // Everything on, default backends (ii-cpu executes fused nodes natively).
+    expect_same(ii_test::run_model(random.model, random.inputs).value(), expected, "all passes, ii-cpu");
 
     // Text round trip of the optimized graph.
     const std::string text = random.model.to_text(-1);
@@ -55,8 +66,11 @@ TEST_P(PassInvarianceTest, FoldingShrinksTheGraph) {
     const ii_test::RandomModel random = ii_test::random_model(context, GetParam());
     CompileOptions plain;
     plain.fold_constants = false;
+    plain.fuse = false;
     const std::size_t before = random.model.compile(plain).value().impl()->steps.size();
-    const std::size_t after = random.model.compile().value().impl()->steps.size();
+    CompileOptions folded = plain;
+    folded.fold_constants = true;
+    const std::size_t after = random.model.compile(folded).value().impl()->steps.size();
     EXPECT_LT(after, before);  // the generator always adds a constant subgraph
 }
 
