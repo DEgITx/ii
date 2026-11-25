@@ -1,14 +1,20 @@
 # ii
 
-Эффективная встраиваемая C++ библиотека для инференса (в первую очередь) и обучения нейросетей.
+An efficient, embeddable C++ library for neural network inference (first and foremost) and training.
 
-- **Работает везде** — от слабого CPU без GPU до дискретных ускорителей; один бинарник для любого x86-64/ARM64.
-- **Сама выбирает бэкэнд** — собственные (`ii-cpu`, `ii-vulkan`, `ii-cuda`, …) и сторонние (ONNX Runtime, OpenVINO,
-  TensorRT, CoreML) с учётом стоимости, памяти и пересылок; автоматически делит модель между устройствами.
-- **Корректна по построению** — эталонный бэкэнд `ii-ref` и дифференциальные тесты для каждого быстрого пути.
-- **Легко встраивается** — ноль обязательных зависимостей, нет глобального состояния, стабильный C ABI.
-- **Форматы** — GGUF, safetensors, ONNX, нативный `.ii`.
-- **CLI `ii`** — `info`, `run`, `chat`, `bench`, `inspect`, `quantize`, `convert`.
+- **Runs everywhere** — from weak CPUs without a GPU to discrete accelerators; Windows, Linux, macOS, with Android
+  next. One binary for any x86-64 / ARM64 CPU.
+- **Chooses the backend itself** — own backends (`ii-cpu`, `ii-cuda`, `ii-vulkan`, …) and third-party ones
+  (TensorRT, ONNX Runtime, OpenVINO, CoreML), based on cost, memory and transfers; splits a model across devices
+  automatically.
+- **Correct by construction** — the reference backend `ii-ref` and differential tests for every fast path.
+- **Easy to embed** — zero mandatory dependencies, no global state, stable C ABI.
+- **Formats** — GGUF, safetensors, ONNX, native `.ii`.
+- **`ii` CLI** — `info`, `run`, `chat`, `bench`, `inspect`, `quantize`, `convert`.
 
-> Статус: проектирование. См. [архитектуру](docs/architecture.md), [дорожную карту](docs/roadmap.md),
-> [тестирование и бенчмарки](docs/testing-and-benchmarks.md).
+> Status: design. See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md) (in Russian),
+> [testing and benchmarks](docs/testing-and-benchmarks.md), [CI/CD](docs/ci.md).
+
+## License
+
+[MIT](LICENSE)

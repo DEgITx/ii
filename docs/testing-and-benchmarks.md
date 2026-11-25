@@ -1,151 +1,163 @@
-# ii — тестирование и бенчмарки
+# ii — Testing and Benchmarks
 
-Тесты и бенчмарки — часть архитектуры, а не приложение к ней. Два главных правила:
+Tests and benchmarks are part of the architecture, not an appendix to it. Two ground rules:
 
-1. **У каждой быстрой реализации есть эталон**, и они постоянно сравниваются (дифференциальное тестирование).
-2. **У каждого горячего пути есть бенчмарк** с целью, выраженной в % от возможностей железа (roofline).
-
----
-
-## 1. Инструменты
-
-| Задача | Инструмент |
-|--------|-----------|
-| модульные и параметризованные тесты | GoogleTest (typed/value-parameterized tests удобны для матрицы op × dtype × backend × ISA) |
-| микробенчмарки | Google Benchmark |
-| фаззинг | libFuzzer (Clang), корпуса в `tests/fuzz/corpus/` |
-| санитайзеры | ASan, UBSan, TSan (пул потоков, планировщик), MSan по возможности |
-| покрытие | llvm-cov / gcov |
-| эталоны | Python-скрипты в `scripts/golden/` (NumPy, PyTorch, ONNX Runtime, transformers) — только инструмент разработчика, не зависимость библиотеки |
-
-Тестовые зависимости подтягиваются через `FetchContent` только при `II_BUILD_TESTS` / `II_BUILD_BENCHMARKS` и
-никогда не попадают к потребителям библиотеки.
+1. **Every fast implementation has a reference**, and the two are compared continuously (differential testing).
+2. **Every hot path has a benchmark** with a target expressed as % of what the hardware can do (roofline).
 
 ---
 
-## 2. Пирамида тестов
+## 1. Tools
 
-### 2.1 Модульные (`tests/unit/`)
-Core (Result, аллокаторы, SmallVector, f16/bf16-конверсии — исчерпывающе по всем 65536 значениям, JSON), IR
-(построение, verify, текстовый формат туда-обратно), символьные формы, планировщик памяти (нет пересечений
-одновременно живых значений — проверяется свойством на случайных графах).
+| Task | Tool |
+|------|------|
+| unit and parameterized tests | GoogleTest (typed / value-parameterized tests fit the op × dtype × backend × ISA matrix) |
+| micro-benchmarks | Google Benchmark |
+| fuzzing | libFuzzer (Clang), corpora in `tests/fuzz/corpus/` |
+| sanitizers | ASan, UBSan, TSan (thread pool, planner), MSan where possible |
+| coverage | llvm-cov / gcov |
+| references | Python scripts in `scripts/golden/` (NumPy, PyTorch, ONNX Runtime, transformers) — a developer tool only, never a library dependency |
 
-### 2.2 Соответствие операций (`tests/ops/`)
-Для каждой операции × dtype × набора форм:
-
-- формы-граничники: пустые тензоры, размеры 1, простые нечётные размеры (7, 13, 127 — ловят ошибки хвостов SIMD),
-  большие, не-непрерывные страйды, broadcasting во всех комбинациях, отрицательные оси;
-- значения-граничники: ±0, ±Inf, NaN, денормалы, очень большие/малые;
-- `ii-ref` сверяется с **эталонами NumPy/PyTorch** (сгенерированы скриптами, хранятся компактно в репозитории);
-- вывод форм сверяется с фактическими формами результата.
-
-### 2.3 Дифференциальные тесты бэкэндов (`tests/backends/`)
-Харнесс `ii::testing::compare_backends(graph, inputs, tolerance)` исполняет один граф на `ii-ref` и на каждом
-доступном бэкэнде/устройстве, сравнивает результаты. Те же тесты операций автоматически прогоняются для всех
-бэкэндов — новый бэкэнд сразу получает тысячи тестов.
-
-**Случайные графы**: генератор корректных случайных графов (seed → граф) — ловит ошибки на стыках операций,
-в фьюзинге, в планировщике памяти и в разбиении по бэкэндам.
-
-**Матрица ISA**: тесты `ii-cpu` прогоняются для каждого уровня через `II_CPU_ISA=generic|avx2|avx_vnni|…`.
-Отсутствующие на машине наборы (AVX-512, AMX) — под Intel SDE в CI; ARM — на ARM-раннерах или QEMU.
-
-**Фальшивое удалённое устройство**: тестовый бэкэнд `ii-test-remote` с отдельной «памятью» (копии через отдельную
-арену) — позволяет тестировать межустройственные пересылки, события и offload без GPU.
-
-### 2.4 Тесты проходов (`tests/passes/`)
-- «текстовый IR на входе → ожидаемый текстовый IR» (структурная проверка);
-- **численная эквивалентность**: граф до и после прохода исполняется на случайных входах — результаты совпадают в
-  пределах допуска. Применяется ко всем проходам автоматически.
-
-### 2.5 Градиенты (`tests/grad/`)
-Для каждой операции с правилом градиента — проверка центральными конечными разностями в f64 на `ii-ref`;
-тест «переобучение одного батча» (loss → ~0); сравнение кривой обучения маленькой модели с PyTorch при идентичной
-детерминированной инициализации.
-
-### 2.6 Модели целиком (`tests/models/`)
-- **Крошечные синтетические модели** (случайные веса, генерируются скриптами, в репозитории): tiny-llama, tiny-bert,
-  tiny-resnet — сверка логитов с PyTorch/transformers/ONNX Runtime. Быстро, работают в каждом CI-прогоне.
-- **Реальные модели** (скачиваются в кэш, ночной CI): TinyLlama/Qwen2.5-0.5B (GGUF q8_0/q4_k), ResNet-50,
-  MobileNetV2, BERT-base, Whisper-tiny encoder — сверка логитов, а для LLM — совпадение greedy-генерации на
-  N токенов и перплексия на фиксированном тексте (квантованная модель: допуск на разницу перплексии).
-
-### 2.7 Инварианты runtime
-- **Ноль аллокаций в `run()`**: тест подменяет аллокатор счётчиком, прогревает сессию и проверяет, что
-  последующие запуски ничего не выделяют.
-- **Детерминизм**: в детерминированном режиме два запуска побитово совпадают.
-- **Потокобезопасность**: N потоков × свои `Session` над одним `Program` под TSan.
-- **Отмена и ошибки**: некорректные входы дают `Status`, а не падение.
-
-### 2.8 Фаззинг (`tests/fuzz/`)
-Цели: ONNX (protobuf wire), GGUF, safetensors, `.ii`, JSON, токенизаторы, Jinja-шаблоны, CLI-парсер входных файлов.
-Короткий прогон в каждом PR, длинный — ночью.
+Test dependencies are fetched via `FetchContent` only with `II_BUILD_TESTS` / `II_BUILD_BENCHMARKS` and never reach
+library consumers.
 
 ---
 
-## 3. Допуски численной точности
+## 2. Test pyramid
 
-| Случай | Допуск |
-|--------|--------|
-| поэлементные f32 точные (add, mul, …) | побитово (или ≤ 1 ULP при FMA) |
-| трансцендентные f32 (exp, tanh, erf) | ≤ задокументированной max-ошибки аппроксимации (обычно 2–4 ULP) |
-| редукции / matmul f32 | `|err| ≤ c · K · eps · (|A|·|B|)` — граница, зависящая от длины суммы, а не единый `atol` |
-| f16 / bf16 | сравнение с f32-эталоном, eps соответствующего типа, аккумуляция в f32 обязательна |
-| квантованные | эталон = `ii-ref` на **тех же** квантованных весах (деквантизация побитово точна) → допуск только на аккумуляцию |
-| модели целиком | косинусное сходство логитов ≥ 0.999 (f32), top-1/greedy-совпадение, разница перплексии |
+### 2.1 Unit (`tests/unit/`)
+Core (Result, allocators, SmallVector, f16/bf16 conversions — exhaustively over all 65536 values, JSON, platform
+layer on every OS), IR (construction, verify, text format round-trip), symbolic shapes, memory planner (no overlap of
+simultaneously live values — a property checked on random graphs).
 
-Допуски — в одном месте (`tests/support/tolerance.hpp`) и обоснованы комментарием.
+### 2.2 Op conformance (`tests/ops/`)
+For every op × dtype × set of shapes:
+
+- edge-case shapes: empty tensors, size-1 dims, odd primes (7, 13, 127 — catch SIMD tail bugs), large sizes,
+  non-contiguous strides, broadcasting in every combination, negative axes;
+- edge-case values: ±0, ±Inf, NaN, denormals, very large/small;
+- `ii-ref` is checked against **NumPy/PyTorch references** (generated by scripts, stored compactly in the repo);
+- shape inference is checked against the actual result shapes.
+
+### 2.3 Differential backend tests (`tests/backends/`)
+The harness `ii::testing::compare_backends(graph, inputs, tolerance)` executes one graph on `ii-ref` and on every
+available backend/device and compares the results. The same op tests automatically run for every backend — a new
+backend gets thousands of tests on day one.
+
+**Random graphs**: a generator of valid random graphs (seed → graph) catches bugs at op boundaries, in fusion, in the
+memory planner and in backend partitioning.
+
+**ISA matrix**: `ii-cpu` tests run for every level via `II_CPU_ISA=generic|avx2|avx_vnni|…`. Instruction sets missing
+on the machine (AVX-512, AMX) run under Intel SDE in CI; ARM on ARM runners (Linux ARM64, macOS, Android).
+
+**Fake remote device**: the test backend `ii-test-remote` has a separate "memory domain" (copies through a separate
+arena) — cross-device transfers, events and offload are tested without a GPU.
+
+**GPU backends** (`ii-cuda`, TensorRT, later Vulkan/Metal) run the same differential suite on GPU runners; TensorRT
+additionally tests engine-cache invalidation (different shapes / precision / version produce a rebuild).
+
+### 2.4 Pass tests (`tests/passes/`)
+- "input text IR → expected text IR" (structural check);
+- **numerical equivalence**: the graph is executed before and after the pass on random inputs and results must match
+  within tolerance. Applied to every pass automatically.
+
+### 2.5 Gradients (`tests/grad/`, training stage)
+For every op with a gradient rule — central finite differences in f64 on `ii-ref`; the "overfit a single batch"
+test (loss → ~0); training curve of a small model compared to PyTorch with identical deterministic initialization.
+
+### 2.6 Whole models (`tests/models/`)
+- **Tiny synthetic models** (random weights, generated by scripts, stored in the repo): tiny-llama, tiny-bert,
+  tiny-resnet — logits compared to PyTorch/transformers/ONNX Runtime. Fast; run in every CI build.
+- **Real models** (downloaded into a cache, nightly CI): TinyLlama / Qwen2.5-0.5B (GGUF q8_0/q4_k), ResNet-50,
+  MobileNetV2, BERT-base, Whisper-tiny encoder — logits compared; for LLMs also greedy generation matching the
+  reference for N tokens and perplexity on a fixed text (quantized models: tolerance on the perplexity delta).
+
+### 2.7 Runtime invariants
+- **Zero allocations in `run()`**: the test swaps in a counting allocator, warms up the session and checks that
+  subsequent runs allocate nothing.
+- **Determinism**: in deterministic mode two runs are bitwise identical.
+- **Thread safety**: N threads × their own `Session` over one `Program`, under TSan.
+- **Errors**: invalid inputs produce a `Status`, never a crash. Missing plugin runtimes (e.g. TensorRT DLLs absent)
+  make the backend unavailable, never break the core.
+
+### 2.8 Fuzzing (`tests/fuzz/`)
+Targets: ONNX (protobuf wire), GGUF, safetensors, `.ii`, JSON, tokenizers, Jinja templates, CLI input-file parsers.
+A short run in every PR, a long run nightly.
 
 ---
 
-## 4. Бенчмарки
+## 3. Numerical tolerances
 
-### 4.1 Профиль машины (roofline)
-`ii info --roofline` замеряет пиковые FLOPS по dtype (FMA-цикл на всех ядрах) и пропускную способность памяти
-(STREAM-подобный тест) и сохраняет профиль. Все бенчмарки сообщают не только абсолютное время, но и **% от пика**.
+| Case | Tolerance |
+|------|-----------|
+| exact f32 elementwise (add, mul, …) | bitwise (or ≤ 1 ULP with FMA) |
+| transcendental f32 (exp, tanh, erf) | ≤ the documented max error of the approximation (typically 2–4 ULP) |
+| reductions / matmul f32 | `|err| ≤ c · K · eps · (|A|·|B|)` — a bound depending on the summation length, not a single `atol` |
+| f16 / bf16 | compared to an f32 reference with that type's eps; f32 accumulation is mandatory |
+| quantized | reference = `ii-ref` on the **same** quantized weights (dequantization is bitwise exact) → tolerance only on accumulation |
+| TensorRT / reduced precision modes | per-precision tolerances (fp16/int8/fp8), plus model-level metrics below |
+| whole models | logit cosine similarity ≥ 0.999 (f32), top-1 / greedy match, perplexity delta |
 
-### 4.2 Микробенчмарки (`bench/micro/`, Google Benchmark)
-
-| Группа | Метрика | Цель (ii-cpu) |
-|--------|---------|---------------|
-| GEMM f32 (большие размеры) | GFLOPS, % пика | ≥ 85% пика однопоточно, ≥ 75% многопоточно; паритет ±10% с OpenBLAS/oneDNN |
-| GEMV квантованный (q4_k, q8_0) | GB/s, % bandwidth | ≥ 85% пропускной способности памяти |
-| GEMM квантованный (prefill) | GOPS | паритет ±10% с llama.cpp |
-| поэлементные / редукции | GB/s | ≥ 90% от memcpy |
-| sdpa | токены/с, % пика | — (базовая линия, затем улучшения) |
-| conv (3×3, 1×1, depthwise) | GFLOPS | паритет с ORT CPU EP |
-| ThreadPool `parallel_for` | мкс на запуск | < 5 мкс |
-| планировщик памяти / компиляция | мс | контроль регрессий времени старта |
-
-### 4.3 Сквозные бенчмарки (`ii bench`, `bench/e2e/`)
-- **Общие модели**: задержка p50/p90/p99, пропускная способность (батч), пиковая память, время до первого
-  результата (загрузка + компиляция + первый запуск) — ResNet-50, MobileNetV2, BERT-base, YOLO-n.
-- **LLM**: `pp512` (prefill, ток/с), `tg128` (генерация, ток/с) — методика совместима с `llama-bench`, чтобы
-  сравнение было честным; плюс время до первого токена и память. Модели: TinyLlama-1.1B, Llama-3.2-1B/3B,
-  Qwen2.5-1.5B в f16/q8_0/q4_k_m.
-- **Базовые линии**: llama.cpp, ONNX Runtime, OpenBLAS/oneDNN (скрипты запуска в `bench/baselines/`).
-
-### 4.4 Методика
-- прогрев, многократные повторы, медиана и доверительный интервал, отбрасывание выбросов;
-- фиксированное число потоков и (опционально) привязка к ядрам; на гибридных CPU — отдельные замеры P-ядра / все ядра;
-- в отчёт всегда входят: CPU/GPU, ISA, частоты, ОС, компилятор, версия и git-хэш ii, параметры сборки;
-- результат — JSON; `scripts/bench_compare.py` сравнивает два прогона и помечает регрессии сверх порога.
-
-### 4.5 Регрессии
-Ночной прогон бенчмарков на фиксированной машине с историей; регрессия > 5% на ключевых метриках — сигнал
-(блокирующий для релизов). В PR — быстрый поднабор как информационный отчёт.
+Tolerances live in one place (`tests/support/tolerance.hpp`), each justified by a comment.
 
 ---
 
-## 5. CI-матрица
+## 4. Benchmarks
 
-| ОС / архитектура | Компиляторы | Что прогоняется |
-|------------------|-------------|-----------------|
-| Linux x86-64 | GCC, Clang | все тесты, санитайзеры, фаззинг (коротко), покрытие, SDE для AVX-512/AMX |
-| Linux ARM64 | GCC, Clang | все тесты, NEON/dotprod/i8mm пути |
-| Windows x86-64 | MSVC, clang-cl, MinGW-GCC | все тесты, проверка C ABI между компиляторами |
-| macOS ARM64 | Apple Clang | все тесты (+ Metal позже) |
-| GPU-раннеры (позже) | — | дифференциальные тесты Vulkan/CUDA |
-| Ночью | — | реальные модели, длинный фаззинг, бенчмарки с историей |
+### 4.1 Machine profile (roofline)
+`ii info --roofline` measures peak FLOPS per dtype (an FMA loop on all cores) and memory bandwidth (a STREAM-like
+test) and stores the profile. Every benchmark reports not only absolute time but also **% of peak**.
 
-Каждый этап roadmap имеет критерии готовности, сформулированные через эти тесты и бенчмарки.
+### 4.2 Micro-benchmarks (`bench/micro/`, Google Benchmark)
+
+| Group | Metric | Target (ii-cpu) |
+|-------|--------|-----------------|
+| GEMM f32 (large sizes) | GFLOPS, % of peak | ≥ 85% of peak single-threaded, ≥ 75% multi-threaded; parity ±10% with OpenBLAS/oneDNN |
+| quantized GEMV (q4_k, q8_0) | GB/s, % of bandwidth | ≥ 85% of memory bandwidth |
+| quantized GEMM (prefill) | GOPS | parity ±10% with llama.cpp |
+| elementwise / reductions | GB/s | ≥ 90% of memcpy |
+| sdpa | tokens/s, % of peak | baseline first, then improvements |
+| conv (3×3, 1×1, depthwise) | GFLOPS | parity with ORT CPU EP |
+| ThreadPool `parallel_for` | µs per launch | < 5 µs |
+| memory planner / compilation | ms | guard against startup-time regressions |
+
+GPU backends get the same groups with their own targets (% of GPU peak; parity with cuBLAS/TensorRT where applicable).
+
+### 4.3 End-to-end benchmarks (`ii bench`, `bench/e2e/`)
+- **General models**: latency p50/p90/p99, throughput (batched), peak memory, time to first result (load + compile +
+  first run; for TensorRT reported separately with cold and warm engine cache) — ResNet-50, MobileNetV2, BERT-base,
+  YOLO-n.
+- **LLMs**: `pp512` (prefill, tokens/s), `tg128` (generation, tokens/s) — methodology compatible with `llama-bench`
+  for a fair comparison; plus time to first token and memory. Models: TinyLlama-1.1B, Llama-3.2-1B/3B, Qwen2.5-1.5B
+  in f16 / q8_0 / q4_k_m.
+- **Baselines**: llama.cpp, ONNX Runtime, OpenBLAS/oneDNN, TensorRT (`trtexec`) — run scripts in `bench/baselines/`.
+
+### 4.4 Methodology
+- warm-up, repeated runs, median and confidence interval, outlier rejection;
+- fixed thread count and (optionally) core pinning; on hybrid CPUs — separate measurements for P-cores only / all cores;
+- every report includes: CPU/GPU, ISA, frequencies, OS, compiler, driver versions, ii version and git hash, build
+  options;
+- results are JSON; `scripts/bench_compare.py` compares two runs and flags regressions above a threshold.
+
+### 4.5 Regressions
+A nightly benchmark run on a fixed machine with history; a regression > 5% on key metrics is a signal (blocking for
+releases). PRs get a fast subset as an informational report.
+
+---
+
+## 5. CI matrix
+
+Summary only; workflows, triggers, runners and security rules are defined in [ci.md](ci.md).
+
+| Platform | Compilers | What runs | From |
+|----------|-----------|-----------|------|
+| Windows x86-64 | MSVC, clang-cl, MinGW-GCC | all tests, C ABI interop across compilers | stage 0 |
+| Linux x86-64 | GCC, Clang | all tests, sanitizers, short fuzzing, coverage, SDE for AVX-512/AMX | stage 0 |
+| Linux ARM64 | GCC, Clang | all tests, NEON/dotprod/i8mm paths | stage 0 |
+| macOS ARM64 / x86-64 | Apple Clang | all tests (+ Metal later) | stage 0 |
+| Android ARM64 / x86-64 | NDK Clang | build, tests on emulator/device | stage 2 |
+| GPU runner (self-hosted, NVIDIA) | MSVC / GCC + CUDA | differential tests for ii-cuda and TensorRT, GPU benchmarks | stage 5 |
+| iOS, WebAssembly | Apple Clang, Emscripten | build, tests where possible | stage 6 |
+| Nightly | — | real models, long fuzzing, benchmarks with history | stage 1+ |
+
+Every roadmap stage has completion criteria expressed through these tests and benchmarks.
