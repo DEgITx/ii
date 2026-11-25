@@ -1,0 +1,7 @@
+graph {
+  input %x : f32[B, 3, H, W]
+  input %w : f32[8, 3, 3, 3]
+  %y : f32[B, 8, (H - 1) / 2 + 1, (W - 1) / 2 + 1] = conv(%x, %w) {pads = [1, 1, 1, 1], strides = [2, 2]}
+  %z : f32[B, 8, (H - 1) / 2 + 1, (W - 1) / 2 + 1] = gelu(%y) {approximate = "tanh"}
+  output z = %z
+}

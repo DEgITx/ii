@@ -42,6 +42,12 @@ else()
     endif()
 endif()
 
+# Designated initializers that rely on default member initializers are idiomatic C++20 (e.g. the operation schema
+# tables); GCC and Clang warn about the omitted members under -Wextra. Must come after -Wextra / /W4.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(ii_build_options INTERFACE -Wno-missing-field-initializers)
+endif()
+
 if(WIN32)
     target_compile_definitions(ii_build_options INTERFACE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 endif()

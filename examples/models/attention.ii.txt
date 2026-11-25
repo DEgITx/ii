@@ -1,0 +1,14 @@
+# A single attention block in the ii IR text format: `ii inspect examples/models/attention.ii.txt --graph`.
+graph attention {
+  input %x : f32[B, S, 8]
+  const %wq : f32[8, 8] = f32[8, 8] {0.1, 0, 0, 0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0, 0, 0, 0.1}
+  %n : f32[B, S, 8] = rms_norm(%x)
+  %q : f32[B, S, 8] = linear(%n, %wq)
+  %h : f32[B, S, 2, 4] = reshape(%q) {shape = [B, S, 2, 4]}
+  %t : f32[B, 2, S, 4] = permute(%h) {perm = [0, 2, 1, 3]}
+  %a : f32[B, 2, S, 4] = sdpa(%t, %t, %t) {causal = true}
+  %p : f32[B, S, 2, 4] = permute(%a) {perm = [0, 2, 1, 3]}
+  %o : f32[B, S, 8] = reshape(%p) {shape = [B, S, 8]}
+  %y : f32[B, S, 8] = add(%x, %o)
+  output y = %y
+}

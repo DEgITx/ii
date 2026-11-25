@@ -253,11 +253,17 @@ const Status& status_of(const Result<T>& result) noexcept {
 #define II_DETAIL_CONCAT(a, b) II_DETAIL_CONCAT_IMPL(a, b)
 
 /// Evaluates an expression returning `Status` or `Result<T>`; on error returns the error from the enclosing function.
-#define II_TRY(expr)                                                                                                   \
+#define II_TRY(expr) II_DETAIL_TRY_IMPL(II_DETAIL_CONCAT(ii_try_result_, __COUNTER__), expr)
+
+// The temporary has a unique name so that II_TRY can be nested (e.g. inside a lambda passed to a function whose
+// result is itself checked with II_TRY) without shadowing warnings. `tmp` is an identifier, so it cannot be
+// parenthesized.
+// NOLINTNEXTLINE(bugprone-macro-parentheses)
+#define II_DETAIL_TRY_IMPL(tmp, expr)                                                                                  \
     do {                                                                                                               \
-        auto&& ii_try_result_ = (expr);                                                                                \
-        if (!ii_try_result_.ok()) [[unlikely]] {                                                                       \
-            return ::ii::detail::status_of(ii_try_result_);                                                            \
+        auto&& tmp = (expr);                                                                                           \
+        if (!tmp.ok()) [[unlikely]] {                                                                                  \
+            return ::ii::detail::status_of(tmp);                                                                       \
         }                                                                                                              \
     } while (false)
 

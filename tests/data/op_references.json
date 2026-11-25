@@ -1,0 +1,5524 @@
+{
+ "generator": "scripts/gen_op_references.py",
+ "numpy": "2.4.6",
+ "torch": "2.15.0",
+ "cases": [
+  {
+   "name": "neg_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = neg(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "kLFev9q4McDZT5K/vpiOPwtCz78vgjvA4VqhOkgZ2z+MU9c/sQL9v2cRNsAMLuA/lnzaPwhfIcDPg7g+F6s8wDjBxj+azBXAkBkuwBWQgb8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "kLFeP9q4MUDZT5I/vpiOvwtCzz8vgjtA4VqhukgZ27+MU9e/sQL9P2cRNkAMLuC/lnzavwhfIUDPg7i+F6s8QDjBxr+azBVAkBkuQBWQgT8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "neg_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = neg(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "1UF4PwC8uLQxub86Sro="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "1cF4vwA8uDQxOb+6Sjo="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "abs_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = abs(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "8X/wPxGQpr+wngFAE2UKvoJ4H8DWCIM/4ga0v1UHiL++0Em+y7n+PpSYL0CNdgg/TC7+P8Y4GkAyguC/6hbOvwyJvT8QkCC9QBJrPpz9G78="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "8X/wPxGQpj+wngFAE2UKPoJ4H0DWCIM/4ga0P1UHiD++0Ek+y7n+PpSYL0CNdgg/TC7+P8Y4GkAyguA/6hbOPwyJvT8QkCA9QBJrPpz9Gz8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "abs_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = abs(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "MUC6OHHAGL70OE9BCzE="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "MUC6OHFAGD70OE9BCzE="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "sign_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = sign(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "4r8BPz/2BL9BKDvAjAYcv+vi1z+DCce/D4SOP1H54bw/va0/dR8NP4eN2L+7vb2/d0pev3tiB0DtmBjAGVInwNLDJb4IEHs/vfDePzbM0z4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "AACAPwAAgL8AAIC/AACAvwAAgD8AAIC/AACAPwAAgL8AAIA/AACAPwAAgL8AAIC/AACAvwAAgD8AAIC/AACAvwAAgL8AAIA/AACAPwAAgD8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "sign_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = sign(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "Izx9sAE9hjABQd095kE="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "ADwAvAA8ADwAPAA8ADw="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "exp_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = exp(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "YCmCv2tXJMDPxCpA2SUhwMLSt784O00/DcraP/CcGEBy6QbAY7CXv1bj2D9/5zI/THVWvhmYlz6iwmY+Q0MEP5KKGMChkidA5tqTvwY83L8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "OzO5Pp0VnT1so2ZBNB+lPa+Ocz7ArA5AKM2wQPyrLUH4yvg98YecPtgxrkA8uwBApKBPPzkbrD+NWqA/bJTWP6zjvD1WZ1tBXEqhPtFBNz4="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "exp_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = exp(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "Ur8dO5c8z0FYwHBBCTY="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "IjHeQE1CkExLL5VL1T0="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "log_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = log(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "cEnpPgJLbj4Vjzo/paVUPyszO0C6mTRA7ucoQLzhe0AqpCZAGlnyPqICW0BcLxRA2FkxPyyp2T9qKoE/lQuiP9/8kj+RE9s/r0GZPtJZLkA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "8zpJv8qeur8pA6K+K/89vrFhiT+qyYQ/AnB4P61erz9a+3Q/onk/v1x4nT+c7lY/ku27vpLpBz8fiBQ8b4FxPoujDT5rkgk/IGWav6dHgD8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "log_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = log(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "jD1GQitB10PPQ85DcEE="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "OzWTPJg7dz1zPXI9ADw="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "sqrt_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = sqrt(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "lq5wQD74AECl2fU/EChBQMYeuz/Udqc/S5NKQHhDUz9Bn+A7ImwjQNrXMkCd/i5AqDbKP6+n9z+xE1U/qm5BQJta5Tyb1HhA8GWYPVFLZUA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "DTn4Pye0tT8AZbE/hF7ePyrDmj+MaJI/8rnjP/yOaD8kkKk98YnMP7z41T8mqNM/CuKgP2QLsj/yjWk/JIfeP/hWKz7JY/w/16qLPohH8j8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "sqrt_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = sqrt(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "Kz38PjU99j7RPGtApz0="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "jDxJPZA8Rz1kPPI9wTw="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "rsqrt_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = rsqrt(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "1JpSQB/mZD+GSzZAAWv1P6tjP0DwmIE/PSatP3ZFa0AOCUdAHEuSP9z3GUBpMnlAnL5kPwdmHkAI770/P7pLQIKzoj/0uAdA8kSNP6SIHEA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "Ux8NP5Ndhz9arxc/e+E4P4sJFD/aan4/ehtcPw2FBT99KhE/tXVvP7IMJT9GvAE/RGmHP5y5Ij8zKFI/C3wPP44QYz9Eyy8/Pq5zPwKxIz8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "rsqrt_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = rsqrt(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "vz9DO/RDAzsJPv44JTo="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "wDkzPAM4RjyDOhA9kDw="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "recip_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = recip(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "VRCzPt9/oD8QdfM/QF3LPz7YJ0BUUSdABtKuP5MzOEAIAoE/00a5P7tcKD+/gJA/+am7P/GtHEA54lw/4fHjPhtfOj86QsE/PDOcP29ECEA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "Cf82QKIpTD8umAY/LSEhP2Q6wz7Q18M+JnA7P2bksT74/30/HtwwP8Ogwj97w2I/KJwuP+8j0T5+WZQ/C8EPQCTSrz8cjik/O8hRP/F38D4="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "recip_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = recip(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "5zlJQNs8jT0IQZM7oT8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "bD14N5c6xDlcNjo8Mjg="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "sin_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = sin(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "Lse2vhY7IcDyNbI/zubJPvSMKsAgWNw+uKg4wLOBXr/8ZUm/kyHIv8PW/r649Me/81URPvss7b/1xca+ieY5wOms2rt2BR1AWUMBwIfQdj8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "peuyvpA8Fb9q7ns/m7XEPvDy6r71mtU+hMqBvtOHQ7/QQTW/RP5/v0By9L6O/X+/KtkQPtngdb9J0cG+4FFwvn+s2ru7lSI/6KFmv+pQUj8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "sin_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = sin(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "yL1EPB2/UEDvGzU1MrU="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "8LsBO9S7qzrvGx41G7U="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "cos_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = cos(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "KFnOv5gV9j9GIhFANL8aQBqzH798yxLADdoDv+yEbj7T5jjAwNU7QENZO0DASRrA2JMawCgeD8DqSe4/JNAewDe79r95wPo/J18bQPF+8z8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "XB0pvS9msL7lUCS/Ttc/vzzITz/UWim/BcpePysWeT/X4Xe/Wo16v1Iler/3nj6/S2Q/vzUNHr8c0ZK+WzdKv4fTsr4QzsG+mHxBv8ukpr4="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cos_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = cos(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "B7jLMbw4sTfDv7fBucA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "AjvfO6Q6GDvIta67sLk="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "tanh_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = tanh(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "68iwP+/RyL83Y94/s043QC01TT+t2oK+05Cuv4t5HUC2N58/UZsuvxaJoT9CKh5AwDAJQEuV9L8Pn2W/HeAYQJ0pKL4XCDLAFfBMv6HtRD4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "nJZhP8u2ar/onnA/FVd+P5s4Kj/iE4C+yZRgvz9LfD80uFg/XsUXv1cDWj9ZX3w/Dg95P/wHdb8G/ja/0rl7P7+qJr42C36/CBIqvy+JQj4="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "tanh_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = tanh(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "sbhbvN3Anz6aweNAvrk="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "OLhfuuG7cDvxu+E77bg="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "sigmoid_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = sigmoid(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "58QXwNWE8j/pfRNA+v+Bvy92xL/XSyfApUsHwLyBaz+78gE/K4EawNAUGD+ttN6+/Ug3QKOymz/ukxHA+UyEPyVmhb8tSY+/bXHJPygEir8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "3tuuPaqJXj/fxGg/gSGIPv6JNT7Dwos9CqncPU8MNz+Xzh8/tCSoPbXwJD9jL8k++C5yP0V8RT+z9r49NdQ8P1t+hT6PBnw+2AxUP+z2gT4="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "sigmoid_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = sigmoid(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "isGNwDhARD6UwIK+wrw="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "jSv3LSI7njrkLUIxeDM="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "erf_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = erf(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "OfvtP3GVJUAzHAbAoqawP4eGG0CDp4c/WAavP5VgBkDQNFc/CwvMP/+O8L8cePq+ZwkvwFeHiz+HOq4/0/v9P6okub+pKx6+T3k2wA/EjT4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "Wc99P2fvfz+hOH+/p/NyP2fZfz/Etl0/UWVyP2s8fz8a+EM/2M95P5P8fb8BzgK/zvh/v7J3YD/NHXI/a7d+PyyOdb8pETG+Yfx/v1H4mz4="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "erf_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = erf(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "crhKNFu3KD73QBHANME="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "i7i6NMC3xDv/O/i7ALw="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "relu_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = relu(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "lVsRQI0WMsDPCf4/HbHov1jY9z+1T/E/Z98LvxuAYz/W07u/V/WlP7ZQPUCTCbG+PuoaQLS0Ub+lz/m/1T7yvvKoN8A1Q4o/QtyHP3M7BUA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "lVsRQAAAAADPCf4/AAAAAFjY9z+1T/E/AAAAABuAYz8AAAAAV/WlP7ZQPUAAAAAAPuoaQAAAAAAAAAAAAAAAAAAAAAA1Q4o/QtyHP3M7BUA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "relu_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = relu(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "ssETHF66zbmwvWdBSDU="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "AAATHAAAAAAAAGdBSDU="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "floor_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = floor(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "LA8QQPJJGEDZJANA8jk8QFSLE0ARyitAxVIuwPfZZL8/+wtASwkRwIWc0L5KAdE/kd+Ev8stNsClJAbAX+IZQDE+sT/g9g/AgGy+P1dTDEA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "AAAAQAAAAEAAAABAAAAAQAAAAEAAAABAAABAwAAAgL8AAABAAABAwAAAgL8AAIA/AAAAwAAAQMAAAEDAAAAAQAAAgD8AAEDAAACAPwAAAEA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "floor_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = floor(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "qkDhPNs8VsFUvJbBjz4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "AEAAPAA8AMIAwADCADw="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "ceil_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = ceil(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "cLrFPrV0P78g9jXAX257PwyiwL9ULJy/ZwXYPhVkB8A5YyBAiTFRP9Sv7z9dY1y/jVhhv9wk3r9SsxHAozIGv5kZM8CgXJU/62FZvwELGsA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "AACAPwAAAIAAAADAAACAPwAAgL8AAIC/AACAPwAAAMAAAEBAAACAPwAAAEAAAACAAAAAgAAAgL8AAADAAAAAgAAAAMAAAABAAAAAgAAAAMA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "ceil_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = ceil(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "aj6kPFlB1D7CQfG4fbw="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "AEAAQABCAEAAQgCAALw="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "round_f32",
+   "graph": "graph {\n  input %in0 : f32[4, 5]\n  %out0 : f32[4, 5] = round(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "cksWwK5fJD/cryhAgD2BvVmXCMBGnRO/yus1QEBZgj9x526/vn4BwKDI9r+FyynAXw4mQILBAL+pBg1APf4JQLuofD8N+STAi8iTP9BDtT4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "AAAAwAAAgD8AAEBAAAAAgAAAAMAAAIC/AABAQAAAgD8AAIC/AAAAwAAAAMAAAEDAAABAQAAAgL8AAABAAAAAQAAAgD8AAEDAAACAPwAAAAA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "round_f16",
+   "graph": "graph {\n  input %in0 : f16[7]\n  %out0 : f16[7] = round(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "f0GhPmfADD6SutU+JcA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      7
+     ],
+     "base64": "AEIAQADAAEAAvABAAMA="
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "exp_bf16",
+   "graph": "graph {\n  input %in0 : bf16[6]\n  %out0 : bf16[6] = exp(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "bf16",
+     "shape": [
+      6
+     ],
+     "base64": "Aj8hwB3ATL8WQH+/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bf16",
+     "shape": [
+      6
+     ],
+     "base64": "1T+mPbA95z4nQb0+"
+    }
+   ],
+   "rtol": 0.01,
+   "atol": 0.01
+  },
+  {
+   "name": "tanh_f64",
+   "graph": "graph {\n  input %in0 : f64[5]\n  %out0 : f64[5] = tanh(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f64",
+     "shape": [
+      5
+     ],
+     "base64": "SHwibIeu17+aDCcn1TL6vzT32jq86fs/JMrcbRyS4D8I3NKWIZvePw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f64",
+     "shape": [
+      5
+     ],
+     "base64": "UinCZDGo1r+H0u3m4artv6nvEYenGu4/d+0eAj533j/0Q5FD3HfcPw=="
+    }
+   ],
+   "rtol": 1e-14,
+   "atol": 1e-14
+  },
+  {
+   "name": "round_ties",
+   "graph": "graph {\n  input %in0 : f32[8]\n  %out0 : f32[8] = round(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      8
+     ],
+     "base64": "AAAgwAAAwL8AAAC/AAAAPwAAwD8AACBAAABgQP///z4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      8
+     ],
+     "base64": "AAAAwAAAAMAAAACAAAAAAAAAAEAAAABAAACAQAAAAAA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "neg_i32",
+   "graph": "graph {\n  input %in0 : i32[10]\n  %out0 : i32[10] = neg(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      10
+     ],
+     "base64": "UAAAAEgAAAACAAAASwAAAOX///8rAAAAOwAAAPX///8gAAAADwAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      10
+     ],
+     "base64": "sP///7j////+////tf///xsAAADV////xf///wsAAADg////8f///w=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "abs_i32",
+   "graph": "graph {\n  input %in0 : i32[10]\n  %out0 : i32[10] = abs(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      10
+     ],
+     "base64": "UAAAAEgAAAACAAAASwAAAOX///8rAAAAOwAAAPX///8gAAAADwAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      10
+     ],
+     "base64": "UAAAAEgAAAACAAAASwAAABsAAAArAAAAOwAAAAsAAAAgAAAADwAAAA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "relu_i32",
+   "graph": "graph {\n  input %in0 : i32[10]\n  %out0 : i32[10] = relu(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      10
+     ],
+     "base64": "UAAAAEgAAAACAAAASwAAAOX///8rAAAAOwAAAPX///8gAAAADwAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      10
+     ],
+     "base64": "UAAAAEgAAAACAAAASwAAAAAAAAArAAAAOwAAAAAAAAAgAAAADwAAAA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "sign_i64",
+   "graph": "graph {\n  input %in0 : i64[10]\n  %out0 : i64[10] = sign(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      10
+     ],
+     "base64": "UAAAAAAAAABIAAAAAAAAAAIAAAAAAAAASwAAAAAAAADl/////////ysAAAAAAAAAOwAAAAAAAAD1/////////yAAAAAAAAAADwAAAAAAAAA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      10
+     ],
+     "base64": "AQAAAAAAAAABAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAD//////////wEAAAAAAAAAAQAAAAAAAAD//////////wEAAAAAAAAAAQAAAAAAAAA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "not",
+   "graph": "graph {\n  input %in0 : bool[3]\n  %out0 : bool[3] = not(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      3
+     ],
+     "base64": "AQAB"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      3
+     ],
+     "base64": "AAEA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "add_broadcast_f32",
+   "graph": "graph {\n  input %in0 : f32[3, 1, 4]\n  input %in1 : f32[5, 1]\n  %out0 : f32[3, 5, 4] = add(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      1,
+      4
+     ],
+     "base64": "5O7lv4z8m78Hfbw/rWpcPsx4LL9ov7w/zHDyv2xFaL8bs1q8YtaGPxMVij+TOvU/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      1
+     ],
+     "base64": "RnhJv04q+T8Qw5G/MguAvWkGcb4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5,
+      4
+     ],
+     "base64": "hFUlwFhcAMDIgS8/m10Sv1DbGT6EWzo/qtNaQNJbCkD62DvAzt8WwNznqj51a2y/l+/tvz/9o79UfLQ/FGUcPtkHAsBZHbq/OlyeP+DdpLyJ+Lq/igYwP3iWK8DZ3ti/6O2iP9v0WkBAMFc9mAeFP3b/579g8as+7hlCwOPyAsAyejy/tb60P39x+r/SRni/Zrpov5uenj/NSAjAg0OSvxLjTL/8aIg+wGOVPnB+kD/odPc/WABAQLCfQUBwMndAdniTv+DKrr2gv3W9Bu9GP5Vhm71eq30/YBSCP+A57T+bsX6+KmtRP4zoVz/GGdc/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "sub_broadcast_f32",
+   "graph": "graph {\n  input %in0 : f32[3, 1, 4]\n  input %in1 : f32[5, 1]\n  %out0 : f32[3, 5, 4] = sub(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      1,
+      4
+     ],
+     "base64": "5O7lv4z8m78Hfbw/rWpcPsx4LL9ov7w/zHDyv2xFaL8bs1q8YtaGPxMVij+TOvU/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      1
+     ],
+     "base64": "RnhJv04q+T8Qw5G/MguAvWkGcb4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5,
+      4
+     ],
+     "base64": "wTKBv6QB3b6VnBBAeUmAP5mMb8Btk0rAHLXyvvic3b+oVyi/wJejvQwgJ0BmUK0/Me7dv9n7k7+6fcQ/IziOPhfOx79+t3u/1J3aP4u45j7Q++c9xr0QQKm0jb8wafa9WrMnwJir8b6NzXXAgqY2wKga7j48QSdAeFtBv9ACbT5mdxy/G8DEPxlw6r8GRFi/ZG7gvjXg2j//T9S/0gMsv3oNRj+Fkus/NtHuP1v7LEC03/q/2Kdkv3YqXr/A7vu8qg2QP7lMDEAS7A1A0n5DQJ1pST0V144/xhWSP0Y7/T83W2M+L/ekP+A1qD+wrQlA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "mul_broadcast_f32",
+   "graph": "graph {\n  input %in0 : f32[3, 1, 4]\n  input %in1 : f32[5, 1]\n  %out0 : f32[3, 5, 4] = mul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      1,
+      4
+     ],
+     "base64": "5O7lv4z8m78Hfbw/rWpcPsx4LL9ov7w/zHDyv2xFaL8bs1q8YtaGPxMVij+TOvU/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      1
+     ],
+     "base64": "RnhJv04q+T8Qw5G/MguAvWkGcb4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5,
+      4
+     ],
+     "base64": "mPS0PyaFdT+5VpS/UHctvlvLX8Br0hfAwnQ3QC+I1j6C6wJAzaGxP+Ck1r++AHu+AAPmPTEKnD2Djby99H1cvKd72D6o3JI+bHaxvvKFT73guwc/9oqUv3fMvj+iyzY//92nv121N0DH92vA6BHiv61nRD938Na/nwoKQE5AhD/ihyw96s+8vQCG8j29WWg9CmIiPuu0sb5CQuQ+LK9aPmAdLDxZO1S/11ZZvzT+wL9Z3NS8zjwDQFFlBkB/rm5ALQx5PFaMmb9NPp2/CKELwDzGWjot4oa9JyGKvQZQ9b0W6E07ZeZ9vkwBgr5I4ua+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "max_broadcast_f32",
+   "graph": "graph {\n  input %in0 : f32[3, 1, 4]\n  input %in1 : f32[5, 1]\n  %out0 : f32[3, 5, 4] = max(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      1,
+      4
+     ],
+     "base64": "5O7lv4z8m78Hfbw/rWpcPsx4LL9ov7w/zHDyv2xFaL8bs1q8YtaGPxMVij+TOvU/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      1
+     ],
+     "base64": "RnhJv04q+T8Qw5G/MguAvWkGcb4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5,
+      4
+     ],
+     "base64": "RnhJv0Z4Sb8Hfbw/rWpcPk4q+T9OKvk/Tir5P04q+T8Qw5G/EMORvwd9vD+talw+MguAvTILgL0Hfbw/rWpcPmkGcb5pBnG+B328P61qXD7MeCy/aL+8P0Z4Sb9GeEm/Tir5P04q+T9OKvk/Tir5P8x4LL9ov7w/EMORv2xFaL8yC4C9aL+8PzILgL0yC4C9aQZxvmi/vD9pBnG+aQZxvhuzWrxi1oY/ExWKP5M69T9OKvk/Tir5P04q+T9OKvk/G7NavGLWhj8TFYo/kzr1PxuzWrxi1oY/ExWKP5M69T8bs1q8YtaGPxMVij+TOvU/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "min_broadcast_f32",
+   "graph": "graph {\n  input %in0 : f32[3, 1, 4]\n  input %in1 : f32[5, 1]\n  %out0 : f32[3, 5, 4] = min(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      1,
+      4
+     ],
+     "base64": "5O7lv4z8m78Hfbw/rWpcPsx4LL9ov7w/zHDyv2xFaL8bs1q8YtaGPxMVij+TOvU/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      1
+     ],
+     "base64": "RnhJv04q+T8Qw5G/MguAvWkGcb4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5,
+      4
+     ],
+     "base64": "5O7lv4z8m79GeEm/RnhJv+Tu5b+M/Ju/B328P61qXD7k7uW/jPybvxDDkb8Qw5G/5O7lv4z8m78yC4C9MguAveTu5b+M/Ju/aQZxvmkGcb5GeEm/RnhJv8xw8r9sRWi/zHgsv2i/vD/McPK/bEVovxDDkb8Qw5G/zHDyvxDDkb/MeCy/MguAvcxw8r9sRWi/zHgsv2kGcb7McPK/bEVov0Z4Sb9GeEm/RnhJv0Z4Sb8bs1q8YtaGPxMVij+TOvU/EMORvxDDkb8Qw5G/EMORvzILgL0yC4C9MguAvTILgL1pBnG+aQZxvmkGcb5pBnG+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "div_f32",
+   "graph": "graph {\n  input %in0 : f32[3, 1, 4]\n  input %in1 : f32[5, 1]\n  %out0 : f32[3, 5, 4] = div(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      1,
+      4
+     ],
+     "base64": "5O7lv4z8m78Hfbw/rWpcPsx4LL9ov7w/zHDyv2xFaL8bs1q8YtaGPxMVij+TOvU/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      1
+     ],
+     "base64": "cUnZP2uia79wPfc/SGKaPyEk+T8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5,
+      4
+     ],
+     "base64": "IHOHvyvHN78TEl4//tcBPlTO+T/cd6k/eMfMv453b755FG6/aIMhv7EqQz/xOeQ9VqO+vydUgb+uRpw/d782PmRDbL/kRyC/cK1BPxt84j1SM8u+R2BeP1HRjr+20wi/3GA7P5YPzb98sgNAl1h8Py+Vsr5sb0M/1Ad7vzaA8L4r/w6/t32cPwsCyb+Vk0C/VDixvqXxQT9yHXm/Zqruvg3VALxi3B4/E68iP8p1kD/+mW08wn2Svz8Elr84NgXAzHLiu2mdCz+J+Q4/5ep9PwVTNbyEll8/+fdkP9ZRyz9vuOC7rYwKPz3iDT/f+ns/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "pow_f32",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  input %in1 : f32[4]\n  %out0 : f32[3, 4] = pow(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "ls+hPvlK5z+aFAg+/OwmQCvtXD50dTo/dbyhP53Ysj9hCc0+lFPGPknV6j8YqBNA"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "e96LPwlaeL3NNSy/7SDKvw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "KGuRPqj6dj+GxXhAQFdhPuSjPz7Ye4I/SblaP9nzFj/+Wrw+jJOHP2AyKj9FwIg+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "mod_f32",
+   "graph": "graph {\n  input %in0 : f32[12]\n  input %in1 : f32[12]\n  %out0 : f32[12] = mod(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      12
+     ],
+     "base64": "oQWNvt17JUBfmXvAnoBHv6Up1r2+Cb7A0alCQPWKI8A/q2FA7MV+wPTo1sBvdxpA"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      12
+     ],
+     "base64": "7w1JP152Sb92ur8/j4U9QPL0or8HsiJAb02EP4Sn0T+sJEC/ZoU4P2v2Pz+qpKk/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      12
+     ],
+     "base64": "HosCPwTqD79I+Q8/aKULQKUp1r0yBdg/iHF5PzxyOD+AKWi+aBGwPjAiBj00Sos/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "fmod_f32",
+   "graph": "graph {\n  input %in0 : f32[12]\n  input %in1 : f32[12]\n  %out0 : f32[12] = mod(%in0, %in1) {fmod = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      12
+     ],
+     "base64": "oQWNvt17JUBfmXvAnoBHv6Up1r2+Cb7A0alCQPWKI8A/q2FA7MV+wPTo1sBvdxpA"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      12
+     ],
+     "base64": "7w1JP152Sb92ur8/j4U9QPL0or8HsiJAb02EP4Sn0T+sJEC/ZoU4P2v2Pz+qpKk/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      12
+     ],
+     "base64": "oQWNvmgxZj6ke2+/noBHv6Up1r24vVq/iHF5P8zcar9MGgY/ZPnAvkiUN780Sos/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "mul_f16",
+   "graph": "graph {\n  input %in0 : f16[2, 3]\n  input %in1 : f16[3]\n  %out0 : f16[2, 3] = mul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "gbw1vMS+ibmFu0o/"
+    },
+    {
+     "dtype": "f16",
+     "shape": [
+      3
+     ],
+     "base64": "vqbvuDs9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "lycwOWzAqiSjOMRA"
+    }
+   ],
+   "rtol": 0.001,
+   "atol": 0.001
+  },
+  {
+   "name": "add_i32",
+   "graph": "graph {\n  input %in0 : i32[4, 5]\n  input %in1 : i32[5]\n  %out0 : i32[4, 5] = add(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "JAAAABEAAAD3////MgAAANj///8fAAAA3////93///8HAAAA6v///y8AAAALAAAAMgAAABoAAAAsAAAACQAAAAYAAAAHAAAAEQAAABMAAAA="
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      5
+     ],
+     "base64": "CAAAAPj////6////BQAAAPj///8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "LAAAAAkAAADx////NwAAAND///8nAAAA1////9f///8MAAAA4v///zcAAAADAAAALAAAAB8AAAAkAAAAEQAAAP7///8BAAAAFgAAAAsAAAA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "mul_i32",
+   "graph": "graph {\n  input %in0 : i32[4, 5]\n  input %in1 : i32[5]\n  %out0 : i32[4, 5] = mul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "JAAAABEAAAD3////MgAAANj///8fAAAA3////93///8HAAAA6v///y8AAAALAAAAMgAAABoAAAAsAAAACQAAAAYAAAAHAAAAEQAAABMAAAA="
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      5
+     ],
+     "base64": "CAAAAPj////6////BQAAAPj///8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "IAEAAHj///82AAAA+gAAAEABAAD4AAAACAEAANIAAAAjAAAAsAAAAHgBAACo////1P7//4IAAACg/v//SAAAAND////W////VQAAAGj///8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "div_i32",
+   "graph": "graph {\n  input %in0 : i32[4, 5]\n  input %in1 : i32[5]\n  %out0 : i32[4, 5] = div(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "JAAAABEAAAD3////MgAAANj///8fAAAA3////93///8HAAAA6v///y8AAAALAAAAMgAAABoAAAAsAAAACQAAAAYAAAAHAAAAEQAAABMAAAA="
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      5
+     ],
+     "base64": "CAAAAPj////6////BQAAAPj///8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "BAAAAP7///8BAAAACgAAAAUAAAADAAAABAAAAAUAAAABAAAAAgAAAAUAAAD/////+P///wUAAAD7////AQAAAAAAAAD/////AwAAAP7///8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "mod_i32",
+   "graph": "graph {\n  input %in0 : i32[4, 5]\n  input %in1 : i32[5]\n  %out0 : i32[4, 5] = mod(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "JAAAABEAAAD3////MgAAANj///8fAAAA3////93///8HAAAA6v///y8AAAALAAAAMgAAABoAAAAsAAAACQAAAAYAAAAHAAAAEQAAABMAAAA="
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      5
+     ],
+     "base64": "CAAAAPj////6////BQAAAPj///8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "BAAAAPn////9////AAAAAAAAAAAHAAAA//////v///8CAAAA+v///wcAAAD7/////P///wEAAAD8////AQAAAP7////7////AgAAAPv///8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "fmod_i32",
+   "graph": "graph {\n  input %in0 : i32[4, 5]\n  input %in1 : i32[5]\n  %out0 : i32[4, 5] = mod(%in0, %in1) {fmod = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "JAAAABEAAAD3////MgAAANj///8fAAAA3////93///8HAAAA6v///y8AAAALAAAAMgAAABoAAAAsAAAACQAAAAYAAAAHAAAAEQAAABMAAAA="
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      5
+     ],
+     "base64": "CAAAAPj////6////BQAAAPj///8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "BAAAAAEAAAD9////AAAAAAAAAAAHAAAA//////v///8CAAAA+v///wcAAAADAAAAAgAAAAEAAAAEAAAAAQAAAAYAAAABAAAAAgAAAAMAAAA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "div_by_zero_i32",
+   "graph": "graph {\n  input %in0 : i32[3]\n  input %in1 : i32[3]\n  %out0 : i32[3] = div(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3
+     ],
+     "base64": "BwAAAPn///8AAAAA"
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      3
+     ],
+     "base64": "AAAAAAAAAAAAAAAA"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3
+     ],
+     "base64": "AAAAAAAAAAAAAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "pow_i64",
+   "graph": "graph {\n  input %in0 : i64[6]\n  input %in1 : i64[6]\n  %out0 : i64[6] = pow(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      6
+     ],
+     "base64": "AAAAAAAAAAD//////////wIAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAEAAAAAAAAA"
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      6
+     ],
+     "base64": "AAAAAAAAAAABAAAAAAAAAAIAAAAAAAAAAwAAAAAAAAAEAAAAAAAAAAUAAAAAAAAA"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      6
+     ],
+     "base64": "AQAAAAAAAAD//////////wQAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAEAAAAAAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "add_wraps_i8",
+   "graph": "graph {\n  input %in0 : i8[3]\n  input %in1 : i8[3]\n  %out0 : i8[3] = add(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i8",
+     "shape": [
+      3
+     ],
+     "base64": "eIhk"
+    },
+    {
+     "dtype": "i8",
+     "shape": [
+      3
+     ],
+     "base64": "CvZk"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i8",
+     "shape": [
+      3
+     ],
+     "base64": "gn7I"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "eq_i32",
+   "graph": "graph {\n  input %in0 : i32[3, 4]\n  input %in1 : i32[4]\n  %out0 : bool[3, 4] = eq(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "/////wAAAAAAAAAAAwAAAAEAAAACAAAA/v///wAAAAABAAAAAwAAAAAAAAD9////"
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      4
+     ],
+     "base64": "/v///wEAAAADAAAAAAAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AAAAAAAAAAEAAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "ne_i32",
+   "graph": "graph {\n  input %in0 : i32[3, 4]\n  input %in1 : i32[4]\n  %out0 : bool[3, 4] = ne(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "/////wAAAAAAAAAAAwAAAAEAAAACAAAA/v///wAAAAABAAAAAwAAAAAAAAD9////"
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      4
+     ],
+     "base64": "/v///wEAAAADAAAAAAAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AQEBAQEBAQABAQEB"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "lt_i32",
+   "graph": "graph {\n  input %in0 : i32[3, 4]\n  input %in1 : i32[4]\n  %out0 : bool[3, 4] = lt(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "/////wAAAAAAAAAAAwAAAAEAAAACAAAA/v///wAAAAABAAAAAwAAAAAAAAD9////"
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      4
+     ],
+     "base64": "/v///wEAAAADAAAAAAAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AAEBAAAAAQAAAAEB"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "le_i32",
+   "graph": "graph {\n  input %in0 : i32[3, 4]\n  input %in1 : i32[4]\n  %out0 : bool[3, 4] = le(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "/////wAAAAAAAAAAAwAAAAEAAAACAAAA/v///wAAAAABAAAAAwAAAAAAAAD9////"
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      4
+     ],
+     "base64": "/v///wEAAAADAAAAAAAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AAEBAAAAAQEAAAEB"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "gt_i32",
+   "graph": "graph {\n  input %in0 : i32[3, 4]\n  input %in1 : i32[4]\n  %out0 : bool[3, 4] = gt(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "/////wAAAAAAAAAAAwAAAAEAAAACAAAA/v///wAAAAABAAAAAwAAAAAAAAD9////"
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      4
+     ],
+     "base64": "/v///wEAAAADAAAAAAAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AQAAAQEBAAABAQAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "ge_i32",
+   "graph": "graph {\n  input %in0 : i32[3, 4]\n  input %in1 : i32[4]\n  %out0 : bool[3, 4] = ge(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "/////wAAAAAAAAAAAwAAAAEAAAACAAAA/v///wAAAAABAAAAAwAAAAAAAAD9////"
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      4
+     ],
+     "base64": "/v///wEAAAADAAAAAAAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AQAAAQEBAAEBAQAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "eq_nan_f32",
+   "graph": "graph {\n  input %in0 : f32[4]\n  input %in1 : f32[4]\n  %out0 : bool[4] = eq(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "AACAPwAAwH8AAID/AAAAQA=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "AACAPwAAwH8AAID/AABAQA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      4
+     ],
+     "base64": "AQABAA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "and",
+   "graph": "graph {\n  input %in0 : bool[2, 3]\n  input %in1 : bool[3]\n  %out0 : bool[2, 3] = and(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "AQAAAQEB"
+    },
+    {
+     "dtype": "bool",
+     "shape": [
+      3
+     ],
+     "base64": "AAAB"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "AAAAAAAB"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "or",
+   "graph": "graph {\n  input %in0 : bool[2, 3]\n  input %in1 : bool[3]\n  %out0 : bool[2, 3] = or(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "AQAAAQEB"
+    },
+    {
+     "dtype": "bool",
+     "shape": [
+      3
+     ],
+     "base64": "AAAB"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "AQABAQEB"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "xor",
+   "graph": "graph {\n  input %in0 : bool[2, 3]\n  input %in1 : bool[3]\n  %out0 : bool[2, 3] = xor(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "AQAAAQEB"
+    },
+    {
+     "dtype": "bool",
+     "shape": [
+      3
+     ],
+     "base64": "AAAB"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "AQABAQEA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "where",
+   "graph": "graph {\n  input %in0 : bool[2, 1, 3]\n  input %in1 : f32[4, 3]\n  input %in2 : f32[1]\n  %out0 : f32[2, 4, 3] = where(%in0, %in1, %in2)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      2,
+      1,
+      3
+     ],
+     "base64": "AAABAAAA"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      3
+     ],
+     "base64": "0IEuvyD+uT8jxUa/yX+pPz+N4r8RyFs/AtvVvyiwzj8b7ig/cLwAPRnMTz+5rNW/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1
+     ],
+     "base64": "q1iDvg=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4,
+      3
+     ],
+     "base64": "q1iDvqtYg74jxUa/q1iDvqtYg74RyFs/q1iDvqtYg74b7ig/q1iDvqtYg765rNW/q1iDvqtYg76rWIO+q1iDvqtYg76rWIO+q1iDvqtYg76rWIO+q1iDvqtYg76rWIO+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cast_f32_i32",
+   "graph": "graph {\n  input %in0 : f32[10]\n  %out0 : i32[10] = cast(%in0) {to = i32}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      10
+     ],
+     "base64": "99iawoNPxkLfDXHDG89KQ6vjH8OwH11CkokWwqGdcsMaVJJC9WYWQw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      10
+     ],
+     "base64": "s////2MAAAAP////ygAAAGH///83AAAA2////w7///9JAAAAlgAAAA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cast_f32_u8",
+   "graph": "graph {\n  input %in0 : f32[10]\n  %out0 : u8[10] = cast(%in0) {to = u8}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      10
+     ],
+     "base64": "99iawoNPxkLfDXHDG89KQ6vjH8OwH11CkokWwqGdcsMaVJJC9WYWQw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "u8",
+     "shape": [
+      10
+     ],
+     "base64": "AGMAygA3AABJlg=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cast_f32_f16",
+   "graph": "graph {\n  input %in0 : f32[8]\n  %out0 : f16[8] = cast(%in0) {to = f16}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      8
+     ],
+     "base64": "LbcDRIr//0MRKkHEFIgmw2/cb0TvF9nDpJBixDL/HEQ="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      8
+     ],
+     "base64": "HmAAYAniNNl/Y8neFePoYA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cast_f32_bf16",
+   "graph": "graph {\n  input %in0 : f32[8]\n  %out0 : bf16[8] = cast(%in0) {to = bf16}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      8
+     ],
+     "base64": "LbcDRIr//0MRKkHEFIgmw2/cb0TvF9nDpJBixDL/HEQ="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bf16",
+     "shape": [
+      8
+     ],
+     "base64": "BEQAREHEJ8NwRNnDY8QdRA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cast_f64_f16",
+   "graph": "graph {\n  input %in0 : f64[8]\n  %out0 : f16[8] = cast(%in0) {to = f16}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f64",
+     "shape": [
+      8
+     ],
+     "base64": "VVVV1dzzZUAAAACAS1VlQAAAAMDWGHDAq6qqqljBS8AAAABACf1zQKuqqupTF2LAAAAAAGPhcsBVVVVViCpqQA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      8
+     ],
+     "base64": "fVlVWQbc8NL/XIbYuNyLWg=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cast_f32_bool",
+   "graph": "graph {\n  input %in0 : f32[4]\n  %out0 : bool[4] = cast(%in0) {to = bool}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "AAAAAAAAwD8AAACAAADAfw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      4
+     ],
+     "base64": "AAEAAQ=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cast_i32_f32",
+   "graph": "graph {\n  input %in0 : i32[6]\n  %out0 : f32[6] = cast(%in0) {to = f32}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      6
+     ],
+     "base64": "NO7//x/C//8KOf///sz+/78rAQAA9f//"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      6
+     ],
+     "base64": "AGCOxQCEd8YA9kbHAIGZx4DflUcAADDF"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cast_bool_i64",
+   "graph": "graph {\n  input %in0 : bool[2]\n  %out0 : i64[2] = cast(%in0) {to = i64}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "bool",
+     "shape": [
+      2
+     ],
+     "base64": "AQA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      2
+     ],
+     "base64": "AQAAAAAAAAAAAAAAAAAAAA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "clamp_f32",
+   "graph": "graph {\n  input %in0 : f32[10]\n  %out0 : f32[10] = clamp(%in0) {max = 2.0, min = -1.5}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      10
+     ],
+     "base64": "mx8cQS4tiEDofSvALoZyQLb01cDO4udATfEBQTTPUz5OG2rAxezTwA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      10
+     ],
+     "base64": "AAAAQAAAAEAAAMC/AAAAQAAAwL8AAABAAAAAQDTPUz4AAMC/AADAvw=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "clamp_min_only",
+   "graph": "graph {\n  input %in0 : f32[10]\n  %out0 : f32[10] = clamp(%in0) {min = 0.0}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      10
+     ],
+     "base64": "mx8cQS4tiEDofSvALoZyQLb01cDO4udATfEBQTTPUz5OG2rAxezTwA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      10
+     ],
+     "base64": "mx8cQS4tiEAAAAAALoZyQAAAAADO4udATfEBQTTPUz4AAAAAAAAAAA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "clamp_i32",
+   "graph": "graph {\n  input %in0 : i32[10]\n  %out0 : i32[10] = clamp(%in0) {max = 4.5, min = -3.5}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      10
+     ],
+     "base64": "9////woAAAD5////BQAAAAkAAAD9////AAAAAAcAAAD+////BQAAAA=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      10
+     ],
+     "base64": "/f///wQAAAD9////BAAAAAQAAAD9////AAAAAAQAAAD+////BAAAAA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_sum_1_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 5] = reduce_sum(%in0) {axes = [1], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5
+     ],
+     "base64": "O0+EQJSrHEB/QbBA6I4rvnIxM8DuMtQ/FEvUPhsQnb4xkJ9AY3ufP6C9JsCAeY8/7BiuvjgKGj+ouwC/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_sum_0_2_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[1, 4, 1] = reduce_sum(%in0) {axes = [0, 2], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      1
+     ],
+     "base64": "u2zPP44o7ECQAxNBgsQywA=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_sum_all_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[] = reduce_sum(%in0) {axes = [], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [],
+     "base64": "TlR2QQ=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_sum_m1_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 4, 1] = reduce_sum(%in0) {axes = [-1], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      1
+     ],
+     "base64": "LQxevxXnf0AAPQBBY3UBwDzYnD8ADSBAD6ElQHyJ1z+WmqE/H3RhP6ANtb/dEx3A"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_mean_1_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 5] = reduce_mean(%in0) {axes = [1], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5
+     ],
+     "base64": "O0+EP5SrHD9/QbA/6I4rvXIxM7/uMtQ+FEvUPRsQnb0xkJ8/Y3ufPqC9Jr+AeY8+7BiuvTgKGj6ouwC+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_mean_0_2_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[1, 4, 1] = reduce_mean(%in0) {axes = [0, 2], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      1
+     ],
+     "base64": "yEDdPf7m+z6a0Bw/ea8+vg=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_mean_all_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[] = reduce_mean(%in0) {axes = [], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [],
+     "base64": "KmCDPg=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_mean_m1_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 4, 1] = reduce_mean(%in0) {axes = [-1], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      1
+     ],
+     "base64": "V6Mxvt24TD9nLs0/NyLPvpPzej5mCgA/2IAEP/xtrD54SIE+5lw0PrPXkL77Uvu+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_max_1_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 5] = reduce_max(%in0) {axes = [1], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5
+     ],
+     "base64": "IhvxPwRd9z+YnPU/BGzzP22klD85UaE/8QqqP/3LCz9Eaf8/7uLIP6epbT7mYaY/pUWCP0W1mz7GyPw/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_max_0_2_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[1, 4, 1] = reduce_max(%in0) {axes = [0, 2], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      1
+     ],
+     "base64": "xsj8PwRd9z++fvM/RGn/Pw=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_max_all_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[] = reduce_max(%in0) {axes = [], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [],
+     "base64": "RGn/Pw=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_max_m1_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 4, 1] = reduce_max(%in0) {axes = [-1], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      1
+     ],
+     "base64": "LNbZPwRd9z++fvM/CLpXP2JX4z/u4sg/KpGjP0Rp/z/GyPw/5mGmP6VFgj9FtZs+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_min_1_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 5] = reduce_min(%in0) {axes = [1], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5
+     ],
+     "base64": "v24dv7I19L+RwnW8oqSwv5Og+7+mM+++Lj3fvhbBkb+9EIG9QIyqvyWX5b9Jc+W+yAuhv0rw3LxKaNG/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_min_0_2_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[1, 4, 1] = reduce_min(%in0) {axes = [0, 2], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      1
+     ],
+     "base64": "k6D7v0po0b8ll+W/zMTRvw=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_min_all_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[] = reduce_min(%in0) {axes = [], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [],
+     "base64": "k6D7vw=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_min_m1_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 4, 1] = reduce_min(%in0) {axes = [-1], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      1
+     ],
+     "base64": "k6D7v6KksL9tpJQ/zMTRvxbBkb+DvqK++oGkvkCMqr8YP46/SmjRvyWX5b/IC6G/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_prod_1_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 5] = reduce_prod(%in0) {axes = [1], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5
+     ],
+     "base64": "qyQYwLonncAl1r69RG4UvoC4qr/cwWU+wD7xvONKTbzSIJK+W4odP/oEbj0+3B+8u0a4P39hX7md668+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_prod_0_2_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[1, 4, 1] = reduce_prod(%in0) {axes = [0, 2], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      1
+     ],
+     "base64": "OHmEuhhqZDkckJg8ce06uA=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_prod_all_drop",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[] = reduce_prod(%in0) {axes = [], keepdims = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [],
+     "base64": "+bxNKg=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_prod_m1_keep",
+   "graph": "graph {\n  input %in0 : f32[3, 4, 5]\n  %out0 : f32[3, 4, 1] = reduce_prod(%in0) {axes = [-1], keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      5
+     ],
+     "base64": "KdOyP7I19L8s1tk/aZK9vZOg+78iG/E/BF33P5ic9T+ipLC/yoe2vgEGvD/TUso/vn7zPwRs8z9tpJQ/v24dvwi6Vz+RwnW8McAYv8zE0b85UaE/Lj3fvhbBkb9iV+M/7v9xvh3Plz+DvqK+BkUBPr0Qgb3u4sg/+oGkvv7JI779yws/KpGjP7Nknz+mM+++8QqqP4BzIz5Eaf8/QIyqv5up9T0D/Mc9GD+Ov3C0OT7GyPw/p6ltPuZhpj8Af4E/SvDcvEpo0b8ll+W/YaUvPqVFgj/vpxI+kwt0v+rzlL9Jc+W+yAuhv0W1mz6Vd+Q9"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4,
+      1
+     ],
+     "base64": "yk9Tv2DvW0ANEhxBxRP5OyB5hr7QPJo74+s2Pdzahj58w5i7cqRcPG0cLz1hW7a8"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_sum_i32",
+   "graph": "graph {\n  input %in0 : i32[3, 4]\n  %out0 : i32[3] = reduce_sum(%in0) {axes = [1]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AAAAAAUAAAAAAAAA/v////7///8DAAAA/f///wUAAAABAAAA/////wIAAAD/////"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      3
+     ],
+     "base64": "AwAAAAMAAAABAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "reduce_sum_f16",
+   "graph": "graph {\n  input %in0 : f16[4, 16]\n  %out0 : f16[4] = reduce_sum(%in0) {axes = [1]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      4,
+      16
+     ],
+     "base64": "oLUgOPe7MLZhNX61TrHMqZq9hbwDu/g6Zr6yNfM8XTkPuNm8XLiVPcY7pj+GOSI8Xyahtt84ab7FPSE/HrWdP9UxMT40u+GbuDlTJGq87zbKPyO+aDY6oADAgTi9ve+9gDwqPJYyfLXqPQ471D8zvPs/9TxqOzc+Iz4uOlS9drk="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      4
+     ],
+     "base64": "nsIqR1PBp0k="
+    }
+   ],
+   "rtol": 0.002,
+   "atol": 0.002
+  },
+  {
+   "name": "argmax",
+   "graph": "graph {\n  input %in0 : f32[4, 6]\n  %out0 : i64[4] = argmax(%in0) {axis = 1}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      6
+     ],
+     "base64": "iiMSP3Ptvj8YcjQ/qKvxPB7pqr5YkO2/9AflP6dHZT+mYAu/AgT6Pydp/79FHTs/Xhzvv6qiWz9nUtM/Qj6LP76s7z+0/Qi/Cevzv+qJEz6luLo+SbbRvbFfd78adbm/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      4
+     ],
+     "base64": "AQAAAAAAAAADAAAAAAAAAAQAAAAAAAAAAgAAAAAAAAA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "argmin_keep",
+   "graph": "graph {\n  input %in0 : f32[4, 6]\n  %out0 : i64[1, 6] = argmin(%in0) {axis = 0, keepdims = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      6
+     ],
+     "base64": "iiMSP3Ptvj8YcjQ/qKvxPB7pqr5YkO2/9AflP6dHZT+mYAu/AgT6Pydp/79FHTs/Xhzvv6qiWz9nUtM/Qj6LP76s7z+0/Qi/Cevzv+qJEz6luLo+SbbRvbFfd78adbm/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      1,
+      6
+     ],
+     "base64": "AwAAAAAAAAADAAAAAAAAAAEAAAAAAAAAAwAAAAAAAAABAAAAAAAAAAAAAAAAAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "argmax_ties_first",
+   "graph": "graph {\n  input %in0 : f32[2, 4]\n  %out0 : i64[2] = argmax(%in0) {axis = 1}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4
+     ],
+     "base64": "AACAPwAAQEAAAEBAAAAAAAAAAEAAAABAAACAPwAAAEA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      2
+     ],
+     "base64": "AQAAAAAAAAAAAAAAAAAAAA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "argmax_ties_last",
+   "graph": "graph {\n  input %in0 : f32[2, 4]\n  %out0 : i64[2] = argmax(%in0) {axis = 1, select_last_index = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4
+     ],
+     "base64": "AACAPwAAQEAAAEBAAAAAAAAAAEAAAABAAACAPwAAAEA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      2
+     ],
+     "base64": "AgAAAAAAAAADAAAAAAAAAA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "argmax_nan",
+   "graph": "graph {\n  input %in0 : f32[1, 4]\n  %out0 : i64[1] = argmax(%in0) {axis = 1}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "AACAPwAAwH8AAKBAAADAfw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      1
+     ],
+     "base64": "AQAAAAAAAAA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "argmin_nan",
+   "graph": "graph {\n  input %in0 : f32[1, 4]\n  %out0 : i64[1] = argmin(%in0) {axis = 1}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "AACAPwAAwH8AAKBAAADAfw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      1
+     ],
+     "base64": "AQAAAAAAAAA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "matmul_2d",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  input %in1 : f32[4, 5]\n  %out0 : f32[3, 5] = matmul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "jmW5P9+JK7+/nmw/BIzwPhSt9z8VAGm/LL6NP2T76j6LjBq/HLEAP55jmL8dHo4/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "vvf4v112VL9vpJ+/t65tv1XP/z9B6ty/U7fJvzp8+b6+Ado/DuEOv+5W276RA8y/YVO7vrgSmj6LvnC/wM/zv8CA3z7FGuq/r07jPNQX7D8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5
+     ],
+     "base64": "n+c8wCgFtb+HWivAYHgMwEIGUUAApmLAETzev+23TcCgC0DAHcSFQJkrpr/J0wVAsSWLv3hsiz/yF9c/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "matmul_batched_broadcast",
+   "graph": "graph {\n  input %in0 : f32[2, 1, 3, 4]\n  input %in1 : f32[5, 4, 2]\n  %out0 : f32[2, 5, 3, 2] = matmul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      1,
+      3,
+      4
+     ],
+     "base64": "bvcPP5NIRL/pxuI/lWL0v/Ykmb9kcG8/oJypv1vqg7/2F6y+6Tuivz8of76NLrc/FK40PnjWE7900uO+dcXSPkKMwr/RQeG/xa7hv7q/HT+B5FK/dVb0vw+pYr43hIe/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      4,
+      2
+     ],
+     "base64": "VmS3v/hNXD/Klke/1BDGvlv8475x9M6+A7FYPrS7s75Elrg9REezv7Sb7j8sJWU+nqCTviAx578Ea+K/0P8lvocMtr+G6HS+qudPvjJ8ZL7dde0/p71uvwkUBr8Db+2+VPHgP9bOQL/R3aE/4ZTuP5jFuT8WZWc/B/yIP/O6gz9qELs/65q5v8+Zub9yvau/LCxXv3CdrL+lZta+SZ1Gvg=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      5,
+      3,
+      2
+     ],
+     "base64": "SlCzv4USPD9+sK0/I/P8vqsX8T9wak2+LHG+PypidsAoz3VAXkGOQKFIm8BneM8+9x9pQEzzOr/bQNC+5kPlP2Hs8770b4u9RfgLP67VDcCbiXzAe63FPjcEg7/Tl1y/XTufP9Ae57+Cmse/VeAdQODtdD8exQ9AhSL3Pg050j684o5AYfgFvsPBIkBlNfs+T4vUvxiguD7/8X/AxDqaQOgY2b+zJ6Y/c1+Wv3IWnz5Gjom/Q1cHQJ/+2T9GAak/Kh0gv6sKmL9OeNnAwRNGwEAcqsBURYfAEP+lPz4EhT9J98Y/YljaQPhfDECATohA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "matmul_transposed",
+   "graph": "graph {\n  input %in0 : f32[4, 3]\n  input %in1 : f32[5, 4]\n  %out0 : f32[3, 5] = matmul(%in0, %in1) {transpose_a = true, transpose_b = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      3
+     ],
+     "base64": "q+PhP1X17L8Z4tA/ObPgvniC2T8zr7g/6Ug5v0iY7L2iTIe/LXScv3Z1U78oPtO9"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      4
+     ],
+     "base64": "eNJ+PwExw7+6tvI+VTu7vwGm4j9D18a/1JSovpeZXz+23lG/9MDbv1MTZT87eoI/j13lP9bCpD9oxOK/vnTFPx6AJ78UB6G/jDSbv+3XIz8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5
+     ],
+     "base64": "abl3QEWMPkDFjyXAiD7/P7jbAb999FHAsTzTwFUWFsCZxAzAe1Sov0USbb+5+Wc/4rWbwPPWz0BxZ9W/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "matmul_vector_matrix",
+   "graph": "graph {\n  input %in0 : f32[4]\n  input %in1 : f32[4, 5]\n  %out0 : f32[5] = matmul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "r66rvzHehT9QDu6+iIXWvw=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "vvf4v112VL9vpJ+/t65tv1XP/z9B6ty/U7fJvzp8+b6+Ado/DuEOv+5W276RA8y/YVO7vrgSmj6LvnC/wM/zv8CA3z7FGuq/r07jPNQX7D8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      5
+     ],
+     "base64": "G0CGQLCIBr/uwIxAx8Q1QGBivcA="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "matmul_matrix_vector",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  input %in1 : f32[4]\n  %out0 : f32[3] = matmul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "jmW5P9+JK7+/nmw/BIzwPhSt9z8VAGm/LL6NP2T76j6LjBq/HLEAP55jmL8dHo4/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "r66rvzHehT9QDu6+iIXWvw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3
+     ],
+     "base64": "1BR3wI6ZmsCAQOc8"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "matmul_vector_vector",
+   "graph": "graph {\n  input %in0 : f32[4]\n  input %in1 : f32[4]\n  %out0 : f32[] = matmul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "r66rvzHehT9QDu6+iIXWvw=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "r66rvzHehT9QDu6+iIXWvw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [],
+     "base64": "cl69QA=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "matmul_i32",
+   "graph": "graph {\n  input %in0 : i32[2, 3]\n  input %in1 : i32[3, 2]\n  %out0 : i32[2, 2] = matmul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "/f///wQAAAAJAAAA+f///wMAAAACAAAA"
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      3,
+      2
+     ],
+     "base64": "BAAAAAcAAAD5////AQAAAPb///8EAAAA"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      2,
+      2
+     ],
+     "base64": "fv///xMAAAC7////2v///w=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "matmul_f16",
+   "graph": "graph {\n  input %in0 : f16[3, 8]\n  input %in1 : f16[8, 2]\n  %out0 : f16[3, 2] = matmul(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      3,
+      8
+     ],
+     "base64": "Bbw4Pja9K6+KP468i6iiti09nbwevjy91b3TP525Z7sxu/e2BrpsvN0zeD9fLii+"
+    },
+    {
+     "dtype": "f16",
+     "shape": [
+      8,
+      2
+     ],
+     "base64": "xL3qvoG+bjXFORM9kD0zPHS/SrO7veS94boWrOU7SSk="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      3,
+      2
+     ],
+     "base64": "b8TpPp7CPsjQxCzD"
+    }
+   ],
+   "rtol": 0.002,
+   "atol": 0.002
+  },
+  {
+   "name": "conv2d",
+   "graph": "graph {\n  input %in0 : f32[1, 3, 8, 7]\n  input %in1 : f32[4, 3, 3, 3]\n  input %in2 : f32[4]\n  %out0 : f32[1, 4, 6, 5] = conv(%in0, %in1, %in2)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      3,
+      8,
+      7
+     ],
+     "base64": "6un+Po4qPj+aYDe/6+esv/H3ez/GRLA/L2BxPkw2bz8qKdW+NLLnPo+xmT6ETCQ/MicLuursi7/OCNS/PDmbP1ncPL/Kqxk/IsWWPif4xb/iUM4+xrL7v+NkS79+hS29Aif2PtaFE786CdY/5ZD0P4nk3T/mMWG/Y+6Hv5R6mz8C2pq/0r3JPYpjdb/WLM4/Beuyv5MC5z+e+kE/OXTsvnkA2j4glB0/+gFHvxRV9b47Jjo/nEoMvjooIT4oeQ6+wmHWvc8zmT2cTiY/RQzbvwny3j9mJ1W/4i+pvvTJhj9BIb++odvuPsgYVj9iPO2/kr7gP5GX0T/DegO/K701v6P6Vj/jiZS9dGJov5LD7z7V82w/3sCNP/QOSr5JXfq/jmVPPzXz8L//oEa+9sjKP1mOZL8YG86/ympeP5QTob/br+4/A7TDP46TwL2EuU0+XqEdP+rVNL+GtJy/2yGcPxYBK79nETO/SKVgvotuhD/nubi+McVHv9Nl7b6ZWMM/INHNP8KQ+D87M4W/fNXdvw1E4b/AiZA+dsTUPZiLrb9UVIG/trREP7mh4b+uB5g/q9EkP6amgb+xvzs/xs2Iv8fWOT98tPA/nncPP2dEwT+JqOC/K6t2P7foWD+9kpC/lz+OvWf49D4td9m/iu/9P4GCyj9KUv4/qOA6v87oej3+rh++MtvNv3FhCr/tZOG+qzaZv/O9wz/xmLU+9mP8vrHgtz8aJSG+ym+evyIL9b+PiaC/PmmwP/M6QL/nXga/sVASPj0dwT8LmvW/Nguvvo06rz9zoKe/8PnuvyHnBr0uWIu/Z8dMP7YAob4g1T6+UpbpPim47z+Xrx4/iIqoP8cuk79J+OY/87eKPV6aUb+vZ3a/VypXv6PKoT8ML/Q/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      3,
+      3,
+      3
+     ],
+     "base64": "1m9iPkeyrD8K54k/gBhpP1W0Or8DRLi+qsE9Ph6RTD801IK/q0qfPpIszz4A9LU/XjzzvwSbuD9h45Q/XHHnv/VLSj8IjOk/NXJNvxjeVL5odd0/1F1tPm0qgz8GbIA/n36cvy9FAD6ATuU/jPhcP6gb+T5UNbm/Wz+NPs5Pgz/StKM/Dswtv+RnYz9JE7g+zNw/vyPK3j+Ihfa/tLMMv9Ik4z86hqM/qm9rP4DQub/ckXo/fC9wv5fi4L8C78+//RSVvgog4r/5PLG/WYl4vs4wTT9Gkq8/YL2fv/nEDL83P86//5PUP/VQ1b8eA98/7xv/PwDl9j+X5P0/vIOuvvRzuz85q5S/1i+XPtYV0j5BNKY+A/ClPz4Epr8wu4c/5neOvwxn3z0SIM4/RbmCPxa8qD4nalc+PUPdP9wHnj8PtV2/FQthv5eCMrt7D6k/XK4vvxo18D6uEkO/4cX/vz2hjj97WKo/15gOv7ae+j7gldA/5eZDP1pRM75Mb9U/5tK4v2vYnr+atp6//T4mP2PF6j9DLa0/QTLFPuNNHD4i4/g/ruSgvjFDoj9znsc/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "Rs2Av8dNMD6B97C/iu8yvw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      6,
+      5
+     ],
+     "base64": "4QrRQAMZR8EhTATB0M2jQTqqAUF9savAbH/MPkvRfEAYOYs/B5V7wPCpZL+7xybBhWs6QQeIasCEBnrB6a50wSE6AsDS7BNBsLb7PyuwNECeTBvB6NYXwD7moUBSv80/n85AwTezDMEM1b++GjoBQU45ikDvfNBA2C9+QPWzwMCvQujAt+mJwDfRC8GfJmjAOQ5CQbc+gMBJi3HAEy4VwIZZxMBdFA5BvoyEPyQYL0Fs1GVBssSwwAhjCcHXKh9Ax6QFwaqDaT/p2TFA95SLQHOhUEGwoLhADOHkQMyJX8A8hQLBalXKP4zFkD4q8bnAihIdP99yBD8RK83AHGnuwM4SXL60ZVfBpW8WQC2h6cBsRaNA5A49QVN+K8BukVM/F9phwVc+1UBPOnO/GnQrQVs8hkDt4pzAIDqDwOtoPMEWDHhAP4Y/waH8uEAZc0ZAIjRdQCn03L/LtzzBA/a1wMGEZ742rcPAomEFQYJ80sBekglByeLWQPi0DEABE/lAI/czwQvkfL8Ga9Q9Qilfv9S4z8CeHUNA60o3v88JxMD1gIjAEdOswDIK4EAG/Wy/L9ahwGT+JMFJ7lDAmTcMQbjCBECRcE+6nRnOQDdqAMFPfTDAkU6BwNqYI8C+fQ1B"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "conv2d_stride_pad",
+   "graph": "graph {\n  input %in0 : f32[1, 3, 8, 7]\n  input %in1 : f32[4, 3, 3, 3]\n  %out0 : f32[1, 4, 4, 4] = conv(%in0, %in1) {pads = [1, 1, 1, 1], strides = [2, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      3,
+      8,
+      7
+     ],
+     "base64": "6un+Po4qPj+aYDe/6+esv/H3ez/GRLA/L2BxPkw2bz8qKdW+NLLnPo+xmT6ETCQ/MicLuursi7/OCNS/PDmbP1ncPL/Kqxk/IsWWPif4xb/iUM4+xrL7v+NkS79+hS29Aif2PtaFE786CdY/5ZD0P4nk3T/mMWG/Y+6Hv5R6mz8C2pq/0r3JPYpjdb/WLM4/Beuyv5MC5z+e+kE/OXTsvnkA2j4glB0/+gFHvxRV9b47Jjo/nEoMvjooIT4oeQ6+wmHWvc8zmT2cTiY/RQzbvwny3j9mJ1W/4i+pvvTJhj9BIb++odvuPsgYVj9iPO2/kr7gP5GX0T/DegO/K701v6P6Vj/jiZS9dGJov5LD7z7V82w/3sCNP/QOSr5JXfq/jmVPPzXz8L//oEa+9sjKP1mOZL8YG86/ympeP5QTob/br+4/A7TDP46TwL2EuU0+XqEdP+rVNL+GtJy/2yGcPxYBK79nETO/SKVgvotuhD/nubi+McVHv9Nl7b6ZWMM/INHNP8KQ+D87M4W/fNXdvw1E4b/AiZA+dsTUPZiLrb9UVIG/trREP7mh4b+uB5g/q9EkP6amgb+xvzs/xs2Iv8fWOT98tPA/nncPP2dEwT+JqOC/K6t2P7foWD+9kpC/lz+OvWf49D4td9m/iu/9P4GCyj9KUv4/qOA6v87oej3+rh++MtvNv3FhCr/tZOG+qzaZv/O9wz/xmLU+9mP8vrHgtz8aJSG+ym+evyIL9b+PiaC/PmmwP/M6QL/nXga/sVASPj0dwT8LmvW/Nguvvo06rz9zoKe/8PnuvyHnBr0uWIu/Z8dMP7YAob4g1T6+UpbpPim47z+Xrx4/iIqoP8cuk79J+OY/87eKPV6aUb+vZ3a/VypXv6PKoT8ML/Q/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      3,
+      3,
+      3
+     ],
+     "base64": "1m9iPkeyrD8K54k/gBhpP1W0Or8DRLi+qsE9Ph6RTD801IK/q0qfPpIszz4A9LU/XjzzvwSbuD9h45Q/XHHnv/VLSj8IjOk/NXJNvxjeVL5odd0/1F1tPm0qgz8GbIA/n36cvy9FAD6ATuU/jPhcP6gb+T5UNbm/Wz+NPs5Pgz/StKM/Dswtv+RnYz9JE7g+zNw/vyPK3j+Ihfa/tLMMv9Ik4z86hqM/qm9rP4DQub/ckXo/fC9wv5fi4L8C78+//RSVvgog4r/5PLG/WYl4vs4wTT9Gkq8/YL2fv/nEDL83P86//5PUP/VQ1b8eA98/7xv/PwDl9j+X5P0/vIOuvvRzuz85q5S/1i+XPtYV0j5BNKY+A/ClPz4Epr8wu4c/5neOvwxn3z0SIM4/RbmCPxa8qD4nalc+PUPdP9wHnj8PtV2/FQthv5eCMrt7D6k/XK4vvxo18D6uEkO/4cX/vz2hjj97WKo/15gOv7ae+j7gldA/5eZDP1pRM75Mb9U/5tK4v2vYnr+atp6//T4mP2PF6j9DLa0/QTLFPuNNHD4i4/g/ruSgvjFDoj9znsc/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      4,
+      4
+     ],
+     "base64": "rHF4QAngccABaGdBESmhwE+Qhb4h7bM/LwMGQIj4ycCygu8/+6aDv/tBPkDDkKZAA/NIwAawIT+fbKpAmoHVPmyrdb8iygLBhxpeQVwUX8AlLbA/Ak0/QSWQfMDqk7HAEPu2wD8kDMH/ZQjB4xQSQTF8/b9zRgXBonriPVam8EA7RSNAwqelQI6P4L4MtchAt36HP2XrbkBNg89AgUK+v5cx+cA8erJAf/gtwLsVuD80CrFA2pgmwekGlD9cGjFBSCdEQJ5KRD/E5gtBr7hlv2uCzsAryCjB63xNP5O0ZkCjVctAI2j2QD54i8DTfh7BqaU/P2zBA8Dwue2/yISCQA=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "conv2d_dilation",
+   "graph": "graph {\n  input %in0 : f32[1, 3, 8, 7]\n  input %in1 : f32[4, 3, 3, 3]\n  input %in2 : f32[4]\n  %out0 : f32[1, 4, 8, 7] = conv(%in0, %in1, %in2) {dilations = [2, 2], pads = [2, 2, 2, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      3,
+      8,
+      7
+     ],
+     "base64": "6un+Po4qPj+aYDe/6+esv/H3ez/GRLA/L2BxPkw2bz8qKdW+NLLnPo+xmT6ETCQ/MicLuursi7/OCNS/PDmbP1ncPL/Kqxk/IsWWPif4xb/iUM4+xrL7v+NkS79+hS29Aif2PtaFE786CdY/5ZD0P4nk3T/mMWG/Y+6Hv5R6mz8C2pq/0r3JPYpjdb/WLM4/Beuyv5MC5z+e+kE/OXTsvnkA2j4glB0/+gFHvxRV9b47Jjo/nEoMvjooIT4oeQ6+wmHWvc8zmT2cTiY/RQzbvwny3j9mJ1W/4i+pvvTJhj9BIb++odvuPsgYVj9iPO2/kr7gP5GX0T/DegO/K701v6P6Vj/jiZS9dGJov5LD7z7V82w/3sCNP/QOSr5JXfq/jmVPPzXz8L//oEa+9sjKP1mOZL8YG86/ympeP5QTob/br+4/A7TDP46TwL2EuU0+XqEdP+rVNL+GtJy/2yGcPxYBK79nETO/SKVgvotuhD/nubi+McVHv9Nl7b6ZWMM/INHNP8KQ+D87M4W/fNXdvw1E4b/AiZA+dsTUPZiLrb9UVIG/trREP7mh4b+uB5g/q9EkP6amgb+xvzs/xs2Iv8fWOT98tPA/nncPP2dEwT+JqOC/K6t2P7foWD+9kpC/lz+OvWf49D4td9m/iu/9P4GCyj9KUv4/qOA6v87oej3+rh++MtvNv3FhCr/tZOG+qzaZv/O9wz/xmLU+9mP8vrHgtz8aJSG+ym+evyIL9b+PiaC/PmmwP/M6QL/nXga/sVASPj0dwT8LmvW/Nguvvo06rz9zoKe/8PnuvyHnBr0uWIu/Z8dMP7YAob4g1T6+UpbpPim47z+Xrx4/iIqoP8cuk79J+OY/87eKPV6aUb+vZ3a/VypXv6PKoT8ML/Q/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      3,
+      3,
+      3
+     ],
+     "base64": "1m9iPkeyrD8K54k/gBhpP1W0Or8DRLi+qsE9Ph6RTD801IK/q0qfPpIszz4A9LU/XjzzvwSbuD9h45Q/XHHnv/VLSj8IjOk/NXJNvxjeVL5odd0/1F1tPm0qgz8GbIA/n36cvy9FAD6ATuU/jPhcP6gb+T5UNbm/Wz+NPs5Pgz/StKM/Dswtv+RnYz9JE7g+zNw/vyPK3j+Ihfa/tLMMv9Ik4z86hqM/qm9rP4DQub/ckXo/fC9wv5fi4L8C78+//RSVvgog4r/5PLG/WYl4vs4wTT9Gkq8/YL2fv/nEDL83P86//5PUP/VQ1b8eA98/7xv/PwDl9j+X5P0/vIOuvvRzuz85q5S/1i+XPtYV0j5BNKY+A/ClPz4Epr8wu4c/5neOvwxn3z0SIM4/RbmCPxa8qD4nalc+PUPdP9wHnj8PtV2/FQthv5eCMrt7D6k/XK4vvxo18D6uEkO/4cX/vz2hjj97WKo/15gOv7ae+j7gldA/5eZDP1pRM75Mb9U/5tK4v2vYnr+atp6//T4mP2PF6j9DLa0/QTLFPuNNHD4i4/g/ruSgvjFDoj9znsc/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "Rs2Av8dNMD6B97C/iu8yvw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      8,
+      7
+     ],
+     "base64": "xGCBP2U908B91fM/JqvzQONACMFLwhZBvl1XwNvJFsG1kElAIDm/QLIP+sAe3oRAdjXBvjobFkCGYZk/4j4mwS4QVsB8EaBAe1ChwNcaikDXl8i/wcRZwAvYtcDWZBBBjA0gQKdMYEEi2/K+d18vwcaKMsF9dqG/xNHav288ikDGTpPAs33HwH+MXcDAFdzAG3X/vdPDNsHmNbNAm7NaQG71dUB15alAIliuwMwfN7/r7HrAIxPPQAX+o8Dh8pC/xJGhwAPAiUDV+SLB/UFYQDWmjUBlHNa+L2eWQDjkuj8T41XAC57zwN6pikCcn7DAo1SCQF3uMcDxVt2/rajKPwcOp0AkhKE/Y2FCv5WTIsHR9OE/tQG5v8BZzcDXQdA/3phmv8BqR8H6pA5Ah9TmQP01w7+MqCvBGuqLQKa1yb4gpYE/7iTGPw4rJT8oAqE/2yxAQOlV00AynvU/5FpxQAAHF8BlWqZADvGDQL6cgUBxNYvA02vdwEMpw0ANCWZBO+/FQKcXDkEPuqtAO+dMwQ8eGj+3j5jAMCmIQJ8mCsEUI/o/8tVFQCiHiz/kUsY+hcBXQPCJk8BZXt9AtoQrwF9t6cBmyos/vUc7wH4E9ED1iR7Aaa1YwSpyvr/C7WLAx+2Dv1o5+L9L7QFAie/avx4stkBt2cxA3sO0vzesA0GDLTvBIqhgwQI3z8Bt+g5Bo/oowaiPmkAEUGJA/h2QQNBsXEAtKqtAes1XwENNu8AM/fTA58YvwAvnTUAMJ0DB/P6nwNIYPEE0/C3AryrIv5neO0HrXgHB1oWzwJi9msAqSn/A+Ftxvw9q9D9NVrfAj3N9wBLszz9TnMK7YwvivwAs/z4OSdzAvyhbwIyzWsDttxDBKDoIwITjqEDJVTPAlPYAwJ6+pkBrhIu/0kJSvDF3lD9H2hTApJ7zvsrAKEBQZuHARkq8QBZAsUCz6plAysu7wBO2/L8V9mM/BBSVwH9dccBEk1JBx9SiwEFJyD5ZsyrAfauAwB47ET/zeHI/vjuKwCMEp8Ao2GU/oYGBQDgnkr7GEw7AiHLDQBf03UC+rO3AEajCPyCdpMBQLBzBuHRpQEXvqL9XbeFAGNMNQbLHEsGpL6lADSwfwTEmCkE0HMjAx1PEP91nE8HfXoU/6nQowAEAxT5IJwnAEM7OwCVwGUA2H7NAGjSWwBwo2T8="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "conv2d_groups",
+   "graph": "graph {\n  input %in0 : f32[2, 4, 6, 6]\n  input %in1 : f32[6, 2, 3, 3]\n  input %in2 : f32[6]\n  %out0 : f32[2, 6, 6, 6] = conv(%in0, %in1, %in2) {groups = 2, pads = [1, 1, 1, 1]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4,
+      6,
+      6
+     ],
+     "base64": "+yEbv37kGD2kjNs/81WPP0Hgsb9olqe/vjB2PvB487+n1sy/QhxYP28qlL/G+hs/oehXvwIqzT9tn7m/y1XWvRsU5T/dLw2/gsaNv87D974n+5K/kIvbP8BJwT/FIos/n0+Iv7wUh79zPXm/rVMGvFIfRT+VDEU/i9DsP7ACSr90e7c/XP6CP/zIjD+yKcE/zLPMP4stJz/9SbY89yKwPZZftz8rP3q/c3pCvpJaWr/+2ZQ/31yrvgUKvj46qwU/VEsDPx466T8BH7Y/SMNuP4tafr8a2qY+YRSWv67Bw7/y4bs/il4OP09Rjr/CpJy+nzk7PmqW/z/syuu/Te30v4wUvL7GEd6/0U9rv8fh9z+qvcy+ogCvP07uir9bCJw/eDzqPQgVrz7r3J+//VrrP63X6r+1M/Q/BF26vTnRtb8IsPM/yAicvqYK9j9RDQi+UEbTPwsDAr2RiL+/esWAvyLf2z/bdyE+UEClPzsAdr9/fdo/5UW9P6PfAr8mT4g/SmzlvvY3079F1FU/92vxvo0Eab7YJao+nfMKvv6bi77j+LK/Md8kv4xi7L8qC/O/Q8eOvjG+FT9RFZq/w2Iiv0IFjL+v/fc/PkCjvs9V07rLf+4/vTMYPpQMjj/zv6W/s3aavxE72j5e2gK/UUJ5v/IL6b8V0mQ/vt47P5CVIj+OLR6+0uuHv/C3+z4czz0+WCIWv05I+j90eOm+wBI3v7K3oj8yfoU/ap6DPs0Bnj/UDtE/0luJvtvvMz9m1qY/kr7YPxpPUj/Nepy/CQYFvZlDpz8mY6g/T56dPpR7iD8Zrqm9jvvjP0H+fb/BCjE/2YZkP8ZDgj9KjrC/Tjz7P7MGkj5XSRq+bPvVPyutoD9ZMsI/otJFP7CXsj8B8MI/eMELv30cnb+kXsy9gT/EPzIzrz+lLkE/TEZxv1bcxz4VWDY/sRvLv0yWo78155E/w5vGvKmFBb8IU+O/V7aiv/KE9z8CIKM/ph3Gv7f84j5Obrq/4eaJvxdNcT5cHsa+PfIJPwMQpL9e8B8/bGbkvwn/BT/LMKy/uTKCP+uS8z/SEcm/9hs6vqJ7qD+IptA/Ca0jP3hkIb8WVZM/HPJyvjxDJj8TuIY/HXzAP1PVlzwyyzE/gAr/v/LDMr8JyNY/6Y2cP5oLiD8v+Vw/fAK3v9JUVr/UotW/x6afv0SCGr/44s4/9QUWPKMniL9Z4W8/6ZB1PyLqKb7hpZm8I0Sxv1d3gz/JTvO/sKLJv0KCiT4VG2w/lMiAvwRHZr2FXyc//0fXvzJD+r/TfHS/O07rP3MNs7/03JS/0tddv28Z+r8jcvO/bqflvsH6jL5YOKe9rIqePjSx679xvLg/Pqgxv+e2kj/dNTm/h9DRv0MzFT5Rjo2+CZGzv6KbGz4IAKo/EdBTP2JC878c7d+/D/EpuxldK783KwE/KQTHvCKhrT49L8S+EX1AP/t/lT8kAOo/koTQPwn3lr8cyMs+G2jsvzxU2T9Kj1S/h9OsvxuZiD9lFfM/TOHCv4Gq5T9Zg4c/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      6,
+      2,
+      3,
+      3
+     ],
+     "base64": "uq2cv7vxvr9SFBk+aMrcP3znoD/vGoM/K4kPvJkrA7+LAXU/ux+iP4yimT9vT5s+aapMvhquHL/Tn8o+fQpMP78nKD9O5Gm/a/J2vswFdL+Ra1E/FUXUP7HG6z++bsa/nmCFv4IMSr/F5fw+ZE/0vytt2j5KJWW/Z9zSv6n0h78vwas/itaXPxn7tD+8S/0/L5Xov1Zr4b8Qkxm/EFpCP7g/x7/T8zM/2rSKv4GvVL+3GKK/B5ePvp1D7D82bu2/YUP3vvbEVjx8VMo/WjfUP+24mj8h+Hi/du8rPuxYjj95i70/LxjLv102nj/OquM/YnwMPzJKTj5JKWa/acicPgGX8r8d25u/H3zjPs6VUb8RhbU/S+zrP3mCEL8BOIE/wVjHPxo4qj9pxIk/FauVv8uwLD8kxb8/wVp1Pq1S0789waI/eVgSv6051z4E9Mo/MBYZvxpMzb/CJG+97zlgPiDN5r4wDGu/Tx7/v9VBdbstqMu++v61vjxqMb+jGks+FUTrvv6cdL1v6pi/DcKXvxjY9D/7Cyo/KqUkvpQlsr5gHG2/4sHXP/D8Oz/ws+c/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      6
+     ],
+     "base64": "1+72PYf+KT/9mv0/xkDnv7bZsT/k+sE/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      6,
+      6,
+      6
+     ],
+     "base64": "hDEnwFCJCsAdMq1Afo4aQFHq0r8eg1HAgJf1P6K4HL9F/YvAfcPPvw//lj8YwB5A0gs2P/cGhsBmuNNA1D06QHmUWEBKgB1AqCyUv8QzKEDH58pAYax8QMw6hUBHbN0++5+/wMWjisArU/q9z5V9QE+jP8CUoCLA+SKnQGjD7UClpI9APYbLPhz6oj/XWaC/MGGNwGXGnMDKhZlA8nA5QcgRAz+iFV7ALLYZQU36zUCKFmjAvzi5vfSmob2qeqDAYgfUwORqVEDqoMhAkFJIwXpxF0BOIoi/aihzQB8sB0BZjwLBynUKweeD08A/DqVAjB2hQDyIw8Dh0mFAJrXcv0dWlj8B549AFwHqQHswzD81uQ7AceqbQJP28EAor5lAvATaQLTSM0AfiCVAsljPQOZzlT/JI4hAvNFGv2+nG0EfGDlARzGIwH9DLUEpPQO+F8MtQex8B8BLYUxBqIUoQD9PvMAS8+g/RRP0viAoPkEq2zNBNxM+wNvu/cBmKmfAP/2tQITejsByABtApEOVP/nSS8G4IcXAUuY8P8Mah0H2JYpAwd+Ivn9ClECgF5vATAu4P18128CO1Ka/RfarP6ddx79wPKZAEe0QwJFRDj8OzsdAsElBwDkLu79wvwjBM9HCP3zpIMGufRzBU2aUQCFhaEAmGgvAu0+0QJ/EDsHY/6lAO6WMQOBQhr+ympc+jQA4wFEgOL9XuQJBVbmnQMFXDT8clqG/SS2kwGH538AdS0jAk+0xwKp3EMFQ/E7A66BhP9Jr8D8y3qe+cca7QI8gPz7MAXhA3xTJv1SBOr53ahJAs4pHQF5lWkDuRW8/LgfYvyQHkEB8AQ8/v0QbQQqyGUGStom/gBJ0v5j0jECV4su+JPVrwNOV6z+o3bNA1DaKPWWD8r9amodAfr9zQPF1WUAt1AdASgljPxaZkMAYdv7AVPPRP75oib9oJuO+IZMhQJ2AKEBhX8JAla92QFSw1z3ygsg+E+FzPza8CT9xtKLAVTlbwB5Yk8D0Z9RAqKpGQK0riD+1/PJA0BN3v/lTGb+ft7bAuC8rQAd1ujtVhEtAuNv2Pk4sQkBjGYhA3EKbQAJ/u0Cy06hAwJ0oQL9HlUC4DpZAXi+UP08ghkBYId8/nvmQvpKhwEBMIHdA5MMVQDgADUBQkDFABjQvwOXDW0AXyhxA3RoLQJN9xMCGMKlAQeSJv4pc5j9crQG/znymv38GOUDUrAG/TMe3wL1AsT/xGR9AxFU0QLX/ej5I4eVA+nKMQHbCdr8MlDpAvHuSv3wwpL/6GIHA/sLYvyUsI0BYeBFAtpy9vrEjJEAsgJ4/icbev3JYksBePBDAeNtOPyAXUL4i3D3A2xSWv8CJkj6FgG8/Yxslv8Mphj7ldvu/2P4vQbGDLcAniLvAwrsdQJIDGUEhMbvAK0vcPyLwSEHCAc0/kYaDQHhITsAeSEJB66akQArr80AQOx8/HGCmP7Q/PEB8HmbBVrakv9+3AEEs3AE/Lls5wCvChMC3MaZAg4cQwBaJir8X8em/fuuZwHi6WcD+lx2/gI3rP97myT7XJ90+ck99PiVYdcBI8oM9A9nRwNWeHT+BmnLAKMMSwSG9R0A8ceC/x71fweRkQMDi4lVAdbf7QBjavcDNMIVA1XTcv7Qxgr62pyXA3vkRwOzg0ECc4x7AyyyYwLWwzcBUs40+CTb6QFENoj/j35A/uVIrwDE1Vj+NaR3A1Z3BPftKNsDnVQ/BIo+ov6ElA8HVeBPAo4Cnvk6r3EBkr6rAqSBHwahGXMDv5cu/fPN1wG0aqsBwQVhAjbjxv7tAlb+dN9zAQCLzv+kRNkFcqPzAwHOOP17F6b8xMBnAKLMKwWtE7r2PHBLA75ebQNThksGS3g8/wGsiwa411MDASijA+GjFQP3q/sCnk3m/sRGqQCqI50BZXHzAcggNwEYr+rz3WSa/RE7pP4hWZUFKG4JAv2tYQJ257cDdQNu+pgrlPoSGOECyc3K/2amTQM3QR0D0l0bAhT45vuk0aEB3bnVAWhoAwS0bwL5PvoY+J339wDK//L98yCNB5uDCQLmym8AlJVtARXSxwLMrHcGLlMnAd6unQP6DYL4wGsXA9D4VQC+ulsDCNdG/MESTPnqT3z8scpZAjPGGv+IBxMDaxwlAa/H6wKcUK0HHl7a/F9EJvtcIzkCE2Y5AmmuEPkcMBEF1yyJBUIWHQPz7PL9L8NDAX6THQKIKs77KRTxAfiLHQGrGL0FwssZAsj/XQF2460CE1Q9BA3OKQKYYND9s5wFBwhoWP4l5C0CHGlE+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "conv1d_depthwise",
+   "graph": "graph {\n  input %in0 : f32[1, 3, 9]\n  input %in1 : f32[3, 1, 3]\n  %out0 : f32[1, 3, 4] = conv(%in0, %in1) {groups = 3, strides = [2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      3,
+      9
+     ],
+     "base64": "9s8kv0MVND9soIe/pxrYP+atib8OY/I/EkjFvjfKZD9S3yy/eWTAPxwWAT9DL4U/HJRxP64usr9r3XK/jYvGvzFZF7+kePe/Gqjrv5diH79T0bo/nvQGv9cb+b/0M+k+NC1uv4t48j/m0K0+"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      1,
+      3
+     ],
+     "base64": "odvVP5s3pb/YaMy+IFcAPwPDIT/kUy+/7lp0v5rimL54e+U+"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      3,
+      4
+     ],
+     "base64": "jsHHvzZJYcD1zILA84zDv4YVuD4skARANaVwvjUQMT7BOyZAXOkGwAj+pj/R+vI+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "conv3d",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 4, 4, 4]\n  input %in1 : f32[2, 2, 2, 2, 2]\n  %out0 : f32[1, 2, 3, 3, 3] = conv(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      4,
+      4,
+      4
+     ],
+     "base64": "3uS4vl2dyL9PhlC/z6Aqv224Wj3ysIM/wRWKPUQphT58aeE/q1aNv/xguj5kyqm/pZNzvhlKdz83HYS+xAu7v2/yID9t3ve/NUQ2Pwospb4jZBi/Au9OP2SqyT+VALm//6+bvkzglj+wYOU/xnOnvy/S6b/+9+i/8f7uv0ygor9hOsA+ztTXPmV4wz/NhT0/s3jrvAJjeD9rKtG/O26EvyhE6z8n/n0+BeajvxnrtL+45EI/ZafDP0Hx1j/4o5C/7VqJvx/W1T9LzbY+XaO5PzhPeb8iq5S+sHTtP6JY8T5o8fq8twSqvtqWC79xgZW/M1GkP4ne9r7NCCA/VoH7v0rDwb+/Wz++lKeSP+C+Xz9cwQW/zD9BvxlNlD4A7pE/jlqAPiYKob+kqLC/tfCpP3A90b/+4uG+CPPnv133+b84ope/PAUNviqhd7+gmsS+Z1+vPmEVYr+oZ+C/IyTzPzzKEj9HBtM/Mv6zP2ygzbzCohi/eyx2vzlymr+CF/q/56GeP50Cuz82U+M+s0CpPzQ22b/sxp4/tfjJv+fUvb/RNIU+a1WCvwLr9j/gzv4+C6P+P2Hbrr+ZmKq/8HjgP1u1qL5S91W/IQ1AvrN/mD/Aqe4/q76IP5sF9T5TKeu/lz1rvbX3y7/Kj9Y/38ESv9ajID8JRRU++Crxv/aivD8="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      2,
+      2,
+      2,
+      2
+     ],
+     "base64": "gL8+Pvppy7/yl1M/Z+oNv39S/L5+5u2/CXrFv7UvX7/xywU/1daNP/1u1b+JYNg/wQ9uP6YPr72BOCq/QuNaPt/O+T/HSWw9nlg8vylMCT9ueRy+fyfivvjsEz8V3kq/c7yXv+VYsr5JUli/EwT1PwBvdD2pe/2+EoVVPl8ADj8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      3,
+      3
+     ],
+     "base64": "gmcfQMLm9D/3R2dArqaTwA82GMFWwIRArnmgQCF4AsBelSdBEZqOPW9Y6cA5dSRBHPUCwaabBT/SjeBAnwzDwLetSsBD9bRAjb19QJVWAsGwV9/Aeg9dP9NW80BNBIvAz+oBwdzhUkAZD4lBwhuVvUCHicDOwtI/pyhWwJxgJ0ALq3VARuNNQODHw8DrBQDATFbrPbZbp8BSrldAv7XDP8ebAkGkpGNAr/NuwI41SsC1CD9A8kJmQBV4AsHhna2+N2ImwOF0jkDQhYi+2SLxP70/RsCgTG0/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "conv2d_asymmetric_pads",
+   "graph": "graph {\n  input %in0 : f32[1, 1, 5, 5]\n  input %in1 : f32[1, 1, 3, 3]\n  %out0 : f32[1, 1, 5, 4] = conv(%in0, %in1) {pads = [0, 1, 2, 0]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      1,
+      5,
+      5
+     ],
+     "base64": "yOYuvELVGr/OhAm/GiSKv0C45j9nNZK+cmrtv8QqQb8ukQG/9SC2PnQd/j0WmOO/Bci2v48J/D9R1py+xzsiv98wjz9GN/0/mla0PqmST7+Z3YK/KNA2v2aVzb6ia58+IGm+Pg=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      1,
+      3,
+      3
+     ],
+     "base64": "N8rqv6ZhQr/kRWU/wF3APmSD5z8c7gq/Q/69vje1Tb+jOY2/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      1,
+      5,
+      4
+     ],
+     "base64": "msjoP/bgxb3B/My/GAqoP8Xger/vAH/AzDZMwIn6pEA5T+q/tsr5P7SRIkG6KApAupGvPNx8ID933ozAwC2NwFMGDD7ztQNAyGLyP8ZKVT8="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "conv1d_same_upper",
+   "graph": "graph {\n  input %in0 : f32[1, 1, 7]\n  input %in1 : f32[1, 1, 4]\n  %out0 : f32[1, 1, 4] = conv(%in0, %in1) {auto_pad = \"same_upper\", strides = [2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      1,
+      7
+     ],
+     "base64": "YZLJP7Mrvj/r31U+ecHov2su/D9oKwc/1akLPw=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      1,
+      4
+     ],
+     "base64": "8/RbP0oSGT/jjXK/bb/uPg=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      1,
+      4
+     ],
+     "base64": "x8G8vldggUC1ViG/8qVHPw=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "conv_transpose2d",
+   "graph": "graph {\n  input %in0 : f32[1, 4, 3, 3]\n  input %in1 : f32[4, 3, 3, 3]\n  %out0 : f32[1, 3, 6, 6] = conv_transpose(%in0, %in1) {output_padding = [1, 1], pads = [1, 1, 1, 1], strides = [2, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      3,
+      3
+     ],
+     "base64": "HqeUv7ZwZL8Jd0c+265sv3Nrtj45vRs/B728P6BYsT9z9fu/h96+P4hq5r+8CrS/z3I8P/Qoir/GD3G/DcLyvmJ5yj/d6/m/+X2FP2hnIr/aaX2/3RTcP1wm6T+EAdo/Ph3KP2K837+IZOc/NfUnvmmCHT/1xbw/9bCzP9O5pTzy+Xi/VE8sPvta47+ZBhu/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      3,
+      3,
+      3
+     ],
+     "base64": "imaVv2XMwj8aO6A/upUfP4qmhj/lwzu/sLzwvgruWz9VLKo/SXYvPnF2Ez+7Pku/4YLXP76Ber+f4k+/gSjUv00BbD9dYqO/9zxmP4QO07+yVLm/SQ3ov94MuD98HeU+fBPyP4lEH7+xWn88tVWvPvuslj+U0Pm/eZ/4PvkIrL+CP5e/CzwIv+x59j4euoi/7GmCv+rTtT74a+G/MUvkvw5JfL9CVpi/A+1NvcHa+b8Q1H0/O0q+v9qI37/12LE/w4T2P8WfT7/wciI/uTnevvmdnj+Rku8/lY6kvtewML7H2um/sbS5v0Rp0D7KYsw/cRfYP/h4nT8FtHS/mp7oP0o5jb9I/eM/y2sEPmmE6r9eMHQ+ys5cP2pGtL9Afx+/I3C7v3K4gT+wy3M/DuPbv1GC0z+utYG/xMHXvxM9nD4Pfz4/VgqjPsSZZD/3vqo/nm7hv0kAn79Na6m/Jy/jv/Qbib/QlK4/v2idv8U9MD8af8C/7nucv+po/r/ZoKi/ym3xP+sRzD7f9ag/IW5Xv2bF2b3FdDk/OLaZv18Ujb9tXcW/rISMP59wPz8Emqm/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      3,
+      6,
+      6
+     ],
+     "base64": "4j4mwIoWH79Ml+o+ZMFEv3viDr6r3ADAEDLMP7jrJcEsHYPAjc2CwOjflMCMNDpA3mBAwCU4EsAerSJAI9FDQC6lc0C8i5VA+x7eP8i2Oz9cI5ZAucqhQEUuPMBY2HnAe9AnQI4sEUFtjlM/l9HhwK+pAkAfDO5AQUEzQJQ+1r3GHNo/+byvQNVydz4xdUXA1nz1vwfTAT8PiyVA2OQzQO+knz2Rwim/9PPWwC3NEUG7+dM/eMlGQSH4F0Dw79JAklu4wAXmlT++ZCrA14KwQOvRWr/jGRRAdRejwLPPZ0CyyPg/zb4mwFgJlMC8daJAw3+GwHeMej+DXXRA1ZpsPdL13j+p1aRAqh0DPo+QJcGouGe9CZ4UQJhySr+frKy/nqV5v0IU8L/QV8a/xlyfwGmQ67/P4QTAmyOTQO3HDUHPu90/wzPMvjwmtD+E8tLAvO8hv720G8EgAoxAbnXiwLfKsECfNg2/z55CQNNbKD8txfPAQ5HawHuR2UAJSA5A+7WdQP9uhUCkmWK+ZhRkQOcYGkAtJ0HApbBlv4QiQUCVcUO/klYjwIRNjL/JzcS/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "conv_transpose1d_groups",
+   "graph": "graph {\n  input %in0 : f32[1, 4, 4]\n  input %in1 : f32[4, 1, 3]\n  input %in2 : f32[2]\n  %out0 : f32[1, 2, 8] = conv_transpose(%in0, %in1, %in2) {dilations = [2], groups = 2}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4,
+      4
+     ],
+     "base64": "t450v0Opqz9ob/K/pQaQvwKhMj/GWhq/fcL6v/JWwz7S1w6+0FGEv9+hqL/iZ70+y9bEv+hvzz/dsXO/RyqaPw=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      1,
+      3
+     ],
+     "base64": "n07EP/uzqD8obpa/5cslP2P77b+0JeY/Z5F9vwj3hT42BXs/HeN+P5egXL9Jwjy/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      2
+     ],
+     "base64": "/xqxPgaQgD0="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      8
+     ],
+     "base64": "NNMqv9PHAED5SczA58HgPwaid0ChNpDAyVpzv3asFkAwQ6q/CdEsQH232j/3iEW/g43EP2yRRcC38ga/edPsvg=="
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "max_pool2d_ceil",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 5, 6]\n  %out0 : f32[1, 2, 3, 3] = max_pool(%in0) {ceil_mode = true, kernel = [2, 2], strides = [2, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      6
+     ],
+     "base64": "3T6MvzqL/z8CWZq/Ffs2P7yRLT892U8//wr8v+mt0j8qqT6/ROugvqeZQj/vWuU+LVliv0FcwT5Ln2C/1T4lv2Arsb8/oBk+MNrHPwkNtL9SwzA+U+LUv1aKfb+kW9q/kcWQv3rmqz9Jo/S9iyGLP1tupb6eiEq/MBqIvtWWxj9qIZ8/4fMWv9mxvr+B5N8/ddzSvENU979kZ70/PsadP/N24T+mCKs+RpSJv8jPTr0lQcA/s7HJPznSOL+EMxa/2Yi2P3qbpD69RMK/B7OJvRzIlL64tPM9clGjP1ClgL9CvMK/C16zv4h2Jz/F956/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      3
+     ],
+     "base64": "Oov/PxX7Nj892U8/MNrHP1LDMD4/oBk+euarP4shiz9bbqW+1ZbGP2RnvT/zduE/2Yi2P7OxyT+4tPM9clGjPwtes7+Idic/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "max_pool2d_pad_dilation",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 5, 6]\n  %out0 : f32[1, 2, 3, 4] = max_pool(%in0) {dilations = [2, 2], kernel = [3, 3], pads = [1, 1, 1, 1]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      6
+     ],
+     "base64": "3T6MvzqL/z8CWZq/Ffs2P7yRLT892U8//wr8v+mt0j8qqT6/ROugvqeZQj/vWuU+LVliv0FcwT5Ln2C/1T4lv2Arsb8/oBk+MNrHPwkNtL9SwzA+U+LUv1aKfb+kW9q/kcWQv3rmqz9Jo/S9iyGLP1tupb6eiEq/MBqIvtWWxj9qIZ8/4fMWv9mxvr+B5N8/ddzSvENU979kZ70/PsadP/N24T+mCKs+RpSJv8jPTr0lQcA/s7HJPznSOL+EMxa/2Yi2P3qbpD69RMK/B7OJvRzIlL64tPM9clGjP1ClgL9CvMK/C16zv4h2Jz/F956/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      4
+     ],
+     "base64": "6a3SPzDaxz/prdI/p5lCPzqL/z+8kS0/Oov/P7yRLT/prdI/MNrHP+mt0j+nmUI/PsadP/N24T8+xp0/83bhP7OxyT8lQcA/geTfPyVBwD8+xp0/83bhPz7GnT/zduE/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "avg_pool2d_include_pad",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 5, 6]\n  %out0 : f32[1, 2, 3, 3] = avg_pool(%in0) {count_include_pad = true, kernel = [3, 3], pads = [1, 1, 1, 1], strides = [2, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      6
+     ],
+     "base64": "3T6MvzqL/z8CWZq/Ffs2P7yRLT892U8//wr8v+mt0j8qqT6/ROugvqeZQj/vWuU+LVliv0FcwT5Ln2C/1T4lv2Arsb8/oBk+MNrHPwkNtL9SwzA+U+LUv1aKfb+kW9q/kcWQv3rmqz9Jo/S9iyGLP1tupb6eiEq/MBqIvtWWxj9qIZ8/4fMWv9mxvr+B5N8/ddzSvENU979kZ70/PsadP/N24T+mCKs+RpSJv8jPTr0lQcA/s7HJPznSOL+EMxa/2Yi2P3qbpD69RMK/B7OJvRzIlL64tPM9clGjP1ClgL9CvMK/C16zv4h2Jz/F956/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      3
+     ],
+     "base64": "fnCDPbAMbj47RbA+7ZeZvYaVxL7sChi/q9wmPQKChb3ijvm++f6YvaLRqT6ziqo+V/sXvmi3kD4e8L4++qZlPgqpE7/cfH2+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "avg_pool2d_exclude_pad_ceil",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 5, 6]\n  %out0 : f32[1, 2, 3, 4] = avg_pool(%in0) {ceil_mode = true, kernel = [3, 3], pads = [1, 1, 1, 1], strides = [2, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      6
+     ],
+     "base64": "3T6MvzqL/z8CWZq/Ffs2P7yRLT892U8//wr8v+mt0j8qqT6/ROugvqeZQj/vWuU+LVliv0FcwT5Ln2C/1T4lv2Arsb8/oBk+MNrHPwkNtL9SwzA+U+LUv1aKfb+kW9q/kcWQv3rmqz9Jo/S9iyGLP1tupb6eiEq/MBqIvtWWxj9qIZ8/4fMWv9mxvr+B5N8/ddzSvENU979kZ70/PsadP/N24T+mCKs+RpSJv8jPTr0lQcA/s7HJPznSOL+EMxa/2Yi2P3qbpD69RMK/B7OJvRzIlL64tPM9clGjP1ClgL9CvMK/C16zv4h2Jz/F956/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      4
+     ],
+     "base64": "jt4TPoSJsj7sMwQ/WkMhP+Nj5r2GlcS+7AoYv4AWvb5AuLs9BEPIvSorO7/6z5+/2B4svnS6/j4M0P8+VVOFPwL5Y75ot5A+HvC+PjWDNr3tLQE/j31dv6Udvr56vA+/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "avg_pool2d_include_pad_ceil",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 5, 6]\n  %out0 : f32[1, 2, 3, 4] = avg_pool(%in0) {ceil_mode = true, count_include_pad = true, kernel = [2, 2], pads = [1, 1, 1, 1], strides = [2, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      6
+     ],
+     "base64": "3T6MvzqL/z8CWZq/Ffs2P7yRLT892U8//wr8v+mt0j8qqT6/ROugvqeZQj/vWuU+LVliv0FcwT5Ln2C/1T4lv2Arsb8/oBk+MNrHPwkNtL9SwzA+U+LUv1aKfb+kW9q/kcWQv3rmqz9Jo/S9iyGLP1tupb6eiEq/MBqIvtWWxj9qIZ8/4fMWv9mxvr+B5N8/ddzSvENU979kZ70/PsadP/N24T+mCKs+RpSJv8jPTr0lQcA/s7HJPznSOL+EMxa/2Yi2P3qbpD69RMK/B7OJvRzIlL64tPM9clGjP1ClgL9CvMK/C16zv4h2Jz/F956/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      4
+     ],
+     "base64": "3T6MvnBkSj5oRrI+PdlPPsubNr/7gs09yLjKvocVGT58Utw9qCwsu4rh8b76zx+/MBqIvSDcMj/lFQW/geTfPrjfjL6Qu38+5EJ2P2Jegb0m7Sw/uD9uv/5vjb56vI++"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "max_pool1d",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 10]\n  %out0 : f32[2, 3, 4] = max_pool(%in0) {kernel = [3], strides = [2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      10
+     ],
+     "base64": "EoKSvw0uiT9Nd+6/BKetP4Q/jb89cgm/s9MCPNrpxT85bq6/5dELvx7n4r9qORW8I+sMP7/jPT+ow4c/5Wrwvg0o5z+BW3Q9kaGHPktu6D+kGrY+nkmtv6hvBr+8Du4+kn3Uvyrclr8x+Ya/Hhm+vz4ABb9zSDY+97TCv3cyir781ne/Qrhtv+FVDD+hCr++QOFMv0aecD8ZDPA9qHMGPxfyrr8SldC/zK3CP4Z6/D4+eKE/olUTvuwm/D9Mp1Q/Z0+3PX/av78TJuG/iHukP2b0W7/urly/M6RFvqiLer81axy+fp7Mv+f9mD+FosW/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "DS6JPwSnrT+z0wI82unFPyPrDD+ow4c/DSjnPw0o5z+kGrY+vA7uPjH5hr8+AAW/dzKKvuFVDD/hVQw/Rp5wP8ytwj/MrcI/7Cb8P+wm/D+Ie6Q/M6RFvjVrHL7n/Zg/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "reshape",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  %out0 : f32[4, 6] = reshape(%in0) {shape = [4, -1]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "ygyqv6E91r8ysoy+LEbTv2T/mz2GkfQ/iO79vT0o678O9sY+4D0iPua4x79Jkuu/4RtLP4A55z49MZe/UXb7v7AMpT/M+L4+7KGmP0OC1r94NJO/YqbYvqCPkj/E5EC/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      6
+     ],
+     "base64": "ygyqv6E91r8ysoy+LEbTv2T/mz2GkfQ/iO79vT0o678O9sY+4D0iPua4x79Jkuu/4RtLP4A55z49MZe/UXb7v7AMpT/M+L4+7KGmP0OC1r94NJO/YqbYvqCPkj/E5EC/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "permute",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  %out0 : f32[4, 2, 3] = permute(%in0) {perm = [2, 0, 1]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "ygyqv6E91r8ysoy+LEbTv2T/mz2GkfQ/iO79vT0o678O9sY+4D0iPua4x79Jkuu/4RtLP4A55z49MZe/UXb7v7AMpT/M+L4+7KGmP0OC1r94NJO/YqbYvqCPkj/E5EC/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      2,
+      3
+     ],
+     "base64": "ygyqv2T/mz0O9sY+4RtLP7AMpT94NJO/oT3Wv4aR9D/gPSI+gDnnPsz4vj5ipti+MrKMvoju/b3muMe/PTGXv+yhpj+gj5I/LEbTvz0o679Jkuu/UXb7v0OC1r/E5EC/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "slice",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  %out0 : f32[2, 2, 2] = slice(%in0) {axes = [1, 2], ends = [3, 100], starts = [1, 0], steps = [1, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "ygyqv6E91r8ysoy+LEbTv2T/mz2GkfQ/iO79vT0o678O9sY+4D0iPua4x79Jkuu/4RtLP4A55z49MZe/UXb7v7AMpT/M+L4+7KGmP0OC1r94NJO/YqbYvqCPkj/E5EC/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      2,
+      2
+     ],
+     "base64": "ZP+bPYju/b0O9sY+5rjHv7AMpT/soaY/eDSTv6CPkj8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "slice_negative",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  %out0 : f32[2, 3, 2] = slice(%in0) {axes = [1, 2], ends = [-100, -4], starts = [-1, -1], steps = [-1, -2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "ygyqv6E91r8ysoy+LEbTv2T/mz2GkfQ/iO79vT0o678O9sY+4D0iPua4x79Jkuu/4RtLP4A55z49MZe/UXb7v7AMpT/M+L4+7KGmP0OC1r94NJO/YqbYvqCPkj/E5EC/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      2
+     ],
+     "base64": "SZLrv+A9Ij49KOu/hpH0PyxG07+hPda/xORAv2Km2L5Dgta/zPi+PlF2+7+AOec+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "slice_empty",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  %out0 : f32[2, 0, 4] = slice(%in0) {axes = [1], ends = [1], starts = [2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "ygyqv6E91r8ysoy+LEbTv2T/mz2GkfQ/iO79vT0o678O9sY+4D0iPua4x79Jkuu/4RtLP4A55z49MZe/UXb7v7AMpT/M+L4+7KGmP0OC1r94NJO/YqbYvqCPkj/E5EC/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      0,
+      4
+     ],
+     "base64": ""
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "expand",
+   "graph": "graph {\n  input %in0 : f32[3, 1]\n  %out0 : f32[2, 3, 4] = expand(%in0) {shape = [2, 1, 4]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      1
+     ],
+     "base64": "ad2yPwmJqb9HXpA/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "ad2yP2ndsj9p3bI/ad2yPwmJqb8Jiam/CYmpvwmJqb9HXpA/R16QP0dekD9HXpA/ad2yP2ndsj9p3bI/ad2yPwmJqb8Jiam/CYmpvwmJqb9HXpA/R16QP0dekD9HXpA/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "concat",
+   "graph": "graph {\n  input %in0 : f32[2, 3]\n  input %in1 : f32[2, 1]\n  input %in2 : f32[2, 2]\n  %out0 : f32[2, 6] = concat(%in0, %in1, %in2) {axis = -1}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "3ufXP+xW9D/KjtY/I9dlv7VaxD9ydq6/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      1
+     ],
+     "base64": "ggkWPhG65b8="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      2
+     ],
+     "base64": "TGMiv8/N1L/BJtw/2TDuPw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      6
+     ],
+     "base64": "3ufXP+xW9D/KjtY/ggkWPkxjIr/PzdS/I9dlv7VaxD9ydq6/Ebrlv8Em3D/ZMO4/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "split",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  %out0 : f32[2, 1, 4], %out1 : f32[2, 2, 4] = split(%in0) {axis = 1, sizes = [1, 2]}\n  output out0 = %out0\n  output out1 = %out1\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "ygyqv6E91r8ysoy+LEbTv2T/mz2GkfQ/iO79vT0o678O9sY+4D0iPua4x79Jkuu/4RtLP4A55z49MZe/UXb7v7AMpT/M+L4+7KGmP0OC1r94NJO/YqbYvqCPkj/E5EC/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      1,
+      4
+     ],
+     "base64": "ygyqv6E91r8ysoy+LEbTv+EbSz+AOec+PTGXv1F2+78="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      2,
+      4
+     ],
+     "base64": "ZP+bPYaR9D+I7v29PSjrvw72xj7gPSI+5rjHv0mS67+wDKU/zPi+Puyhpj9Dgta/eDSTv2Km2L6gj5I/xORAvw=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "pad_constant",
+   "graph": "graph {\n  input %in0 : f32[2, 4]\n  %out0 : f32[3, 7] = pad(%in0) {pads = [1, 2, 0, 1], value = 1.5}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4
+     ],
+     "base64": "6ob9v790Dz9DcrM+nMUZPotB/b8yWqU/WXfyP+2Dyj8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "AADAPwAAwD8AAMA/AADAPwAAwD8AAMA/AADAPwAAwD8AAMA/6ob9v790Dz9DcrM+nMUZPgAAwD8AAMA/AADAP4tB/b8yWqU/WXfyP+2Dyj8AAMA/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "pad_reflect",
+   "graph": "graph {\n  input %in0 : f32[2, 4]\n  %out0 : f32[4, 9] = pad(%in0) {mode = \"reflect\", pads = [1, 3, 1, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4
+     ],
+     "base64": "6ob9v790Dz9DcrM+nMUZPotB/b8yWqU/WXfyP+2Dyj8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      9
+     ],
+     "base64": "7YPKP1l38j8yWqU/i0H9vzJapT9Zd/I/7YPKP1l38j8yWqU/nMUZPkNysz6/dA8/6ob9v790Dz9DcrM+nMUZPkNysz6/dA8/7YPKP1l38j8yWqU/i0H9vzJapT9Zd/I/7YPKP1l38j8yWqU/nMUZPkNysz6/dA8/6ob9v790Dz9DcrM+nMUZPkNysz6/dA8/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "pad_edge",
+   "graph": "graph {\n  input %in0 : f32[2, 4]\n  %out0 : f32[4, 5] = pad(%in0) {mode = \"edge\", pads = [0, 1, 2, 0]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4
+     ],
+     "base64": "6ob9v790Dz9DcrM+nMUZPotB/b8yWqU/WXfyP+2Dyj8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "6ob9v+qG/b+/dA8/Q3KzPpzFGT6LQf2/i0H9vzJapT9Zd/I/7YPKP4tB/b+LQf2/MlqlP1l38j/tg8o/i0H9v4tB/b8yWqU/WXfyP+2Dyj8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "pad_crop",
+   "graph": "graph {\n  input %in0 : f32[2, 4]\n  %out0 : f32[2, 2] = pad(%in0) {pads = [0, -1, 0, -1]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4
+     ],
+     "base64": "6ob9v790Dz9DcrM+nMUZPotB/b8yWqU/WXfyP+2Dyj8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      2
+     ],
+     "base64": "v3QPP0Nysz4yWqU/WXfyPw=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "gather_axis0",
+   "graph": "graph {\n  input %in0 : f32[5, 4]\n  input %in1 : i64[2, 2]\n  %out0 : f32[2, 2, 4] = gather(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      4
+     ],
+     "base64": "Rij1P73tt791aEA/sMTMPmYydT9thKi/3a12v6TGWb3+liq/2RBqv2gHc7/3NGA/1aQPvx35h7y+x86/Kdmev5CmYj3wKpA/nTH9PsZyh78="
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      2,
+      2
+     ],
+     "base64": "AAAAAAAAAAAEAAAAAAAAAP//////////AgAAAAAAAAA="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      2,
+      4
+     ],
+     "base64": "Rij1P73tt791aEA/sMTMPpCmYj3wKpA/nTH9PsZyh7+QpmI98CqQP50x/T7Gcoe//pYqv9kQar9oB3O/9zRgPw=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "gather_axis1_i32",
+   "graph": "graph {\n  input %in0 : f32[5, 4]\n  input %in1 : i32[3]\n  %out0 : f32[5, 3] = gather(%in0, %in1) {axis = 1}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      4
+     ],
+     "base64": "Rij1P73tt791aEA/sMTMPmYydT9thKi/3a12v6TGWb3+liq/2RBqv2gHc7/3NGA/1aQPvx35h7y+x86/Kdmev5CmYj3wKpA/nTH9PsZyh78="
+    },
+    {
+     "dtype": "i32",
+     "shape": [
+      3
+     ],
+     "base64": "AwAAAAAAAAAAAAAA"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      3
+     ],
+     "base64": "sMTMPkYo9T9GKPU/pMZZvWYydT9mMnU/9zRgP/6WKr/+liq/Kdmev9WkD7/VpA+/xnKHv5CmYj2QpmI9"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "scatter",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  input %in1 : i64[2, 4]\n  input %in2 : f32[2, 4]\n  %out0 : f32[3, 4] = scatter(%in0, %in1, %in2)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "3ttbP2fFED/hE4I/piWWv15V6L91XpM/qoJhP+1CPT/bV/w/4OoFv4j4cL+T6Gk/"
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      2,
+      4
+     ],
+     "base64": "AQAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAQAAAAAAAAABAAAAAAAAAA=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4
+     ],
+     "base64": "5j8Tv6ekET8x2xK+sjn3v28Vy78NK8q/ejAFv+Nekb8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "bxXLv6ekET/hE4I/piWWv+Y/E791XpM/ejAFv+Nekb/bV/w/DSvKvzHbEr6yOfe/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "scatter_add",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  input %in1 : i64[1, 4]\n  input %in2 : f32[1, 4]\n  %out0 : f32[3, 4] = scatter(%in0, %in1, %in2) {reduction = \"add\"}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "3ttbP2fFED/hE4I/piWWv15V6L91XpM/qoJhP+1CPT/bV/w/4OoFv4j4cL+T6Gk/"
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "cTN9P4E0fL7ISBM/p966Pw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "3ttbP2fFED9FuMs/BOSSPkt3U7/Kr2c/qoJhP+1CPT/bV/w/4OoFv4j4cL+T6Gk/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "scatter_mul",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  input %in1 : i64[1, 4]\n  input %in2 : f32[1, 4]\n  %out0 : f32[3, 4] = scatter(%in0, %in1, %in2) {reduction = \"mul\"}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "3ttbP2fFED/hE4I/piWWv15V6L91XpM/qoJhP+1CPT/bV/w/4OoFv4j4cL+T6Gk/"
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "cTN9P4E0fL7ISBM/p966Pw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "3ttbP2fFED/LrBU/4jPbvw3L5b81L5G+qoJhP+1CPT/bV/w/4OoFv4j4cL+T6Gk/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "scatter_max",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  input %in1 : i64[1, 4]\n  input %in2 : f32[1, 4]\n  %out0 : f32[3, 4] = scatter(%in0, %in1, %in2) {reduction = \"max\"}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "3ttbP2fFED/hE4I/piWWv15V6L91XpM/qoJhP+1CPT/bV/w/4OoFv4j4cL+T6Gk/"
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "cTN9P4E0fL7ISBM/p966Pw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "3ttbP2fFED/hE4I/p966P3EzfT91XpM/qoJhP+1CPT/bV/w/4OoFv4j4cL+T6Gk/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "scatter_min",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  input %in1 : i64[1, 4]\n  input %in2 : f32[1, 4]\n  %out0 : f32[3, 4] = scatter(%in0, %in1, %in2) {reduction = \"min\"}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "3ttbP2fFED/hE4I/piWWv15V6L91XpM/qoJhP+1CPT/bV/w/4OoFv4j4cL+T6Gk/"
+    },
+    {
+     "dtype": "i64",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "AQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      4
+     ],
+     "base64": "cTN9P4E0fL7ISBM/p966Pw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "3ttbP2fFED/ISBM/piWWv15V6L+BNHy+qoJhP+1CPT/bV/w/4OoFv4j4cL+T6Gk/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "tile",
+   "graph": "graph {\n  input %in0 : f32[2, 3]\n  %out0 : f32[4, 9] = tile(%in0) {repeats = [2, 3]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "Y8Pwv1BDFb7RVWw/elSHv9MG5L5lUbE+"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      9
+     ],
+     "base64": "Y8Pwv1BDFb7RVWw/Y8Pwv1BDFb7RVWw/Y8Pwv1BDFb7RVWw/elSHv9MG5L5lUbE+elSHv9MG5L5lUbE+elSHv9MG5L5lUbE+Y8Pwv1BDFb7RVWw/Y8Pwv1BDFb7RVWw/Y8Pwv1BDFb7RVWw/elSHv9MG5L5lUbE+elSHv9MG5L5lUbE+elSHv9MG5L5lUbE+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "flip",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  %out0 : f32[2, 3, 4] = flip(%in0) {axes = [0, -1]}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "ygyqv6E91r8ysoy+LEbTv2T/mz2GkfQ/iO79vT0o678O9sY+4D0iPua4x79Jkuu/4RtLP4A55z49MZe/UXb7v7AMpT/M+L4+7KGmP0OC1r94NJO/YqbYvqCPkj/E5EC/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "UXb7vz0xl7+AOec+4RtLP0OC1r/soaY/zPi+PrAMpT/E5EC/oI+SP2Km2L54NJO/LEbTvzKyjL6hPda/ygyqvz0o67+I7v29hpH0P2T/mz1Jkuu/5rjHv+A9Ij4O9sY+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cumsum",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  %out0 : f32[3, 4] = cumsum(%in0) {axis = 1}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "UR6Av14cMr+N0JQ/TF9QPyjhRj/5T7O/XXvWv2ZKLz5r6qa/0EpLP9DxBb+G9ey+"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "UR6Av4As2b/mtwi/zE6PPijhRj/Kvh+/YS0TwLs4CMBr6qa/BooCv+s9hL9Me7+/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cumsum_exclusive",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  %out0 : f32[3, 4] = cumsum(%in0) {axis = 0, exclusive = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "UR6Av14cMr+N0JQ/TF9QPyjhRj/5T7O/XXvWv2ZKLz5r6qa/0EpLP9DxBb+G9ey+"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AAAAAAAAAAAAAAAAAAAAAFEegL9eHDK/jdCUP0xfUD/obWW+FC8GwKBVA7/mMXw/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cumsum_reverse",
+   "graph": "graph {\n  input %in0 : f32[3, 4]\n  %out0 : f32[3, 4] = cumsum(%in0) {axis = 1, reverse = true}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "UR6Av14cMr+N0JQ/TF9QPyjhRj/5T7O/XXvWv2ZKLz5r6qa/0EpLP9DxBb+G9ey+"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "zE6PPgTyoz8zAP0/TF9QP7s4CMAF8TnAEJLAv2ZKLz5Me7+/DIdEvpNsfL+G9ey+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "cumsum_i32",
+   "graph": "graph {\n  input %in0 : i32[5]\n  %out0 : i32[5] = cumsum(%in0) {axis = 0}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      5
+     ],
+     "base64": "CAAAAAAAAAD/////+P////7///8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      5
+     ],
+     "base64": "CAAAAAgAAAAHAAAA//////3///8="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "iota",
+   "graph": "graph {\n  %out0 : f32[3, 4] = iota() {axis = 1, dtype = f32, shape = [3, 4], start = 1.0, step = 0.5}\n  output out0 = %out0\n}\n",
+   "inputs": [],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "AACAPwAAwD8AAABAAAAgQAAAgD8AAMA/AAAAQAAAIEAAAIA/AADAPwAAAEAAACBA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "iota_i64",
+   "graph": "graph {\n  %out0 : i64[3, 2] = iota() {axis = 0, shape = [3, 2]}\n  output out0 = %out0\n}\n",
+   "inputs": [],
+   "outputs": [
+    {
+     "dtype": "i64",
+     "shape": [
+      3,
+      2
+     ],
+     "base64": "AAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAACAAAAAAAAAAIAAAAAAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "fill",
+   "graph": "graph {\n  %out0 : i32[2, 3] = fill() {dtype = i32, shape = [2, 3], value = 7.9}\n  output out0 = %out0\n}\n",
+   "inputs": [],
+   "outputs": [
+    {
+     "dtype": "i32",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "BwAAAAcAAAAHAAAABwAAAAcAAAAHAAAA"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "random_uniform",
+   "graph": "graph {\n  %out0 : f32[10] = random_uniform() {high = 2.0, low = -1.0, seed = 1234, shape = [10]}\n  output out0 = %out0\n}\n",
+   "inputs": [],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      10
+     ],
+     "base64": "500ev2i7xz9A7U++aq+xP5rMXD/HxSm/KDv3P2mDQr9QRYG+dwr6Pw=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "random_normal",
+   "graph": "graph {\n  %out0 : f32[10] = random_normal() {mean = 0.5, seed = 1234, shape = [10], stddev = 2.0}\n  output out0 = %out0\n}\n",
+   "inputs": [],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      10
+     ],
+     "base64": "bNSQP4TPcj8otydAEymqQO1xAEA79z7AECAhQE4EFUA5YJs/G1yNPw=="
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "quantize_per_tensor",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  input %in1 : f32[]\n  input %in2 : i8[]\n  %out0 : i8[2, 3, 4] = quantize(%in0, %in1, %in2)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "p42GQPZYA8CoZRLAU4wGQEG01b/93EdAv0XYPzM4/z9VvdU/Mn0NPGvUmUCUGGY/t15OwJ83SECK9ts/HHVJQBTaVEBheVq/LQkPwNJE4D7ExyE+NxKIPibYAkDuF32/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [],
+     "base64": "zcxMPQ=="
+    },
+    {
+     "dtype": "i8",
+     "shape": [],
+     "base64": "Aw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "i8",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "V9rVLeJBJSskA2MVw0IlQkby1gwGCCzv"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "quantize_per_axis_u8",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  input %in1 : f32[3]\n  input %in2 : u8[3]\n  %out0 : u8[2, 3, 4] = quantize(%in0, %in1, %in2) {dtype = u8}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "p42GQPZYA8CoZRLAU4wGQEG01b/93EdAv0XYPzM4/z9VvdU/Mn0NPGvUmUCUGGY/t15OwJ83SECK9ts/HHVJQBTaVEBheVq/LQkPwNJE4D7ExyE+NxKIPibYAkDuF32/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      3
+     ],
+     "base64": "CtejPM3MTD3NzMw9"
+    },
+    {
+     "dtype": "u8",
+     "shape": [
+      3
+     ],
+     "base64": "AID/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "u8",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "0gAAaV++oqj/////AJxWncNvU4n////1"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "dequantize_per_axis",
+   "graph": "graph {\n  input %in0 : i8[2, 3]\n  input %in1 : f32[3]\n  input %in2 : i8[3]\n  %out0 : f32[2, 3] = dequantize(%in0, %in1, %in2)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i8",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "3tD6GNML"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      3
+     ],
+     "base64": "AAAAPwAAgD4AAABA"
+    },
+    {
+     "dtype": "i8",
+     "shape": [
+      3
+     ],
+     "base64": "Af4A"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "AACMwQAAOMEAAEDBAAA4QQAALMEAALBB"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "dequantize_no_zero_point",
+   "graph": "graph {\n  input %in0 : i8[2, 3]\n  input %in1 : f32[]\n  %out0 : f32[2, 3] = dequantize(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "i8",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "3tD6GNML"
+    },
+    {
+     "dtype": "f32",
+     "shape": [],
+     "base64": "AAAAPg=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3
+     ],
+     "base64": "AACIwAAAwMAAAEC/AABAQAAAtMAAALA/"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "gelu",
+   "graph": "graph {\n  input %in0 : f32[3, 7]\n  %out0 : f32[3, 7] = gelu(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "DehnvwJBwT8y05u/mdP2P4FxTj/sFYS/89dAPljQ5T94LuQ/Y5XiPymXNT466DY/XzPfvzeJkz+PQL8+K7BgP3Thkz/oea8/oBw9Py9IGz9RlRs/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "UUopviuWtD8iSAu+ai/wPxUXIz8bnh++ZabdPR953T9uqts/++TZP24mzz0eeQs/jf6QvbspgT949HY+Fvw1P+GLgT96hqA/1JsRP8QR4j4roeI+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "gelu_tanh",
+   "graph": "graph {\n  input %in0 : f32[3, 7]\n  %out0 : f32[3, 7] = gelu(%in0) {approximate = \"tanh\"}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "DehnvwJBwT8y05u/mdP2P4FxTj/sFYS/89dAPljQ5T94LuQ/Y5XiPymXNT466DY/XzPfvzeJkz+PQL8+K7BgP3Thkz/oea8/oBw9Py9IGz9RlRs/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "oWkpvh6PtD8ggQu+nDDwP3ERIz8PyR++LqbdPdp23T/cp9s/H+LZP0Mmzz0+dQs/vDWRvR8jgT/y8nY+5vQ1Pz+FgT/SfqA/hZcRP0kN4j6onOI+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "silu",
+   "graph": "graph {\n  input %in0 : f32[3, 7]\n  %out0 : f32[3, 7] = silu(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "DehnvwJBwT8y05u/mdP2P4FxTj/sFYS/89dAPljQ5T94LuQ/Y5XiPymXNT466DY/XzPfvzeJkz+PQL8+K7BgP3Thkz/oea8/oBw9Py9IGz9RlRs/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "U4GFvu5Hnj8uXI6+3X7XP0u5Dj9TzYq+1/LSPRAWxT9OVMM/eZzBP0imxT2vmvU+t+GEvnRAYD8LkGI+97QeP73rYD9s8os/JfP/PuT7yD4hdck+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "softmax",
+   "graph": "graph {\n  input %in0 : f32[3, 7]\n  %out0 : f32[3, 7] = softmax(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "DehnvwJBwT8y05u/mdP2P4FxTj/sFYS/89dAPljQ5T94LuQ/Y5XiPymXNT466DY/XzPfvzeJkz+PQL8+K7BgP3Thkz/oea8/oBw9Py9IGz9RlRs/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "dSXQPCOrkT6Nb5g8p2DdPpovED6if7c8e2ybPfuJfD7EVnk+2D52PqBKSD1zXKs9PqjqO0bKBD5nyrE9RCwTPpFEQj7oAXE+7BMAPk5y4D35teA9"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "softmax_axis0",
+   "graph": "graph {\n  input %in0 : f32[3, 7]\n  %out0 : f32[3, 7] = softmax(%in0) {axis = 0}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "DehnvwJBwT8y05u/mdP2P4FxTj/sFYS/89dAPljQ5T94LuQ/Y5XiPymXNT466DY/XzPfvzeJkz+PQL8+K7BgP3Thkz/oea8/oBw9Py9IGz9RlRs/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "ah5SPbzzsz76xAE93ZgSP3rbsz6lQho+vhBHPoSpQz+kaOw+g+QgP0SYyz0UD6Q+dWeXPeyIAj9V0jw+QEc/Plr+rT426Kc+chWoPmiCRj/KZZc+"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "log_softmax",
+   "graph": "graph {\n  input %in0 : f32[3, 7]\n  %out0 : f32[3, 7] = log_softmax(%in0) {axis = 1}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "DehnvwJBwT8y05u/mdP2P4FxTj/sFYS/89dAPljQ5T94LuQ/Y5XiPymXNT466DY/XzPfvzeJkz+PQL8+K7BgP3Thkz/oea8/oBw9Py9IGz9RlRs/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      7
+     ],
+     "base64": "Dw1rwBbloL+l/H7A/aRWv1ft+r8CHnPAjQUlwCAws78A0rS/FWu2v8kmQcAuxh7A9gyewKG7AsCzahzAdE34vxXE1L+hK7m/nQsFwLmADcBwbQ3A"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "softmax_large",
+   "graph": "graph {\n  input %in0 : f32[1, 3]\n  %out0 : f32[1, 3] = softmax(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      3
+     ],
+     "base64": "AAB6RABAekQAwHlE"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      3
+     ],
+     "base64": "Gpp6PjtNKj/zYbg9"
+    }
+   ],
+   "rtol": 1e-06,
+   "atol": 1e-06
+  },
+  {
+   "name": "softmax_f16",
+   "graph": "graph {\n  input %in0 : f16[2, 9]\n  %out0 : f16[2, 9] = softmax(%in0)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      2,
+      9
+     ],
+     "base64": "NL64Nne7az6RNxi5hKrRuWu7eLImvHk8frERPso53bdHusk+"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f16",
+     "shape": [
+      2,
+      9
+     ],
+     "base64": "6CRnMI0oMjekMB8qfy2XKZQovin8JGAx6ykBND8vTShqJso0"
+    }
+   ],
+   "rtol": 0.002,
+   "atol": 0.002
+  },
+  {
+   "name": "layer_norm",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  input %in1 : f32[3, 4]\n  input %in2 : f32[3, 4]\n  %out0 : f32[2, 3, 4] = layer_norm(%in0, %in1, %in2) {axis = 1}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "V/uvvjEayr5turu+xCnWP2RKxz/dPF8/5Qhdvy8XAL8We+u/ywlEPwx/I7+PpWC+0OvcP1Pcvj/91pc+H0GIP8obwr6Kc+M/CEHnv6wxrT5lPx+/9+ofP75u6D+3aeq/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "OwY1v2M/8D5/jWQ/w51Qvo11fL/AI9m/nLf8v4Emlr/P9ng/A/OtvglH9j/PJbc/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      4
+     ],
+     "base64": "sN/Qv5+ekL+4fq4/qDHLv48bkL4wiUO/MmL1PxE6uz+35I2+52KiPuTr9b8BuPg/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "U8izv1ADp79sH4c/M9X3v2NS7b8bDRPAb4FlQCOZAUCFmwPAeeI9PdcmR8BFz9Q/cjwZwHg4Nr8bYqc/q4zZv5yInz6XXyrAGk6rQAWTvz+Ydoa/M1d/PlU9lT6ASRO/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "layer_norm_scale_only",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  input %in1 : f32[4]\n  %out0 : f32[2, 3, 4] = layer_norm(%in0, %in1, _) {epsilon = 0.001}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "V/uvvjEayr5turu+xCnWP2RKxz/dPF8/5Qhdvy8XAL8We+u/ywlEPwx/I7+PpWC+0OvcP1Pcvj/91pc+H0GIP8obwr6Kc+M/CEHnv6wxrT5lPx+/9+ofP75u6D+3aeq/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4
+     ],
+     "base64": "xm+yv4op3j9w4Iq/+Dy7Pw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "FuxDP9TGhr8jsB8//AMiQHE26b8cRYg/N+CeP9dckb/6cAFAtFYUQO/yOD7hINM+nWa+v1NOjT8pH9g/ZQVcvnucxz6vOhpAIznAP9A6zj6UBCI/G6tMP+VUub/THPu/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "rms_norm",
+   "graph": "graph {\n  input %in0 : f32[3, 8]\n  input %in1 : f32[8]\n  %out0 : f32[3, 8] = rms_norm(%in0, %in1)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      8
+     ],
+     "base64": "AoOEv1e6vD04UhK/kjn2vtgxYj/GQ3S/tSjxPgny7L/e5Yw+pq2FP0FmvT+pUHe+ltXtP38ouL6JaQ8/nKkmP4bEqD7Hpjw+k+eIv5zDLb+ETqe/LjsAPyc9+L8mz0U/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      8
+     ],
+     "base64": "XLfxv2sqUb41f3y/+DXdP3Ff+T/V/YY/A2brv8dOpz8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      8
+     ],
+     "base64": "APgFQNAbpbwahxo/itBjv+vs6z8q6om/KHBtvw/PJcCqTge/Zyxevhf/vb+iWtm+z6FrQEqIxb5IH4a/zY9dP4K1Hr9qhBm9sXyGP5yLlb+gUSLAvrAGP5dXY0ClwYA/"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "linear",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  input %in1 : f32[5, 4]\n  input %in2 : f32[5]\n  %out0 : f32[2, 3, 5] = linear(%in0, %in1, %in2)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "CnuwP9IHiL+ufUU/RZdEvzc5uzxYV2o/qJePvz1b0L+8FoS/8pFOPwINRL7fj/e/8hsVv7UbwT5ifaM/An+9vv+O+z/o+y4/eKqBP8C+gD/c1LS/b2o5P7ahzz9dLMU9"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5,
+      4
+     ],
+     "base64": "ieDsPxnU3T+zfP4+wM7kvasskT9mQpo/Rmdev8MPHj4vEUm/QbpGPrXVyb5RjN2/UcjDv6ao8T8JO48/bbLgP+fumL/vTxw/0l01P/Cf9D8="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      5
+     ],
+     "base64": "mVnZP0pI+T50RNM+hsYGv0+Gkb4="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      5
+     ],
+     "base64": "mCE4QJWcmrzqHBg+3wykwBkZYMCF3TxAd7cVQIo/dUDyijzAIiFqwFhhpz8ReyA+iLCZQGtbhL/G/RjAeZn5PyvOYr9gSoo/upLtP5zsVj/5JN1ABiY0QCbeSMBRPig/0ZLZPsMxkT8Uh9G/bFBbP/SMn0BYd0tA"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "linear_no_transpose",
+   "graph": "graph {\n  input %in0 : f32[2, 3, 4]\n  input %in1 : f32[4, 5]\n  %out0 : f32[2, 3, 5] = linear(%in0, %in1) {transpose_w = false}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      4
+     ],
+     "base64": "CnuwP9IHiL+ufUU/RZdEvzc5uzxYV2o/qJePvz1b0L+8FoS/8pFOPwINRL7fj/e/8hsVv7UbwT5ifaM/An+9vv+O+z/o+y4/eKqBP8C+gD/c1LS/b2o5P7ahzz9dLMU9"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      4,
+      5
+     ],
+     "base64": "Ncu1v5ETzr84gsE9E6GLvwXOmb9/2Ow/WLOkvweMMD77SU0/CDKrv9ruJL8br7C/yJv5P4WAjr/3wHW9tybOP8XYVz4t2ie/xVvPP/3PxL8="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      3,
+      5
+     ],
+     "base64": "IBK1wAcPBcBnO/o/O7GOwK8uZj8+PXO+xw8YvMvYdb86zy2/yMGoP8atBr3dnfU+87ZvP47Zkr9yWUlACmTZPRO/sb8SlC9AU7eKvxIZMD89Jw+/QlunwLlLzz85C4y/zEGcwE85HUCMUmC/RdtFQL+l8T76jPc+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "sdpa",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 3, 4]\n  input %in1 : f32[1, 2, 5, 4]\n  input %in2 : f32[1, 2, 5, 3]\n  %out0 : f32[1, 2, 3, 3] = sdpa(%in0, %in1, %in2)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      4
+     ],
+     "base64": "jwpjvzWkjz+dSc2+GSjYvjqVbr86FXM/qq6ovuc8zr9XUeU+ssOGP6QfwT931Ze//EnOv0cM9j83zus/GOKtP5Tb0z6O26i/R8zTP9pQrD7rtAY/vuO7Px+b5T8K1nK/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      4
+     ],
+     "base64": "qwKWvsi707+bJBY/OCbiPtLKyD7gq6w/ROv5PSCIaz6jm+o/t+nbP1hsFL8cVJg/6R0JP/kmR7/dLzs93tyBPvcVxz8qeWE/GHrnvzWreb6CODi/1wUZPq7MGD8EKNu/2YncP7X17z5m/eq/GqqEvlTDSD9Axi4/dKpwPzPZwz8Ot4c/JZONvmkjJT/KTje/Gi/Mv3g2FD6tlZq/ysm9Pw=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      3
+     ],
+     "base64": "IvvqP/Ict79Z6Dg/H9Wtvm+nvD8WVPy+6xvyv38meb/XNKA+ivw9v2Qr6r5EiYu/lSAcv32b7r8hZII/lD24vdnIoz+FGNo+pavlv7Hv2b9Dayc/gUnoP9qCzT4Cqa0/za71vyy66z8heBi/Ezrjv9e98bzujme/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      3
+     ],
+     "base64": "uWsdv0Uxq757aNk9BdjmvryGxr7C8gc+OngWv17ZQL1BZZq9CEPQPsKdwz7rqAM/EQ+Gvhy7fz90mZw+GUiJvvCPhj9yd7M+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "sdpa_gqa_causal",
+   "graph": "graph {\n  input %in0 : f32[2, 4, 3, 8]\n  input %in1 : f32[2, 2, 5, 8]\n  input %in2 : f32[2, 2, 5, 8]\n  %out0 : f32[2, 4, 3, 8] = sdpa(%in0, %in1, %in2) {causal = true, scale = 0.3}\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4,
+      3,
+      8
+     ],
+     "base64": "NLb+v3mT1b8J5bs/PWK4P/e9or45VDc/nwTHP+jCiz/I5rs/atD5vzyifj8icUw+LhWuv2tY478k8sa+Mq3Dv5H4aL9N89S/DJwHPhGTSj8pBoQ+jnhWPiBA0L5C0aW/b3rKv4YbXT+Q6yS/iHSiv5BdAj/AJcs+nDhUvjXu9L9lyBC/mDbRv/XogD/nmcm/dEwbvqRT5z/IkOq+FRr5v9TtmL+KoFk/7YAov5piO78tDfE+TVhMP/c7Xz891CE/aKUgPibR2r+wpeY+fBFXvp3lqT9DMeE/8YDRP3S59b81FcG/DDKdP3SCET+8DvO/od6hP5rBur/d7/4/5K6kP1I86b+reJu/9rDtv2AP+r+XefU/xcGiPtbMDD+gc8G/6+qevy+fK7/UqrQ/X5FEPzFM2zvIgBC/vnDpPyTFr78LJnM+6gylv/IPCr0Q/H0/F4PUPzANrL8W72w/KG3iv918uL7ZT/8/UYNdvxiu/r2pAhk/lmpePyVztj8fdce/lR3DPwSu5r+y89a+f+H3v+mPCr8TnMO9EZyxvifP6j9GjSQ/oIkNvZtpM78zIsM/z+TUv9TCer9YDZa/HPfuP0MA9L+xSeO+sKKOvlDl0r8e8zI+yj+Zv8yiIr+sl7o/kanXPqdkoz4SFLu/BpgcP4Q+Nj7yQ4E/VOTgPdkUdb+MxrY/18V0vyyXpb/IXS8/bZmUPyO7S78by/s+DOK6v4JZIL8t4J6/YvDzP7jC/D+jmjc/aYBHPw7r1z81yVO/dljkv4W91b+0tqE/qdzGvxxhD788hoC/rWAEvbpT6D+8QBe/JHGavz6ZxT9GTI6/zxGAv9HIlr8bzTs/IvnnPVsXRj8QKP0/XZbjvxidgT+fysm+m8BQPvFj1b71LYU/RWf/v54iBT+Paxk9ADBrP8mpWT+Has0/5ksGP4l9bL+liog/VoY7v20X9T/7RZo+sFrhv08BvrqA5sG+aTniP58LsD0d4tM/IjrdPyQDWT7YGsG/7aLoPx8U+T8U4Q2/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      2,
+      5,
+      8
+     ],
+     "base64": "kyUwP1Ke9D7z29c8tLx8v6/hq78Uyoy/JIyTvz6Unj8x9fG//KvhP7Ai7T7w2SS/B9/UPRu5xL/3T5q/VIPhvFaLlD9gG1E/hS89vuxhgD4E3b4/D0K/vx7atD9ZCvS+dYNsPo1Ulj/qJoc/Mxe3P3q8OL/YL2y/1CNvPfH1Yj8qd/G/1Nf1v03ZEj5B8ms+ozKzP9DGz7/vXlA/j7ONv2tkgz+baua+pNLiv/fJRT56TY+/JbpPP/hZm73Zr+G/GwqvP2qDrz++Wcq/Q0yNP4LLcb/+Eow/4hu7P09AED/ILZy//CNrvlQY3b+HNYM//d6Kv3kCoz+gHUG/8CnkvjSO9T/0ryk/LbKFvhuvM7/UjKg/goC6Pm6Lez9G9eE/aAb/P3d3gb/6Loo/Kq7xP6ehub9vVvK/3NH7Ppgv179uUsY/LYJcv7Lg3b9xeoa/5BJYv8kEdT+fSS8/Mk/NvxhF0b8Y5ZS/WA2iPzAMCD8Mzry/d66nPPNIj7/fQv2/fITSPqGhkT/Q5Ci+T2LQPpAO0D9Nt3E+0pekvePBfL/81dK/qaASvx8n2z/8b94+Ef4uP1099b89jha/UyOyv/FJ67+2mbm/fCixP+bghL8er4G+Mqd/P6TPjD/Chp4/AnX4PkNp5L5/3s8/bCDXv29wxT9LMN0/nSFKPoEZ7T9t9Y6+hZqiv4eTcT+i3H8+bYnTP3lewz/niaI/5QBSP79LM70DgMI/MVMMv9IgSz7cxJi+8J6fP7deqL+aSZG/olqbPnEx5L5U0RQ/TbilvxXYwD8ckNE/4/smvxp97b4laNw/R9RMvffeBb/Yl5g+WpfOPz1ODT8H4Je/r7l/Pw=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      2,
+      5,
+      8
+     ],
+     "base64": "8UwVv11Swr96cks+UiL+PtH3/L8cX62+14s4v+cAqT9tLby/Uf13vRDgJ75H3J89zuQ+P9JZpD7pzLO/GdQNP8FHLj+z3+W+xo+Xv7486r+oPyo/q+wSP8EJKT+euH8/XAiBv8ZI8b/ijaC8mX3OvjrrvL+LfKq+26G8v0m2VT8s6sk9n3DFvSszvj/ILx0/w3fmvoZt6r8HZfq/T3zCPxOUrj+Oz7G/xALQv4Jpu791Fu4+oDGrv6m/Nj9PWLc/ETt7v8X+wT4Ri44/qhrXv+2HpD9kGBU/eYLJPyUp/b8PCL8/eJT4v1Vbqj8yvdO/Iq2hP0Q16j16jue+MqKiPoiaSb7aXaW/t8QgPywmaz+nGAk+Tmf6v27Dzr8mAos/48gSv75L7z1525K/lrISv+v9K74T+9W/Ga88PeyfC79cM/W8XqTBPs6m5D8xEOE/Pzgfv0aIkz92fuO/jq9gv6owzb9xn9q/BspDP6O8sz8NTUU/ArdovmypPD8LJbm+nPybP6uynb1OH3e/ILdNvwpR379nXC0/abAMvxwBsL+21h++0vm5PkXt4z5qaJC/JYO3v27hB782UW2/GWmlP8Hlcb9+OJA+9NyhPtJUuz9Q39U/ICVtv4YOy747BCG/26KJP54Upr4Vv9Y/H/ZbvvnOWr7RclG/ac+cv0WH+L8OR64/6m5+P0kKAL76OIy/RGnKP8aoez9rsDW/VeCav3jTlb1CIRs+mzRiPrYNpj6kSee/1ZeOv3blST8M5r4/t9oQP/Zl3r+x2JM/i9eyPzMrk79wa0S/O1npv05GKz94Ho4/JqrLP8omZr/x7q6/ABHlvsvoHT+fyMa+8VXOPw=="
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      2,
+      4,
+      3,
+      8
+     ],
+     "base64": "41EPv4AwC79Jc86+HeHdvkqYUD16HXY+NGwSv/awYj9U0OC+dsCZv/k6fb6S4ry+eTdsvzmJKL0lChy/gySGP6dnlr2Rxom+BqyHPx9qtz5xGM6+0iewv+vH1r9l664/c1WIv1XcdL54s5W+f7Q7vg8SAz+o85w+qMWDv6JmLz/KsUK/qTNNvyIwWL5tgDi+C9nFvn9XpT3zG1a/I/hnP3okE790jRW/vnTtPE1RQr7PbCy+1UllvnldhL96j3c/WGR/Px+bmr9bJg2/sBzFv6m6RD/vuja/m5IdP5YLIT+HjU2+MtKRv0EUKT8ejQc/GDGWPpRCz7+toJq//AdAP4k+jD/Aob+/hg+evMTGob8FUEg/R6U6v6UoYrrSmj4/+KZPP/dLkr8WOTo+WJrLv3I+eT8dAZu+zBn/PrpRET4GaDs/gqebvyGHjL4ZWIO/I80kP4XTdL92BRg+h8QyP7evdT040hq/cYizPncGor+2E2Q/4xCuvlOuHT99s8m+2bCDvdHiSj4kvsQ/fePIP562F7943YI/Li3CvwQ7X7/qy+G+h8f5vkK/Ij8t3go/Y0jwvvX+MD6D6dy+N/6NvnckML+UMZg9/ODHPjpuLD8u/AY/+bQdv53i7L6UgfW9UnI9PhnGpTyDPlc//9NwPxRJUb/I21w/ScuRv1aUeb8rsUg+7iUDPpyqUz8bTDU/OXJvv3BGPj+y/Zi/gow5v7Y9Kr/w+4e+i2DSPoDy7D67/tI977PRvkY+nL6nxiO9mWKRP4Cpij1jFpA/4HfrvhZkjT6GIJq+q5eEv7Sz1L/GFIA/u60SvvpKaT8eJiC+y36zPULSfb4F0Ia/AA+Av7o2DT8OyyU/T3cAvpG3xr60G4G//N+YvkfzsTy18Js/Y6hGP1rl+j4MyoM+CaXdvqBHLz3jmIW9yZZYvriOkb5nI4A/qckZvkRvjz+qDUu+xewJvXlb4L5Ny4O/y7Cgv77/Oj9mNQc9nN4bP0Vrxb2nCr2+1vnFvmLLB7+pHWy+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "sdpa_bool_mask",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 3, 4]\n  input %in1 : f32[1, 2, 5, 4]\n  input %in2 : f32[1, 2, 5, 3]\n  input %in3 : bool[1, 1, 3, 5]\n  %out0 : f32[1, 2, 3, 3] = sdpa(%in0, %in1, %in2, %in3)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      4
+     ],
+     "base64": "jwpjvzWkjz+dSc2+GSjYvjqVbr86FXM/qq6ovuc8zr9XUeU+ssOGP6QfwT931Ze//EnOv0cM9j83zus/GOKtP5Tb0z6O26i/R8zTP9pQrD7rtAY/vuO7Px+b5T8K1nK/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      4
+     ],
+     "base64": "qwKWvsi707+bJBY/OCbiPtLKyD7gq6w/ROv5PSCIaz6jm+o/t+nbP1hsFL8cVJg/6R0JP/kmR7/dLzs93tyBPvcVxz8qeWE/GHrnvzWreb6CODi/1wUZPq7MGD8EKNu/2YncP7X17z5m/eq/GqqEvlTDSD9Axi4/dKpwPzPZwz8Ot4c/JZONvmkjJT/KTje/Gi/Mv3g2FD6tlZq/ysm9Pw=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      3
+     ],
+     "base64": "IvvqP/Ict79Z6Dg/H9Wtvm+nvD8WVPy+6xvyv38meb/XNKA+ivw9v2Qr6r5EiYu/lSAcv32b7r8hZII/lD24vdnIoz+FGNo+pavlv7Hv2b9Dayc/gUnoP9qCzT4Cqa0/za71vyy66z8heBi/Ezrjv9e98bzujme/"
+    },
+    {
+     "dtype": "bool",
+     "shape": [
+      1,
+      1,
+      3,
+      5
+     ],
+     "base64": "AQEAAQABAQEAAAEBAQEB"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      3
+     ],
+     "base64": "ajnNvbzoLj/BRNy+XESWvlS2AT/gDwe+OngWv17ZQL1BZZq9rqIWv8nCpT85n0Y+KFqCPyFQBD9464Q/GUiJvvCPhj9yd7M+"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  },
+  {
+   "name": "sdpa_additive_mask",
+   "graph": "graph {\n  input %in0 : f32[1, 2, 3, 4]\n  input %in1 : f32[1, 2, 5, 4]\n  input %in2 : f32[1, 2, 5, 3]\n  input %in3 : f32[3, 5]\n  %out0 : f32[1, 2, 3, 3] = sdpa(%in0, %in1, %in2, %in3)\n  output out0 = %out0\n}\n",
+   "inputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      4
+     ],
+     "base64": "jwpjvzWkjz+dSc2+GSjYvjqVbr86FXM/qq6ovuc8zr9XUeU+ssOGP6QfwT931Ze//EnOv0cM9j83zus/GOKtP5Tb0z6O26i/R8zTP9pQrD7rtAY/vuO7Px+b5T8K1nK/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      4
+     ],
+     "base64": "qwKWvsi707+bJBY/OCbiPtLKyD7gq6w/ROv5PSCIaz6jm+o/t+nbP1hsFL8cVJg/6R0JP/kmR7/dLzs93tyBPvcVxz8qeWE/GHrnvzWreb6CODi/1wUZPq7MGD8EKNu/2YncP7X17z5m/eq/GqqEvlTDSD9Axi4/dKpwPzPZwz8Ot4c/JZONvmkjJT/KTje/Gi/Mv3g2FD6tlZq/ysm9Pw=="
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      5,
+      3
+     ],
+     "base64": "IvvqP/Ict79Z6Dg/H9Wtvm+nvD8WVPy+6xvyv38meb/XNKA+ivw9v2Qr6r5EiYu/lSAcv32b7r8hZII/lD24vdnIoz+FGNo+pavlv7Hv2b9Dayc/gUnoP9qCzT4Cqa0/za71vyy66z8heBi/Ezrjv9e98bzujme/"
+    },
+    {
+     "dtype": "f32",
+     "shape": [
+      3,
+      5
+     ],
+     "base64": "dzOEP/fcDj+0cr2/mFFXP3bc3j934+y+KVCBPzNN8b96qdg9XaUGv3tlaz8HaSk/5SSlv5/6zD+PSim/"
+    }
+   ],
+   "outputs": [
+    {
+     "dtype": "f32",
+     "shape": [
+      1,
+      2,
+      3,
+      3
+     ],
+     "base64": "fmXCvhZ5Zr9uW98++LSwvsLUKD+lhoy+GAGLvuxlUz5FKe++pw2wv2tTTD5XURq/7dCsv+05iD/fNgu+ZVORv7S5uT+yx+29"
+    }
+   ],
+   "rtol": 1e-05,
+   "atol": 1e-05
+  }
+ ]
+}

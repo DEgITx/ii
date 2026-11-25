@@ -1,0 +1,17 @@
+graph "features" {
+  input %x : f32[N, 4]
+  input %"odd name" : i64[N]
+  state %counter : i64[] = i64[] {0}
+  const %w : f32[4, 2] = f32[4, 2] {1, 2.5, -3, 4e-08, inf, -inf, nan, 8}
+  const %flags : bool[2] = bool[2] {true, false}
+  const %q : q4_0[1, 32] = q4_0[1, 32] 0x000102030405060708090a0b0c0d0e0f1011
+  %h : f32[N, 2] = matmul(%x, %w) {transpose_b = false}
+  %a : f32[N, 1], %b : f32[N, 1] = split(%h) {axis = 1, sizes = [1, 1]}
+  %n : f32[N, 4] = layer_norm(%x, _, _) {epsilon = 0.001}
+  %r : f32[N, 2, 2] = reshape(%n) {shape = [N, 2, -1]}
+  %c : f16[N, 4] = cast(%x) {to = f16}
+  %one : i64[] = add(%counter, %counter)
+  update %counter = %one
+  output y = %a
+  output "z z" = %r
+}

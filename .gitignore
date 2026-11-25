@@ -22,3 +22,6 @@ __pycache__/
 /models/
 /bench/results/local/
 *.trace.json
+
+# Local clangd configuration
+/.clangd

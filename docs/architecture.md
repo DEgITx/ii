@@ -112,13 +112,13 @@ requests each run in their own `Session`.
 
 int main() {
     auto ctx     = ii::Context::create().value();                 // discovers devices and backends
-    auto model   = ii::Model::load(ctx, "resnet50.onnx").value();
-    auto program = model.compile({.policy = ii::Policy::Latency}).value();
+    auto model   = ii::Model::load(ctx, "resnet50.onnx").value(); // stage 3; today: Model::from_text / GraphBuilder
+    auto program = model.compile().value();                       // passes, backend choice, kernels
     auto session = program.new_session().value();
 
-    ii::Tensor image = ii::Tensor::wrap(pixels, ii::f32, {1, 3, 224, 224});  // zero-copy
+    ii::Tensor image = ii::Tensor::wrap(pixels, ii::DType::kF32, {1, 3, 224, 224});  // zero-copy
     auto out = session.run({{"input", image}}).value();
-    std::span<const float> logits = out[0].data<float>();
+    std::span<const float> logits = out[0].values<float>();
 }
 ```
 
@@ -148,13 +148,16 @@ for (auto& [x, y] : loader) step.run(x, y);   // forward + backward + AdamW — 
 ### Example: C ABI
 
 ```c
-ii_context* ctx;  ii_model* model;  ii_program* prog;  ii_session* s;
-II_TRY(ii_context_create(NULL, &ctx));
-II_TRY(ii_model_load(ctx, "model.onnx", &model));
-II_TRY(ii_program_compile(model, NULL, &prog));
-II_TRY(ii_session_create(prog, &s));
-II_TRY(ii_session_bind_input(s, "input", &tensor_desc));
-II_TRY(ii_session_run(s));
+ii_context* ctx = NULL; ii_model* model = NULL; ii_program* prog = NULL; ii_session* s = NULL;
+if (ii_context_create(NULL, &ctx) != II_OK ||
+    ii_model_from_text(ctx, text, strlen(text), &model) != II_OK ||   /* ii_model_load: stage 3 */
+    ii_model_compile(model, NULL, &prog) != II_OK ||
+    ii_session_create(prog, &s) != II_OK ||
+    ii_session_set_input(s, "input", &tensor) != II_OK ||             /* zero-copy */
+    ii_session_run(s) != II_OK) {
+    fprintf(stderr, "%s
+", ii_last_error());
+}
 ```
 
 ### Error handling
@@ -163,7 +166,7 @@ II_TRY(ii_session_run(s));
   `ii::Status` (code + message) and `ii::Result<T>` (an `std::expected`-like type of our own, so C++23 is not
   required). `II_TRY(expr)` propagates errors.
 - `II_ASSERT` checks invariants in debug builds; `II_CHECK` always, for "impossible" states.
-- In the C ABI — `ii_status` codes + `ii_last_error_message()` (thread-local).
+- In the C ABI — `ii_status` codes + `ii_last_error()` (thread-local).
 
 ---
 
@@ -174,16 +177,19 @@ II_TRY(ii_session_run(s));
 | Class | Types |
 |-------|-------|
 | float | `f32`, `f16`, `bf16`, `f64` (ref/tests only), `f8e4m3`, `f8e5m2` (later) |
-| int | `i8`, `u8`, `i16`, `i32`, `i64`, `bool` |
-| block-quantized | `q8_0`, `q4_0`, `q4_1`, `q5_0`, `q5_1`, `q4_k`, `q5_k`, `q6_k`, `q8_k`, … — byte-compatible with GGUF layouts so weights load zero-copy via mmap |
+| int | `i8`, `u8`, `i16`, `u16`, `i32`, `u32`, `i64`, `u64`, `bool` |
+| block-quantized | `q4_0`, `q4_1`, `q5_0`, `q5_1`, `q8_0`, `q8_1`, `q2_k` … `q6_k`, `q8_k` — byte-compatible with GGUF layouts so weights load zero-copy via mmap |
 | per-channel quantized | `i8`/`u8`/`i4` + separate scale/zero_point tensors (ONNX QDQ, GPTQ/AWQ) |
 
-Block types are described by `DTypeTraits { block_size, bytes_per_block, … }`; only the last dimension may be
-quantized, and strides along it are measured in blocks.
+Every dtype is described by a constexpr `DTypeInfo { name, kind, block_size, block_bytes }` (`include/ii/dtype.h`).
+Block types pack `block_size` consecutive elements of the innermost dimension into `block_bytes` bytes. Strides are
+counted in elements for every dtype; a block-quantized tensor must be contiguous in its innermost dimension and every
+view must start on a block boundary.
 
 ### Shape, Tensor, Buffer, Device
 
-- `Shape` — `SmallVector<int64_t, 8>` (no heap), rank ≤ 8. In the IR a dimension may be symbolic (see §5).
+- `Shape` — up to 8 `int64_t` stored inline (no heap), rank ≤ 8; also used for strides. In the IR a dimension may be
+  symbolic (`Dim`, see §5).
 - `Buffer` — a reference-counted memory region on a `Device`. Sources: own allocation, file mmap, external user
   memory (zero-copy `Tensor::wrap`), backend memory (GPU).
 - `Tensor` = `{Buffer, offset, dtype, shape, strides}`. `reshape`/`permute`/`slice`/`expand` are copy-free views.
@@ -196,23 +202,34 @@ quantized, and strides along it are measured in blocks.
 ## 5. IR (intermediate representation)
 
 - **`Graph`** — an SSA graph in topological order: `Node`s (operations) produce `Value`s.
-- **`Value`** — `{id, TensorType{dtype, SymShape}, producer, users}`. Kinds: input, output, constant (references a
-  `Buffer`, possibly mmap-ed), intermediate, **state**.
+- **`Value`** — `{id, TensorType{dtype, Dims}, producer, uses}`. Kinds: input, constant (a `Tensor`, possibly
+  mmap-ed), state, node output. Graph outputs are named references to values.
 - **State values** are read at the start of `run()` and written at the end; they live in the `Session` between runs.
   One mechanism covers transformer KV caches, RNN hidden states and, for training, parameters and optimizer moments.
-- **Symbolic dimensions**: a `Dim` is a constant or an expression over symbols (`N`, `seq`, `past`): affine
-  expressions and products — enough for reshaping attention heads. Symbols may have upper bounds (`seq ≤ 4096`).
-- **Attributes** — a typed `variant` (int, float, string, lists, tensor, subgraph).
+- **Symbolic dimensions**: a `Dim` (public, `include/ii/dim.h`) is a constant or an integer expression over symbols
+  (`N`, `seq`, `past`) kept in a canonical polynomial form whose variables are symbols and floor divisions by
+  constants — so `N*2 + N == 3*N` and conv/pool output sizes `(H + 2p - k) / s + 1` stay symbolic. Symbols are bound
+  from the input shapes when a session runs (directly, or by solving affine dimensions such as `2*N + 1`); upper
+  bounds (`seq ≤ 4096`) come with the LLM work.
+- **Attributes** — a typed `variant` (bool, int, float, string, int/float/string lists, dtype, dims, tensor);
+  subgraphs arrive with `if`/`loop`. Every attribute is declared in the operation schema with its kind and default;
+  nodes always carry the complete, canonical attribute set.
 - **Subgraphs** — for `if`/`loop` (required by some ONNX models). The LLM generation loop lives in the runtime, not
   in the graph.
 - **`Graph::verify()`** — checks SSA, types, shapes, topological order. Runs after every pass in debug builds.
 - **Text format** for debugging and pass tests:
 
   ```
-  %3 : f32[N, 4096] = matmul(%x, %w1) {trans_b = true}
-  %4 : f32[N, 4096] = silu(%3)
+  graph mlp {
+    input %x : f32[N, 4096]
+    const %w1 : f32[4096, 4096] = f32[4096, 4096] {...}
+    %3 : f32[N, 4096] = matmul(%x, %w1) {transpose_a = false, transpose_b = true}
+    %4 : f32[N, 4096] = silu(%3)
+    output y = %4
+  }
   ```
-  Pass tests are written as "input → expected text" (FileCheck style) plus numerical equivalence.
+  `ir::print_graph` / `ir::parse_graph` (`src/ir/text.h`) round-trip exactly; `ii inspect model.ii.txt` reads it.
+  Pass tests are written as "input → expected text" plus numerical equivalence.
 
 ---
 
@@ -227,31 +244,36 @@ quantized, and strides along it are measured in blocks.
 | unary | neg, abs, exp, log, sqrt, rsqrt, recip, sin, cos, tanh, sigmoid, erf, relu, floor, ceil, round, sign, not |
 | binary (broadcast) | add, sub, mul, div, pow, max, min, mod, eq, ne, lt, le, gt, ge, and, or, xor |
 | other elementwise | where, cast, clamp |
-| reductions | sum, mean, max, min, prod, argmax, argmin |
+| reductions | reduce_sum, reduce_mean, reduce_max, reduce_min, reduce_prod, argmax, argmin |
 | linear algebra | matmul (batched, broadcast, transposes, quantized B) |
 | convolution | conv (N-d, groups, dilation, padding), conv_transpose, max_pool, avg_pool |
 | data movement | reshape, permute, slice, expand, concat, split, pad, gather, scatter, tile, flip, cumsum |
 | creation | iota, fill, random_uniform/normal (dropout/initialization) |
 | quantization | quantize, dequantize |
-| control flow | if, loop |
+| control flow | if, loop (stage 3) |
 
 **Composites** (have a decomposition rule; a backend may implement them natively — which is what is done for
-speed): gelu, silu, softmax, log_softmax, layer_norm, rms_norm, group_norm, batch_norm, linear (matmul + bias),
-rope, sdpa (scaled dot-product attention: mask, causal, GQA, KV cache), swiglu, cross_entropy, adamw_step, …
+speed): gelu, silu, softmax, log_softmax, layer_norm, rms_norm, linear (matmul + bias), sdpa (scaled dot-product
+attention: mask, causal, GQA, KV cache) — OpSet v1; later group_norm, batch_norm, rope, swiglu, cross_entropy,
+adamw_step, …
+
+The generated reference of every operation (signature, semantics, attributes with defaults) is
+[opset.md](opset.md) (`ii ops --markdown`).
 
 ### OpSchema — the single source of truth about an op
 
 ```cpp
-struct OpSchema {
-    std::string_view name;
+struct OpSchema {                        // src/ir/op_schema.h
+    std::string_view name, category, doc; // the op reference (docs/opset.md) is generated from this
     int since_version;
-    Arity inputs, outputs;
-    TypeConstraints types;
-    ShapeFn     infer_shape;   // symbolic shape inference
-    DecomposeFn decompose;     // nullptr for primitives
-    GradFn      gradient;      // backward rule, expressed in ii ops
-    CostFn      cost;          // flops and bytes — for the planner and roofline reports
-    std::string_view doc;      // the op reference documentation is generated from this
+    std::vector<InputSpec>  inputs;      // names, optional / variadic
+    std::vector<OutputSpec> outputs;
+    std::vector<AttrSpec>   attrs;       // name, kind, default (none = required)
+    InferFn     infer;                   // symbolic shape and type inference + validation
+    DecomposeFn decompose;               // nullptr for primitives
+    CostFn      cost;                    // flops and bytes — for the planner and roofline reports
+    GradFn      gradient;                // backward rule, expressed in ii ops (stage 7)
+    uint32_t    flags;                   // elementwise, commutative, random, ...
 };
 ```
 
@@ -284,44 +306,31 @@ import → canonicalize → shape inference → constant folding → DCE/CSE →
 
 1. **Kernel backends** (`ii-ref`, `ii-cpu`, `ii-cuda`, `ii-vulkan`, `ii-metal`, plus oneDNN/XNNPACK/cuBLAS wrappers):
    provide kernels per op; scheduling and memory are owned by the ii runtime. Implemented on top of the helper base
-   class `KernelBackend` with a kernel table `(op, dtype constraints, ISA) → kernel`.
+   class `KernelBackend` with a kernel table `op → (factory, support check)`; ISA variants come with `ii-cpu`.
 2. **Graph backends** (TensorRT, ONNX Runtime, OpenVINO, CoreML): take whole subgraphs and compile them with their own
    engine (similar to ORT `GetCapability` / TFLite delegates).
 
 ```cpp
-namespace ii::backend {
-
-struct DeviceInfo {
-    DeviceKind   kind;            // cpu, gpu, npu, …
-    MemoryDomain domain;          // which memory this device addresses (see below)
-    std::string  name;
-    uint64_t     memory_bytes;
-    PerfModel    perf;            // peak FLOPS per dtype, memory and link bandwidth (estimated or measured)
-};
-
-enum class Support { No, Native, Fused };
+namespace ii::backend {  // src/backend/backend.h
 
 class Backend {
 public:
-    virtual ~Backend() = default;
     virtual std::string_view name() const noexcept = 0;
-    virtual std::span<Device* const> devices() noexcept = 0;
-
-    /// Whether the backend can execute the node on the device (dtype, attributes, shapes).
-    virtual Support supports(const ir::Node&, const Device&) const = 0;
-    /// Graph backends: the maximal subgraphs they are willing to take as a whole.
-    virtual std::vector<ir::NodeSet> claim(const ir::Graph&, const Device&) const { return {}; }
-    /// Time estimate (by default — roofline from OpSchema::cost and the device PerfModel).
-    virtual Cost estimate(const ir::Node&, const Device&) const;
-    /// Compiles a partition into an executable object.
-    virtual Result<std::unique_ptr<Executable>> compile(const ir::Partition&, Device&, const CompileOptions&) = 0;
+    virtual Device device() const noexcept;              // the memory its kernels read and write
+    /// OK, or kUnsupported with the reason (dtype, attributes, shapes) — shown by `ii inspect`.
+    virtual Status supports(const ir::Node&) const = 0;
+    virtual Result<std::unique_ptr<Kernel>> create_kernel(const ir::Node&) const = 0;
+    // Grows with the multi-backend work (stage 5): devices() with DeviceInfo/PerfModel, estimate(node, device),
+    // and for graph backends claim(graph) → subgraphs, each compiled into one Kernel.
 };
 
-class Executable {
+/// Executes one node (or a fused subgraph). Created once per Program and shared by all its sessions.
+class Kernel {
 public:
-    virtual ~Executable() = default;
-    virtual MemoryRequirements memory() const = 0;   // scratch/workspace — accounted for by the memory planner
-    virtual Status execute(ExecContext&) = 0;         // allocation-free
+    /// Scratch memory for concrete shapes; planned into the session arena like any other buffer.
+    virtual std::size_t workspace_size(std::span<const Shape> inputs, std::span<const Shape> outputs) const;
+    /// Dense row-major inputs/outputs with concrete shapes. Thread-safe and allocation-free.
+    virtual Status run(const KernelContext&) const = 0;
 };
 
 } // namespace ii::backend
@@ -411,14 +420,16 @@ nodes ("ii-vulkan: op `scatter` with dtype i64 is not supported").
 
 ## 10. Runtime: memory and execution
 
-- **Memory planning**: value lifetimes → offsets in an arena via "greedy by size" (as in TFLite); in-place for
-  elementwise ops on dying inputs; one arena per device; kernel workspaces are planned like ordinary values.
-  Constants (weights) live outside the arena (mmap or packed copies).
-- **ExecutionPlan** — a flat array of steps with pre-bound arguments (pointers, shapes, strides); execution is a walk
-  over the array with no per-op virtual dispatch and no allocations.
-- **Dynamic shapes**: the plan contains a small "shape program" (bytecode) computing concrete sizes from symbol
-  values. If symbols have upper bounds, the arena is planned once for the maximum; otherwise the memory plan is
-  recomputed when exceeded (rare, amortized), with a cache of shape buckets.
+- **Memory planning**: value lifetimes → offsets in one arena per session via "greedy by size" (as in TFLite);
+  kernel workspaces and state-update staging are planned like ordinary values. Constants (weights) live outside the
+  arena (mmap or packed copies). In-place reuse of dying elementwise inputs comes with `ii-cpu` (stage 2).
+- **ExecutionPlan** — a flat array of steps with pre-built kernel arguments (shapes, dtypes; data pointers patched per
+  run); execution is a walk over the array — one virtual `Kernel::run` call per step, no allocations.
+- **Dynamic shapes**: a `Program` is compiled once for symbolic shapes. When a session sees new input shapes it binds
+  the symbols, re-runs (concrete) shape inference node by node — checking the results against the symbolic types —
+  and re-plans memory; the arena is reallocated only when it must grow. Unchanged shapes reuse the plan, so the steady
+  state performs zero allocations (verified by a test that counts every `operator new`). Planned later: symbol upper
+  bounds (`seq ≤ 4096`) to plan once for the maximum, and a cache of shape buckets.
 - **I/O binding**: the user may pass their own input and output buffers (zero-copy), including GPU buffers.
 - **Profiler**: time per step / partition / transfer, exported as Chrome trace JSON (viewable in Perfetto):
   `ii run model --profile trace.json`.

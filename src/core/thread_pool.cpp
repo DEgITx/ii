@@ -68,7 +68,8 @@ ThreadPool::~ThreadPool() {
         stop_.store(true, std::memory_order_seq_cst);
         // Change the control word (new epoch, still closed) so that sleeping workers wake up and observe stop_.
         control_.fetch_add(kEpochUnit, std::memory_order_seq_cst);
-        control_.notify_all();
+        const std::lock_guard sleep_lock(sleep_mutex_);
+        sleep_cv_.notify_all();
     }
     for (std::thread& worker : workers_) {
         worker.join();
@@ -135,9 +136,10 @@ void ThreadPool::open_job() {
     epoch_ = epoch_ + 1 == 0 ? 1 : epoch_ + 1;  // epoch 0 is never published: workers start with "seen = 0"
     control_.store(static_cast<std::uint64_t>(epoch_) << 32, std::memory_order_seq_cst);
     // Pairs with the sleepers_ increment in wait_for_change(): either we see the sleeper and notify it, or the
-    // sleeper sees the new control value and does not sleep.
+    // sleeper sees the new control value (its predicate is checked under sleep_mutex_) and does not sleep.
     if (sleepers_.load(std::memory_order_seq_cst) > 0) {
-        control_.notify_all();
+        const std::lock_guard lock(sleep_mutex_);
+        sleep_cv_.notify_all();
     }
 }
 
@@ -157,21 +159,18 @@ void ThreadPool::wait_for_done_signal(const std::atomic<std::int32_t>* counter) 
     const auto deadline = std::chrono::steady_clock::now() + spin_duration_;
     for (int spins = 0; !finished(); ++spins) {
         if ((spins & 63) == 63 && std::chrono::steady_clock::now() >= deadline) {
-            for (;;) {
-                const std::uint32_t signal = done_signal_.load(std::memory_order_acquire);
-                if (finished()) {
-                    return;
-                }
-                done_signal_.wait(signal, std::memory_order_acquire);
-            }
+            // signal_done() notifies under done_mutex_ after the state change, so the predicate cannot miss it.
+            std::unique_lock lock(done_mutex_);
+            done_cv_.wait(lock, finished);
+            return;
         }
         cpu_relax();
     }
 }
 
 void ThreadPool::signal_done() {
-    done_signal_.fetch_add(1, std::memory_order_release);
-    done_signal_.notify_all();
+    const std::lock_guard lock(done_mutex_);
+    done_cv_.notify_all();
 }
 
 void ThreadPool::worker_main(int index) {
@@ -206,8 +205,12 @@ void ThreadPool::wait_for_change(std::uint64_t observed) {
         }
         if ((spins & 63) == 63 && std::chrono::steady_clock::now() >= deadline) {
             sleepers_.fetch_add(1, std::memory_order_seq_cst);
-            if (control_.load(std::memory_order_seq_cst) == observed) {
-                control_.wait(observed, std::memory_order_seq_cst);
+            {
+                std::unique_lock lock(sleep_mutex_);
+                sleep_cv_.wait(lock, [&] {
+                    return control_.load(std::memory_order_seq_cst) != observed ||
+                           stop_.load(std::memory_order_seq_cst);
+                });
             }
             sleepers_.fetch_sub(1, std::memory_order_relaxed);
             return;

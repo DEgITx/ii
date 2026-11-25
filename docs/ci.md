@@ -51,7 +51,7 @@ A `changes` job (paths filter) lets docs-only changes skip build jobs while stil
 | `isa-matrix` | `ubuntu-24.04` | `ii-cpu` tests with `II_CPU_ISA=generic`, `avx2`, `avx_vnni`; under Intel SDE: `avx512` (`-skx`), `avx512_vnni_bf16`/`amx` (`-spr`) |
 | `sanitizers` | `ubuntu-24.04` | Clang ASan+UBSan (all tests), TSan (threading/runtime tests) |
 | `msvc-asan` | `windows-2025` | MSVC `/fsanitize=address` — catches Windows-specific memory bugs |
-| `fuzz-smoke` | `ubuntu-24.04` | each libFuzzer target for 60 s on the committed corpus (from the first parser on) |
+| `fuzz-smoke` | `ubuntu-24.04` | preset `linux-clang-fuzz`: each libFuzzer target for 60 s on its corpus (`tests/fuzz/corpus/`); part of the `sanitizers` job |
 | `abi-interop` | `windows-2025` | `ii.dll` built with MinGW consumed from an MSVC-built C program, and vice versa |
 | `examples` | `ubuntu-24.04`, `windows-2025`, `macos-15` | builds `examples/` against the *installed* package (`find_package(ii)`) — verifies packaging |
 
@@ -141,7 +141,7 @@ Every release: full test suite on the packaged binaries, `SHA256SUMS`, build pro
 | Stage | CI additions |
 |-------|--------------|
 | 0 | `ci.yml` (`lint`, `build-test` tier-1 matrix, `sanitizers`, `msvc-asan`), `codeql.yml`, composite `setup` action, Dependabot, PR/issue templates, branch protection |
-| 1 | `abi-interop`, `examples`, `docs.yml`, `nightly.yml` skeleton (coverage), `fuzz-smoke` (text IR parser, JSON) |
+| 1 | done: `examples` (package installed, examples built with `find_package(ii)` and run on Linux, Windows, macOS), fuzz smoke (`linux-clang-fuzz` preset: libFuzzer on the IR text parser and JSON, 60 s each; other builds replay the corpora). Moved to stage 3: `abi-interop`, `docs.yml`, `nightly.yml` |
 | 2 | `isa-matrix` with Intel SDE, `android.yml`; self-hosted runner registered for nightly benchmarks |
 | 3 | model tests (YOLOv8, ResNet, MobileNet, BERT) in PR (tiny/small) and nightly (full); ONNX/protobuf fuzzers; `release.yml` → v0.1 |
 | 4 | LLM model tests (tiny-llama in PR, real GGUF nightly on self-hosted), GGUF/tokenizer/Jinja fuzzers, LLM benchmarks vs llama.cpp |

@@ -36,3 +36,9 @@ Pull requests run the CI pipeline described in [docs/ci.md](docs/ci.md); all req
 - Unit tests live in `tests/unit/<area>/<name>_test.cpp` (GoogleTest).
 - A new public function or a bug fix comes with a test. A bug fix test fails without the fix.
 - Tests must be deterministic: fixed seeds, no dependence on timing beyond generous upper bounds.
+
+## Operations
+
+Adding or changing an operation of the OpSet follows [docs/guides/adding-an-op.md](docs/guides/adding-an-op.md):
+schema, reference kernel, builder function, shape inference and conformance cases (references generated with
+`scripts/gen_op_references.py`, which needs NumPy and PyTorch), and the regenerated `docs/opset.md`.

@@ -5,6 +5,7 @@ set(core_sources
     build_info.cpp
     fatal.cpp
     isa.cpp
+    json.cpp
     log.cpp
     status.cpp
     system_info.cpp

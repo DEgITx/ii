@@ -97,6 +97,15 @@ TOOLCHAINS = {
         {"ASAN_OPTIONS": "detect_leaks=1:abort_on_error=1:strict_string_checks=1",
          "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"},
     ),
+    "linux-clang-fuzz": (
+        "Linux, Clang with libFuzzer + AddressSanitizer + UndefinedBehaviorSanitizer (fuzz smoke tests)",
+        LINUX,
+        {"CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++", "II_SANITIZE": "address;undefined",
+         "II_BUILD_FUZZERS": "ON"},
+        ["relwithdebinfo"],
+        {"ASAN_OPTIONS": "detect_leaks=1:abort_on_error=1",
+         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"},
+    ),
     "linux-clang-tsan": (
         "Linux, Clang with ThreadSanitizer",
         LINUX,

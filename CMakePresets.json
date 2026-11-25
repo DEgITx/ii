@@ -165,6 +165,22 @@
       }
     },
     {
+      "name": "linux-clang-fuzz",
+      "displayName": "Linux, Clang with libFuzzer + AddressSanitizer + UndefinedBehaviorSanitizer (fuzz smoke tests)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "II_SANITIZE": "address;undefined",
+        "II_BUILD_FUZZERS": "ON"
+      }
+    },
+    {
       "name": "linux-clang-tsan",
       "displayName": "Linux, Clang with ThreadSanitizer",
       "inherits": "base",
@@ -274,6 +290,11 @@
     {
       "name": "linux-clang-asan-relwithdebinfo",
       "configurePreset": "linux-clang-asan",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "linux-clang-fuzz-relwithdebinfo",
+      "configurePreset": "linux-clang-fuzz",
       "configuration": "RelWithDebInfo"
     },
     {
@@ -473,6 +494,21 @@
       },
       "environment": {
         "ASAN_OPTIONS": "detect_leaks=1:abort_on_error=1:strict_string_checks=1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {
+      "name": "linux-clang-fuzz-relwithdebinfo",
+      "configurePreset": "linux-clang-fuzz",
+      "configuration": "RelWithDebInfo",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:abort_on_error=1",
         "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
       }
     },
@@ -783,6 +819,23 @@
         {
           "type": "test",
           "name": "linux-clang-asan-relwithdebinfo"
+        }
+      ]
+    },
+    {
+      "name": "linux-clang-fuzz-relwithdebinfo",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "linux-clang-fuzz"
+        },
+        {
+          "type": "build",
+          "name": "linux-clang-fuzz-relwithdebinfo"
+        },
+        {
+          "type": "test",
+          "name": "linux-clang-fuzz-relwithdebinfo"
         }
       ]
     },

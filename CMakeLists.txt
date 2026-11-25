@@ -13,8 +13,10 @@ option(II_BUILD_SHARED "Build ii as a shared library" OFF)
 option(II_BUILD_CLI "Build the ii command-line tool" ${PROJECT_IS_TOP_LEVEL})
 option(II_BUILD_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
 option(II_BUILD_BENCHMARKS "Build benchmarks" ${PROJECT_IS_TOP_LEVEL})
+option(II_BUILD_EXAMPLES "Build examples" ${PROJECT_IS_TOP_LEVEL})
 option(II_INSTALL "Generate install rules" ${PROJECT_IS_TOP_LEVEL})
 option(II_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(II_BUILD_FUZZERS "Build libFuzzer targets (Clang); otherwise fuzz corpora are replayed as tests" OFF)
 option(II_USE_SYSTEM_DEPS "Use find_package() for test/benchmark dependencies instead of downloading them" OFF)
 set(II_SANITIZE "" CACHE STRING "Sanitizers to enable (GCC/Clang): e.g. 'address;undefined' or 'thread'")
 set(II_CPU_ISAS "auto" CACHE STRING "CPU ISA variants to compile kernels for ('auto' = all for the target architecture)")
@@ -45,6 +47,14 @@ include(IiVersion)
 
 find_package(Threads REQUIRED)
 
+if(II_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "ii: II_BUILD_FUZZERS requires Clang (libFuzzer)")
+    endif()
+    # Coverage instrumentation for all code, so that fuzzing explores the library, not just the fuzz targets.
+    add_compile_options(-fsanitize=fuzzer-no-link)
+endif()
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Targets
 # ---------------------------------------------------------------------------------------------------------------------
@@ -61,6 +71,10 @@ endif()
 
 if(II_BUILD_BENCHMARKS)
     add_subdirectory(bench)
+endif()
+
+if(II_BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()
 
 if(II_INSTALL)

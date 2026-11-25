@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -33,8 +34,11 @@ struct ThreadPoolOptions {
 ///   1. A submitter fills `job_`, then publishes a new epoch with closed=0 (seq_cst store) and wakes sleeping workers.
 ///   2. A worker joins by CAS-incrementing `active` while the job is open and its epoch is new to the worker.
 ///   3. When the submitter has finished its own share, it sets closed=1. No worker can join afterwards.
-///   4. The submitter waits until active == 0; the last worker to leave a closed job signals `done_signal_`.
+///   4. The submitter waits until active == 0; the last worker to leave a closed job signals `done_cv_`.
 /// A worker therefore only touches `job_` between a successful join and its leave, while the submitter waits.
+///
+/// Sleeping uses mutexes and condition variables rather than `std::atomic::wait`: libstdc++ implementations without a
+/// native futex (MinGW) can lose `atomic::notify_all` wake-ups, which left workers asleep forever.
 class ThreadPool final : public Executor {
 public:
     explicit ThreadPool(ThreadPoolOptions options = {});
@@ -90,9 +94,13 @@ private:
     alignas(64) std::atomic<std::uint64_t> control_{kClosedBit};
     alignas(64) std::atomic<std::int64_t> next_chunk_{0};
     alignas(64) std::atomic<std::int32_t> broadcast_pending_{0};
-    alignas(64) std::atomic<std::uint32_t> done_signal_{0};
     alignas(64) std::atomic<std::int32_t> sleepers_{0};
     std::atomic<bool> stop_{false};
+
+    std::mutex sleep_mutex_;  // workers waiting for a new job (or for stop_)
+    std::condition_variable sleep_cv_;
+    std::mutex done_mutex_;  // the submitter waiting for workers to leave a job
+    std::condition_variable done_cv_;
 };
 
 }  // namespace ii

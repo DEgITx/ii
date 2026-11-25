@@ -17,6 +17,8 @@ constexpr const char* kUsage = R"(Usage: ii <command> [options]
 
 Commands:
   info        Describe the machine: OS, CPU, memory, kernel variants, roofline
+  inspect     Describe a model and its execution plan
+  ops         List the operations of the OpSet
   version     Print the version
   help        Show this help
 
@@ -43,6 +45,12 @@ int main(int argc, char** argv) {
 
     if (command == "info") {
         return ii::cli::run_info(rest);
+    }
+    if (command == "inspect") {
+        return ii::cli::run_inspect(rest);
+    }
+    if (command == "ops") {
+        return ii::cli::run_ops(rest);
     }
     if (command == "version" || command == "--version" || command == "-V") {
         return print_version();

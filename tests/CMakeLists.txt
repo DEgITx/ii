@@ -9,10 +9,17 @@ add_library(ii_test_dynlib SHARED support/test_dynlib.cpp)
 target_link_libraries(ii_test_dynlib PRIVATE ii_build_options)
 
 add_executable(ii_tests
+    support/alloc_counter.cpp
+    support/random_graph.cpp
+    support/test_util.cpp
+    unit/api/c_api_test.cpp
+    unit/compiler/pass_invariance_test.cpp
+    unit/compiler/passes_test.cpp
     unit/core/allocator_test.cpp
     unit/core/function_ref_test.cpp
     unit/core/half_test.cpp
     unit/core/isa_test.cpp
+    unit/core/json_test.cpp
     unit/core/log_test.cpp
     unit/core/roofline_test.cpp
     unit/core/small_vector_test.cpp
@@ -21,11 +28,24 @@ add_executable(ii_tests
     unit/core/thread_pool_test.cpp
     unit/platform/dynlib_test.cpp
     unit/platform/mapped_file_test.cpp
-    unit/platform/platform_test.cpp)
+    unit/platform/platform_test.cpp
+    unit/runtime/memory_planner_test.cpp
+    unit/runtime/session_test.cpp
+    unit/ir/graph_test.cpp
+    unit/ir/text_test.cpp
+    unit/ops/conformance_test.cpp
+    unit/ops/shape_inference_test.cpp
+    unit/tensor/dim_test.cpp
+    unit/tensor/tensor_test.cpp)
 
+target_include_directories(ii_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(ii_tests PRIVATE ii_internal ii_build_options GTest::gtest_main GTest::gmock)
-target_compile_definitions(ii_tests PRIVATE "II_TEST_DYNLIB_PATH=\"$<TARGET_FILE:ii_test_dynlib>\"")
+target_compile_definitions(ii_tests PRIVATE
+    "II_TEST_DYNLIB_PATH=\"$<TARGET_FILE:ii_test_dynlib>\""
+    "II_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
 add_dependencies(ii_tests ii_test_dynlib)
+
+add_subdirectory(fuzz)
 
 # PRE_TEST discovery lists tests when ctest runs (not at build time), which keeps cross-compiled builds working.
 gtest_discover_tests(ii_tests

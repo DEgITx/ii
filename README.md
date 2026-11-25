@@ -12,6 +12,24 @@ An efficient, embeddable C++ library for neural network inference (first and for
 - **Formats** — GGUF, safetensors, ONNX, native `.ii`.
 - **`ii` CLI** — `info`, `run`, `chat`, `bench`, `inspect`, `quantize`, `convert`.
 
+## Example
+
+```cpp
+#include <ii/ii.h>
+
+auto context = ii::Context::create().value();
+ii::GraphBuilder b("mlp");
+ii::Var x = b.input("x", ii::DType::kF32, {"N", 4});              // symbolic batch size
+ii::Var h = ii::relu(ii::linear(x, b.constant(w1), b.constant(b1)));
+b.output("probabilities", ii::softmax(ii::linear(h, b.constant(w2))));
+
+auto program = ii::Model::from_builder(context, std::move(b)).value().compile().value();
+auto session = program.new_session().value();
+auto outputs = session.run({{"x", batch}}).value();
+```
+
+More: [examples/](examples) (C++ and C), `ii inspect examples/models/attention.ii.txt`, `ii ops`.
+
 ## Build
 
 ```sh
@@ -21,8 +39,10 @@ cmake --workflow --preset linux-gcc-release        # or windows-msvc-release, ma
 
 Details: [building guide](docs/guides/building.md), [contributing](CONTRIBUTING.md).
 
-> Status: stage 0 (foundation) is implemented. See [architecture](docs/architecture.md), [roadmap](docs/roadmap.md) (in Russian),
-> [testing and benchmarks](docs/testing-and-benchmarks.md), [CI/CD](docs/ci.md).
+> Status: stages 0 (foundation) and 1 (tensors, IR, OpSet v1, the reference backend `ii-ref`, runtime, C++ and C
+> APIs) are implemented. See [architecture](docs/architecture.md), [OpSet reference](docs/opset.md),
+> [roadmap](docs/roadmap.md) (in Russian), [testing and benchmarks](docs/testing-and-benchmarks.md),
+> [CI/CD](docs/ci.md), [adding an operation](docs/guides/adding-an-op.md).
 
 ## License
 

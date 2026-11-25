@@ -20,3 +20,15 @@
 #else
 #define II_API
 #endif
+
+/// Exported C++ classes hold standard-library members (`std::shared_ptr`, `std::vector`, ...). MSVC warns (C4251)
+/// that those members have no DLL interface; that is harmless because the C++ API requires the application and ii to
+/// use the same compiler and standard library (the C ABI in `ii/c_api.h` is the boundary between toolchains).
+/// Public headers wrap their declarations in these macros so the warning reaches neither ii nor its users.
+#if defined(_MSC_VER)
+#define II_BEGIN_DLL_EXPORTS __pragma(warning(push)) __pragma(warning(disable : 4251))
+#define II_END_DLL_EXPORTS __pragma(warning(pop))
+#else
+#define II_BEGIN_DLL_EXPORTS
+#define II_END_DLL_EXPORTS
+#endif

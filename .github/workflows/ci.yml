@@ -130,6 +130,58 @@ jobs:
           path: build/*/Testing/Temporary/
           if-no-files-found: ignore
 
+  examples:
+    name: examples (${{ matrix.preset }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, preset: linux-gcc-shared, env: gcc14 }
+          - { os: windows-2025, preset: windows-msvc-shared, env: msvc }
+          - { os: macos-15, preset: macos-clang, env: none }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: MSVC developer environment
+        if: matrix.env == 'msvc'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1.13.0
+
+      - name: GCC 14 as the default compiler
+        if: matrix.env == 'gcc14'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++-14
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 140
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 140
+
+      - name: Build environment
+        uses: ./.github/actions/setup
+        with:
+          cache-key: ${{ matrix.os }}-${{ matrix.preset }}-examples
+
+      - name: Build and install ii
+        run: |
+          cmake --preset ${{ matrix.preset }} -DII_BUILD_TESTS=OFF -DII_BUILD_BENCHMARKS=OFF -DII_BUILD_EXAMPLES=OFF
+          cmake --build --preset ${{ matrix.preset }}-release
+          cmake --install build/${{ matrix.preset }} --config Release --prefix "$GITHUB_WORKSPACE/install"
+
+      - name: Build the examples against the installed package
+        run: |
+          cmake -S examples -B build-examples -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$GITHUB_WORKSPACE/install"
+          cmake --build build-examples
+
+      - name: Run the examples
+        run: |
+          export PATH="$GITHUB_WORKSPACE/install/bin:$PATH"  # ii.dll on Windows
+          ./build-examples/ii_example_mlp
+          ./build-examples/ii_example_c_api
+          "$GITHUB_WORKSPACE/install/bin/ii" inspect examples/models/attention.ii.txt
+
   sanitizers:
     name: ${{ matrix.preset }}
     runs-on: ${{ matrix.os }}
@@ -139,6 +191,7 @@ jobs:
         include:
           - { os: ubuntu-24.04, preset: linux-clang-asan-relwithdebinfo }
           - { os: ubuntu-24.04, preset: linux-clang-tsan-relwithdebinfo }
+          - { os: ubuntu-24.04, preset: linux-clang-fuzz-relwithdebinfo }
           - { os: windows-2025, preset: windows-msvc-asan-relwithdebinfo }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
