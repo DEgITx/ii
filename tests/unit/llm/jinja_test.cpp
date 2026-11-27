@@ -153,6 +153,28 @@ TEST(JinjaTest, LimitsProtectAgainstHostileTemplates) {
     EXPECT_THAT(render_text("{% macro f(n) %}{{ f(n) }}{% endmacro %}{{ f(1) }}"), HasSubstr("too deep"));
     EXPECT_THAT(render_text("{% set s = 'x' * 1000000 %}{% for i in range(100) %}{{ s }}{% endfor %}"),
                 HasSubstr("too large"));
+    // A value doubled in a loop is stopped before it is written out.
+    EXPECT_THAT(render_text("{% set ns = namespace(s='x') %}{% for i in range(40) %}{% set ns.s = ns.s ~ ns.s %}"
+                            "{% endfor %}"),
+                HasSubstr("too large"));
+    EXPECT_THAT(render_text("{{ 'ab' * 9223372036854775807 }}"), HasSubstr("too large"));
+    EXPECT_THAT(render_text("{{ 'x' | indent(-1) }}"), HasSubstr("out of range"));
+    EXPECT_THAT(render_text("{{ [1] | tojson(indent=100000) }}"), HasSubstr("out of range"));
+}
+
+TEST(JinjaTest, IntegerOverflowBecomesFloat) {
+    // Python integers do not overflow; found by fuzz_tokenizer under UBSan.
+    EXPECT_EQ(render_text("{% if 9223372036854775807 + 5 > 9000000000000000000 %}ok{% endif %}"), "ok");
+    EXPECT_EQ(render_text("{% if -9223372036854775807 - 10 < -9000000000000000000 %}ok{% endif %}"), "ok");
+    EXPECT_EQ(render_text("{% if 3037000500 * 3037000500 > 0 %}ok{% endif %}"), "ok");
+    EXPECT_EQ(render_text("{% if 2 ** 100 > 2 ** 62 %}ok{% endif %}"), "ok");
+    EXPECT_EQ(render_text("{% if [9223372036854775807, 1] | sum > 0 %}ok{% endif %}"), "ok");
+    EXPECT_EQ(render_text("{{ 2 ** 62 }} {{ 3037000499 * 3037000499 }} {{ [1, 2] | sum }}"),
+              "4611686018427387904 9223372030926249001 3");
+    EXPECT_EQ(render_text("{% for i in range(9223372036854775806, 9223372036854775807, 5) %}{{ i }}{% endfor %}"),
+              "9223372036854775806");
+    EXPECT_EQ(render_text("{{ [1, 2, 3][::9223372036854775807] }} {{ [1, 2, 3][::-9223372036854775807] }}"), "[1] [3]");
+    EXPECT_THAT(render_text("{{ 1e300 | int }}"), HasSubstr("int()"));
 }
 
 }  // namespace

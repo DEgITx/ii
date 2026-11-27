@@ -6,6 +6,7 @@
 #include <cmath>
 #include <ctime>
 #include <format>
+#include <limits>
 #include <map>
 #include <optional>
 
@@ -16,6 +17,10 @@ namespace {
 constexpr std::size_t kMaxOutput = std::size_t{16} << 20;
 constexpr std::int64_t kMaxIterations = 1'000'000;
 constexpr int kMaxDepth = 64;
+constexpr std::int64_t kInt64Max = std::numeric_limits<std::int64_t>::max();
+constexpr std::int64_t kInt64Min = std::numeric_limits<std::int64_t>::min();
+constexpr std::int64_t kMaxIndent = 64;
+constexpr double kTwoTo63 = 9223372036854775808.0;
 
 Status template_error(std::string message) {
     return errors::invalid_argument("chat template: {}", message);
@@ -1149,6 +1154,40 @@ std::string strip(const std::string& s, const std::string& chars, bool left, boo
     return s.substr(begin, end - begin);
 }
 
+/// Integer arithmetic of templates. Python integers do not overflow: a result outside int64 becomes a float.
+Value int_add(std::int64_t a, std::int64_t b) {
+    if ((b > 0 && a > kInt64Max - b) || (b < 0 && a < kInt64Min - b)) {
+        return Value(static_cast<double>(a) + static_cast<double>(b));
+    }
+    return Value(a + b);
+}
+
+Value int_sub(std::int64_t a, std::int64_t b) {
+    if ((b < 0 && a > kInt64Max + b) || (b > 0 && a < kInt64Min + b)) {
+        return Value(static_cast<double>(a) - static_cast<double>(b));
+    }
+    return Value(a - b);
+}
+
+Value int_mul(std::int64_t a, std::int64_t b) {
+    const bool overflows =
+        a != 0 && b != 0 &&
+        (a > 0 ? (b > 0 ? a > kInt64Max / b : b < kInt64Min / a) : (b > 0 ? a < kInt64Min / b : b < kInt64Max / a));
+    if (overflows) {
+        return Value(static_cast<double>(a) * static_cast<double>(b));
+    }
+    return Value(a * b);
+}
+
+Value int_neg(std::int64_t a) {
+    return a == kInt64Min ? Value(-static_cast<double>(a)) : Value(-a);
+}
+
+/// A float that holds an integral value (pow of integers, int() of a float): an integer when it fits.
+bool fits_int64(double x) {
+    return x >= -kTwoTo63 && x < kTwoTo63;  // false for NaN
+}
+
 /// Normalizes a Python index (negative counts from the end); -1 when out of range.
 std::int64_t python_index(std::int64_t index, std::size_t size) {
     const auto n = static_cast<std::int64_t>(size);
@@ -1178,8 +1217,12 @@ std::vector<std::size_t> slice_indices(std::size_t size, const Value& start, con
     };
     const std::int64_t begin = clamp(start, s > 0 ? 0 : n - 1);
     const std::int64_t end = clamp(stop, s > 0 ? n : -1);
+    // i and end are in [-1, n]: the differences below cannot overflow, i + s could.
     for (std::int64_t i = begin; s > 0 ? i < end : i > end; i += s) {
         result.push_back(static_cast<std::size_t>(i));
+        if (s > 0 ? (end - i) - s <= 0 : (i - end) + s <= 0) {
+            break;
+        }
     }
     return result;
 }
@@ -1481,6 +1524,11 @@ private:
         }
         Result<Value> result = eval_inner(e);
         --depth_;
+        if (result.ok() &&
+            ((result->is_string() && result->as_string().size() > kMaxOutput) ||
+             (result->is_array() && result->array().size() > static_cast<std::size_t>(kMaxIterations)))) {
+            return template_error("value too large");
+        }
         return result;
     }
 
@@ -1584,7 +1632,7 @@ private:
                 return Value(!v.truthy());
             }
             if (v.is_int()) {
-                return Value(e.name == "-" ? -v.as_int() : v.as_int());
+                return e.name == "-" ? int_neg(v.as_int()) : v;
             }
             if (v.is_float()) {
                 return Value(e.name == "-" ? -v.as_number() : v.as_number());
@@ -1654,8 +1702,12 @@ private:
             }
         }
         if (op == "*" && a.is_string() && b.is_int()) {
+            if (b.as_int() > 0 && !a.as_string().empty() &&
+                static_cast<std::uint64_t>(b.as_int()) > kMaxOutput / a.as_string().size()) {
+                return template_error("string too large");
+            }
             std::string out;
-            for (std::int64_t i = 0; i < std::min<std::int64_t>(b.as_int(), 1 << 20); ++i) {
+            for (std::int64_t i = 0; i < b.as_int(); ++i) {
                 out += a.as_string();
             }
             return Value(std::move(out));
@@ -1684,13 +1736,13 @@ private:
         }
         const bool ints = a.is_int() && b.is_int();
         if (op == "+") {
-            return ints ? Value(a.as_int() + b.as_int()) : Value(a.as_number() + b.as_number());
+            return ints ? int_add(a.as_int(), b.as_int()) : Value(a.as_number() + b.as_number());
         }
         if (op == "-") {
-            return ints ? Value(a.as_int() - b.as_int()) : Value(a.as_number() - b.as_number());
+            return ints ? int_sub(a.as_int(), b.as_int()) : Value(a.as_number() - b.as_number());
         }
         if (op == "*") {
-            return ints ? Value(a.as_int() * b.as_int()) : Value(a.as_number() * b.as_number());
+            return ints ? int_mul(a.as_int(), b.as_int()) : Value(a.as_number() * b.as_number());
         }
         if (op == "/") {
             if (b.as_number() == 0) {
@@ -1702,7 +1754,7 @@ private:
             if (b.as_number() == 0) {
                 return template_error("division by zero");
             }
-            if (ints) {
+            if (ints && !(a.as_int() == kInt64Min && b.as_int() == -1)) {
                 std::int64_t q = a.as_int() / b.as_int();
                 if ((a.as_int() % b.as_int() != 0) && ((a.as_int() < 0) != (b.as_int() < 0))) {
                     --q;
@@ -1713,8 +1765,9 @@ private:
             return op == "//" ? Value(q) : Value(a.as_number() - q * b.as_number());
         }
         if (op == "**") {
-            return ints && b.as_int() >= 0 ? Value(static_cast<std::int64_t>(std::pow(a.as_number(), b.as_number())))
-                                           : Value(std::pow(a.as_number(), b.as_number()));
+            const double power = std::pow(a.as_number(), b.as_number());
+            return ints && b.as_int() >= 0 && fits_int64(power) ? Value(static_cast<std::int64_t>(power))
+                                                                : Value(power);
         }
         return template_error(std::format("unknown operator '{}'", op));
     }
@@ -2085,10 +2138,19 @@ private:
         }
         if (name == "tojson") {
             const Value* indent = arg(1, "indent");
+            if (indent != nullptr && indent->is_int() && (indent->as_int() < 0 || indent->as_int() > kMaxIndent)) {
+                return template_error("tojson indent out of range");
+            }
             return Value(v.to_json(indent != nullptr && indent->is_int() ? static_cast<int>(indent->as_int()) : -1));
         }
         if (name == "int") {
+            if (v.is_int()) {
+                return v;
+            }
             if (v.is_number()) {
+                if (!fits_int64(v.as_number())) {
+                    return template_error("int() of a float that is not a finite 64-bit integer");
+                }
                 return Value(static_cast<std::int64_t>(v.as_number()));
             }
             if (v.is_string()) {
@@ -2106,7 +2168,7 @@ private:
             return Value(v.is_string() ? std::strtod(v.as_string().c_str(), nullptr) : 0.0);
         }
         if (name == "abs") {
-            return v.is_int() ? Value(v.as_int() < 0 ? -v.as_int() : v.as_int()) : Value(std::fabs(v.as_number()));
+            return v.is_int() ? (v.as_int() < 0 ? int_neg(v.as_int()) : v) : Value(std::fabs(v.as_number()));
         }
         if (name == "round") {
             const Value* precision = arg(1, "precision");
@@ -2202,13 +2264,15 @@ private:
             return make_list(std::move(items));
         }
         if (name == "sum") {
-            double total = 0;
-            bool all_int = true;
+            Value total(std::int64_t{0});
             for (const Value& item : items_of(v)) {
-                total += item.is_number() ? item.as_number() : 0;
-                all_int = all_int && item.is_int();
+                if (!item.is_number()) {
+                    continue;
+                }
+                total = total.is_int() && item.is_int() ? int_add(total.as_int(), item.as_int())
+                                                        : Value(total.as_number() + item.as_number());
             }
-            return all_int ? Value(static_cast<std::int64_t>(total)) : Value(total);
+            return total;
         }
         if (name == "replace") {
             Value method = bound_method(Value(v.to_string()), "replace");
@@ -2219,8 +2283,11 @@ private:
         if (name == "indent") {
             const Value* width = arg(1, "width");
             const Value* first = arg(2, "first");
-            const std::string pad(static_cast<std::size_t>(width != nullptr && width->is_int() ? width->as_int() : 4),
-                                  ' ');
+            const std::int64_t spaces = width != nullptr && width->is_int() ? width->as_int() : 4;
+            if (spaces < 0 || spaces > kMaxIndent) {
+                return template_error("indent width out of range");
+            }
+            const std::string pad(static_cast<std::size_t>(spaces), ' ');
             std::string out;
             const std::string s = v.to_string();
             bool line_start = first != nullptr && first->truthy();
@@ -2384,6 +2451,9 @@ private:
                         return template_error("range too large");
                     }
                     out.emplace_back(i);
+                    if (step > 0 ? i > kInt64Max - step : i < kInt64Min - step) {
+                        break;
+                    }
                 }
                 return make_list(std::move(out));
             });

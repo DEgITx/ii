@@ -459,6 +459,20 @@ TEST(OnnxImportTest, RejectsNegativeConstantOfShapeDimensions) {
     EXPECT_FALSE(model.ok());
 }
 
+TEST(OnnxImportTest, SplitNumOutputsMustMatchTheOutputs) {
+    // Found by fuzz_onnx: a huge num_outputs made the importer build that many sizes.
+    for (const std::int64_t num_outputs : {std::int64_t{2}, std::int64_t{1} << 40}) {
+        OnnxGraph g;
+        g.input(value_info("x", kFloat, {4}))
+            .add_node(
+                node("Split", {"x"}, {"a", "b"}, {attribute_int("axis", 0), attribute_int("num_outputs", num_outputs)}))
+            .output(value_info("a", kFloat, {2}))
+            .output(value_info("b", kFloat, {2}));
+        const Result<Model> model = Model::from_onnx(ii_test::test_context(), model_bytes(g, 18));
+        EXPECT_EQ(model.ok(), num_outputs == 2) << num_outputs << ": " << model.status().to_string();
+    }
+}
+
 TEST(OnnxImportTest, ConstantInputsReplaceParameterInputs) {
     // Reshape takes its target shape as an input: unknown when loading unless given as a constant.
     OnnxGraph g;

@@ -1284,6 +1284,10 @@ Status handle_split(NodeContext& c) {
     } else {
         const Dim& dim = x->shape()[static_cast<std::size_t>(axis)];
         const std::int64_t parts = c.has_attribute("num_outputs") ? c.int_attr("num_outputs", 1) : c.num_outputs();
+        if (parts != c.num_outputs()) {
+            return errors::invalid_argument("Split: num_outputs = {} but the node has {} outputs", parts,
+                                            c.num_outputs());
+        }
         if (!dim.is_constant() || parts <= 0) {
             return c.unsupported("Split of a symbolic dimension into equal parts");
         }

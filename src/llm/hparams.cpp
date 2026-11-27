@@ -9,6 +9,8 @@ namespace ii::llm::detail {
 
 namespace {
 
+constexpr std::int64_t kMaxLayers = 1024;
+
 const char* const kArchitectures[] = {"llama", "qwen2", "qwen3", "gemma", "gemma2", "gemma3", "phi3"};
 
 bool supported(const std::string& architecture) {
@@ -35,7 +37,8 @@ void apply_architecture(HParams& h) {
         h.fused_qkv = true;
         h.fused_gate_up = true;
     }
-    if (h.sliding_layers.empty()) {
+    // Runs before validate(): a corrupt layer count must not size anything.
+    if (h.sliding_layers.empty() && h.layers > 0 && h.layers <= kMaxLayers) {
         h.sliding_layers.assign(static_cast<std::size_t>(h.layers), false);
         if (h.sliding_window > 0) {
             for (std::int64_t l = 0; l < h.layers; ++l) {
@@ -58,12 +61,15 @@ Status validate(const HParams& h) {
                                    h.architecture);
     }
     if (h.vocab_size <= 0 || h.embedding <= 0 || h.layers <= 0 || h.heads <= 0 || h.kv_heads <= 0 || h.head_size <= 0 ||
-        h.feed_forward <= 0 || h.heads % h.kv_heads != 0 || h.layers > 1024 || h.heads > 4096 || h.head_size > 4096 ||
-        h.rope_dims <= 0 || h.rope_dims > h.head_size || h.rope_dims % 2 != 0) {
+        h.feed_forward <= 0 || h.heads % h.kv_heads != 0 || h.layers > kMaxLayers || h.heads > 4096 ||
+        h.head_size > 4096 || h.rope_dims <= 0 || h.rope_dims > h.head_size || h.rope_dims % 2 != 0) {
         return errors::data_corrupted(
             "invalid hyper-parameters: vocab {}, embedding {}, layers {}, heads {}/{}, head size {}, rope dims {}, "
             "feed-forward {}",
             h.vocab_size, h.embedding, h.layers, h.heads, h.kv_heads, h.head_size, h.rope_dims, h.feed_forward);
+    }
+    if (h.sliding_layers.size() != static_cast<std::size_t>(h.layers)) {
+        return errors::data_corrupted("{} layer types for {} layers", h.sliding_layers.size(), h.layers);
     }
     if (!(h.rope_base > 0) || !(h.norm_epsilon > 0) || !(h.rope_factor > 0)) {
         return errors::data_corrupted("invalid rope base, scaling factor or norm epsilon");

@@ -7,6 +7,7 @@
 namespace ii::ir {
 namespace {
 
+using ::testing::AnyOf;
 using ::testing::HasSubstr;
 
 /// Parses, verifies, prints and re-parses; the two printed forms must be identical.
@@ -115,6 +116,14 @@ TEST(IrTextTest, Errors) {
     EXPECT_THAT(parse_error("graph { input %x : f32[2] "), HasSubstr("unexpected end"));
     EXPECT_THAT(parse_error("graph { input %x : f32[2+] }"), HasSubstr("invalid dimension"));
     EXPECT_THAT(parse_error("graph {} extra"), HasSubstr("unexpected text"));
+    // Literal sizes are checked against the text before allocating (found by fuzz_ir_text).
+    EXPECT_THAT(parse_error("graph { const %c : i64[3333333333333333333] = i64[3333333333333333333] {0} }"),
+                HasSubstr("literal shorter than"));
+    EXPECT_THAT(parse_error("graph { const %c : f32[4000000000, 4000000000, 4000000000] = "
+                            "f32[4000000000, 4000000000, 4000000000] {0} }"),
+                AnyOf(HasSubstr("invalid literal shape"), HasSubstr("invalid dimension")));
+    EXPECT_THAT(parse_error("graph { const %q : q4_0[1, 3200] = q4_0[1, 3200] 0x0001 }"),
+                HasSubstr("hex literal shorter than"));
 }
 
 }  // namespace

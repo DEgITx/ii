@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstring>
 #include <format>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -429,11 +430,23 @@ private:
         if (!shape) {
             return error("tensor literals need a static shape");
         }
+        // Element count without overflow, checked against the text before anything is allocated.
+        std::int64_t numel = 1;
+        for (const std::int64_t d : *shape) {
+            if (d < 0 || (d != 0 && numel > std::numeric_limits<std::int64_t>::max() / d)) {
+                return error(std::format("invalid literal shape {}", type.to_string()));
+            }
+            numel *= d;
+        }
         skip_space();
         if (text_.substr(pos_, 2) == "0x") {
             pos_ += 2;
             if (!is_block_quantized(type.dtype)) {
                 return error("hex literals are only used for block-quantized types");
+            }
+            // Two hex digits per byte: check the text holds them before allocating.
+            if (storage_size(type.dtype, numel) > (text_.size() - pos_) / 2) {
+                return error(std::format("hex literal shorter than {}", type.to_string()));
             }
             II_ASSIGN_OR_RETURN(Tensor tensor, Tensor::empty(type.dtype, *shape));
             auto* bytes = static_cast<std::uint8_t*>(tensor.data());
@@ -461,9 +474,12 @@ private:
             pos_ += 5;
             return Tensor();
         }
+        // At least one character per value: check the text holds them before allocating.
+        if (numel > static_cast<std::int64_t>(text_.size() - pos_)) {
+            return error(std::format("literal shorter than {}", type.to_string()));
+        }
         II_ASSIGN_OR_RETURN(Tensor tensor, Tensor::empty(type.dtype, *shape));
         std::int64_t count = 0;
-        const std::int64_t numel = tensor.numel();
         const std::size_t element_bytes = element_size(type.dtype);
         auto* base = static_cast<std::byte*>(tensor.data());
         II_TRY(bracket_list('{', '}', [&](std::string_view element) -> Status {
