@@ -4,6 +4,7 @@
 #include "backends/test_remote/test_remote.h"
 #include "core/assert.h"
 #include "core/platform/platform.h"
+#include "plugin/host.h"
 #include "runtime/runtime.h"
 
 #include <optional>
@@ -59,7 +60,12 @@ Result<Context> Context::create(ContextOptions options) {
     if (test_devices.empty()) {
         test_devices = platform::get_env("II_TEST_DEVICES").value_or("");
     }
-    if (!test_devices.empty() && test_devices != "none") {
+    if (test_devices == "none") {
+        test_devices.clear();
+    }
+    II_TRY(plugin::load_plugins(*impl, options, test_devices));
+    // The ii-backend-test-remote plugin, when loaded, provides the simulated devices instead of the built-in backend.
+    if (!test_devices.empty() && impl->find_backend(test_remote::kBackendName) == nullptr) {
         Result<std::vector<test_remote::TestDeviceOptions>> devices = test_remote::parse_test_devices(test_devices);
         if (!devices.ok()) {
             Status status = std::move(devices).status();
@@ -108,6 +114,22 @@ std::vector<DeviceDescription> Context::devices() const {
         }
     }
     return result;
+}
+
+std::vector<PluginDescription> Context::plugins() const {
+    return impl_->plugins;
+}
+
+std::string_view to_string(PluginState state) noexcept {
+    switch (state) {
+    case PluginState::kLoaded:
+        return "loaded";
+    case PluginState::kUnavailable:
+        return "unavailable";
+    case PluginState::kFailed:
+        return "failed";
+    }
+    return "unknown";
 }
 
 std::vector<std::string> Context::backend_names() const {

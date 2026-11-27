@@ -34,6 +34,7 @@ add_executable(ii_tests
     unit/platform/dynlib_test.cpp
     unit/platform/mapped_file_test.cpp
     unit/platform/platform_test.cpp
+    unit/plugin/plugin_test.cpp
     unit/runtime/memory_planner_test.cpp
     unit/runtime/multi_device_test.cpp
     unit/runtime/session_test.cpp
@@ -48,11 +49,12 @@ add_executable(ii_tests
     unit/tensor/tensor_test.cpp)
 
 target_include_directories(ii_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(ii_tests PRIVATE ii_internal ii_build_options GTest::gtest_main GTest::gmock)
+target_link_libraries(ii_tests PRIVATE ii_internal ii_plugin_sdk ii_build_options GTest::gtest_main GTest::gmock)
 target_compile_definitions(ii_tests PRIVATE
     "II_TEST_DYNLIB_PATH=\"$<TARGET_FILE:ii_test_dynlib>\""
+    "II_TEST_PLUGIN_PATH=\"$<TARGET_FILE:ii-backend-test-remote>\""
     "II_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
-add_dependencies(ii_tests ii_test_dynlib)
+add_dependencies(ii_tests ii_test_dynlib ii-backend-test-remote)
 
 add_subdirectory(fuzz)
 
@@ -68,7 +70,7 @@ if(CMAKE_CROSSCOMPILING)
     add_test(NAME ii_tests COMMAND ii_tests --gtest_brief=1)
     set_tests_properties(ii_tests PROPERTIES
         TIMEOUT 3600
-        ENVIRONMENT "II_TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data;II_TEST_DYNLIB_PATH=$<TARGET_FILE:ii_test_dynlib>")
+        ENVIRONMENT "II_TEST_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/data;II_TEST_DYNLIB_PATH=$<TARGET_FILE:ii_test_dynlib>;II_TEST_PLUGIN_PATH=$<TARGET_FILE:ii-backend-test-remote>")
 else()
     # PRE_TEST discovery lists tests when ctest runs (not at build time), which keeps cross-compiled builds working.
     gtest_discover_tests(ii_tests

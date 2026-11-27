@@ -76,6 +76,7 @@ class TestQueue final : public backend::Queue {
 public:
     TestQueue(const DeviceMemory& memory, std::string device) : memory_(memory), device_(std::move(device)) {
         tasks_.reserve(1024);
+        views_.reserve(4096);
     }
 
     Status copy_to_device(void* dst, const void* src, std::size_t size) override {
@@ -112,9 +113,15 @@ public:
                 break;  // like a failed GPU stream: later work is not executed
             }
             switch (task.kind) {
-            case Kind::kKernel:
-                first = task.kernel->run(task.context);
+            case Kind::kKernel: {
+                backend::KernelContext context = task.context;
+                context.inputs =
+                    std::span<const backend::TensorView>(views_.data() + task.first_view, context.inputs.size());
+                context.outputs = std::span<const backend::TensorView>(
+                    views_.data() + task.first_view + context.inputs.size(), context.outputs.size());
+                first = task.kernel->run(context);
                 break;
+            }
             case Kind::kCopy:
                 std::memmove(task.dst, task.src, task.size);
                 break;
@@ -124,11 +131,17 @@ public:
             }
         }
         tasks_.clear();
+        views_.clear();
         return first;
     }
 
+    /// Defers a kernel. The views are copied (like the arguments of a GPU kernel launch): the caller's arrays need not
+    /// outlive the call. The executor must stay valid until the queue is synchronized.
     void enqueue(const backend::Kernel& kernel, const backend::KernelContext& context) {
-        tasks_.push_back(Task{Kind::kKernel, &kernel, context, nullptr, nullptr, 0});
+        const std::size_t first_view = views_.size();
+        views_.insert(views_.end(), context.inputs.begin(), context.inputs.end());
+        views_.insert(views_.end(), context.outputs.begin(), context.outputs.end());
+        tasks_.push_back(Task{Kind::kKernel, &kernel, context, nullptr, nullptr, 0, first_view});
     }
 
     const DeviceMemory& memory() const noexcept { return memory_; }
@@ -143,6 +156,7 @@ private:
         void* dst;
         const void* src;
         std::size_t size;
+        std::size_t first_view = 0;  // kernels: inputs, then outputs, in views_
     };
 
     Status check(const void* data, std::size_t size, std::string_view what) const {
@@ -155,6 +169,7 @@ private:
     const DeviceMemory& memory_;
     std::string device_;
     std::vector<Task> tasks_;
+    std::vector<backend::TensorView> views_;
 };
 
 class TestDeviceApi final : public backend::DeviceApi {

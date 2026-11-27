@@ -115,6 +115,17 @@ void print_text(const OsInfo& os, const CpuInfo& cpu, const MemoryInfo& memory, 
             }
             std::printf("Device    %s (%s)\n", line.c_str(), backends.c_str());
         }
+        for (const PluginDescription& plugin : context->plugins()) {
+            std::string line = plugin.name;
+            if (!plugin.version.empty()) {
+                line += " " + plugin.version;
+            }
+            line += std::format(" ({})", to_string(plugin.state));
+            if (!plugin.message.empty()) {
+                line += ": " + plugin.message;
+            }
+            std::printf("Plugin    %s\n          %s\n", line.c_str(), plugin.path.c_str());
+        }
     } else {
         std::printf("Devices   error: %s\n", context.status().to_string().c_str());
     }
@@ -220,6 +231,27 @@ void print_json(const OsInfo& os, const CpuInfo& cpu, const MemoryInfo& memory, 
             json.key("backends");
             json.begin_array();
             for (const std::string& backend : device.backends) {
+                json.value(backend);
+            }
+            json.end_array();
+            json.end_object();
+        }
+    }
+    json.end_array();
+
+    json.key("plugins");
+    json.begin_array();
+    if (const Result<Context> context = Context::create(); context.ok()) {
+        for (const PluginDescription& plugin : context->plugins()) {
+            json.begin_object();
+            json.field("name", plugin.name);
+            json.field("path", plugin.path);
+            json.field("version", plugin.version);
+            json.field("state", to_string(plugin.state));
+            json.field("message", plugin.message);
+            json.key("backends");
+            json.begin_array();
+            for (const std::string& backend : plugin.backends) {
                 json.value(backend);
             }
             json.end_array();

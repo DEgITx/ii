@@ -24,6 +24,7 @@ struct ContextImpl {
     std::unique_ptr<ThreadPool> own_pool;
     Logger logger;
     std::vector<std::unique_ptr<backend::Backend>> backends;  // priority order
+    std::vector<PluginDescription> plugins;
 
     const backend::Backend* find_backend(std::string_view name) const noexcept;
     /// The reference backend (always present); used for constant folding.

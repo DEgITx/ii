@@ -230,6 +230,38 @@ private:
     std::unique_ptr<detail::SessionImpl> impl_;
 };
 
+/// Outcome of one case of `check_backends`.
+enum class BackendCheckState {
+    kPassed,
+    kFailed,   ///< wrong results, or an error other than "unsupported"
+    kSkipped,  ///< the backend does not support the operation
+};
+
+struct BackendCheckCase {
+    std::string name;  ///< e.g. "matmul f16"
+    BackendCheckState state = BackendCheckState::kPassed;
+    std::string message;   ///< why it failed or was skipped
+    double max_error = 0;  ///< max |actual - expected| / (1 + |expected|)
+};
+
+/// Results of `check_backends` for one backend.
+struct BackendCheck {
+    std::string backend;
+    std::string device;  ///< e.g. "cuda:0"
+    int passed = 0;
+    int failed = 0;
+    int skipped = 0;
+    std::vector<BackendCheckCase> cases;
+};
+
+/// A quick self-test of backends (`ii check-backends`): small models of common operations (elementwise,
+/// normalizations, matmul in f32 and f16, convolution, pooling, reductions, data movement, attention, rope) run on
+/// each backend alone — on a device with the copies to and from it — and are compared with ii-ref. `backends`:
+/// the backends to check; empty: all but ii-ref. Meant for checking that a plugin works on a machine; the test
+/// suite checks far more.
+II_API Result<std::vector<BackendCheck>> check_backends(const Context& context,
+                                                        std::span<const std::string> backends = {});
+
 }  // namespace ii
 
 II_END_DLL_EXPORTS

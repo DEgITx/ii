@@ -40,6 +40,9 @@ std::string test_data_dir();
 /// Path of the shared library loaded by the DynLib tests; II_TEST_DYNLIB_PATH overrides the built-in path.
 std::string test_dynlib_path();
 
+/// Path of the ii-backend-test-remote plugin; II_TEST_PLUGIN_PATH overrides the built-in path.
+std::string test_plugin_path();
+
 /// Creates a context with a small thread pool for tests.
 ii::Context test_context();
 

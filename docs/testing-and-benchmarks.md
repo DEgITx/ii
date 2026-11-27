@@ -74,6 +74,15 @@ suffix K/M/G), `gflops`, `bandwidth` (GB/s), `launch` (us), `link` (GB/s), `late
 `+`; default: everything ii-ref supports); `default` for the defaults. A device that takes everything it can:
 `launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000`.
 
+**Backend plugins** (`tests/unit/plugin/plugin_test.cpp`): loading the `ii-backend-test-remote` plugin (states,
+scanning directories, explicit paths that are not plugins, checks of the function table), and the C interface
+itself — an in-process plugin made with the SDK runs ii-ref and the simulated device through it (random models,
+errors, logging, zero allocations), so every node crosses the interface as text. When the plugin is on
+`II_PLUGIN_PATH`, it provides the simulated devices instead of the built-in backend: CI runs the whole test suite
+that way too. The plugin built with MSVC was checked with ii built with MinGW GCC and vice versa (the whole suite).
+`ii check-backends` is the same kind of check for a machine: 29 small models of common operations on every backend
+against ii-ref.
+
 **GPU backends** (`ii-cuda`, TensorRT, later Vulkan/Metal) run the same differential suite on GPU runners; TensorRT
 additionally tests engine-cache invalidation (different shapes / precision / version produce a rebuild).
 
@@ -215,8 +224,8 @@ Summary only; workflows, triggers, runners and security rules are defined in [ci
 
 | Platform | Compilers | What runs | From |
 |----------|-----------|-----------|------|
-| Windows x86-64 | MSVC, clang-cl, MinGW-GCC | all tests (MSVC Release also on simulated devices), C ABI interop across compilers | stage 0 |
-| Linux x86-64 | GCC, Clang | all tests (GCC Debug also on simulated devices), sanitizers, short fuzzing, coverage, SDE for AVX-512/AMX | stage 0 |
+| Windows x86-64 | MSVC, clang-cl, MinGW-GCC | all tests (MSVC Release also on simulated devices, built-in and from the plugin), C ABI interop across compilers | stage 0 |
+| Linux x86-64 | GCC, Clang | all tests (GCC Debug also on simulated devices, built-in and from the plugin), sanitizers, short fuzzing, coverage, SDE for AVX-512/AMX | stage 0 |
 | Linux ARM64 | GCC, Clang | all tests, NEON/dotprod/i8mm paths | stage 0 |
 | macOS ARM64 / x86-64 | Apple Clang | all tests (+ Metal later) | stage 0 |
 | Android ARM64 / x86-64 | NDK Clang | build, tests on emulator (CI) and devices (`ctest --preset android-arm64-release` over adb) | stage 2 (done) |

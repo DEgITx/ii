@@ -23,6 +23,7 @@ int run_llm_bench(const std::vector<std::string>& args);
 int run_perplexity(const std::vector<std::string>& args);
 int run_quantize(const std::vector<std::string>& args);
 int run_tokenize(const std::vector<std::string>& args);
+int run_check_backends(const std::vector<std::string>& args);
 /// `ii inspect` of a GGUF file: metadata and tensors (`all`: every tensor).
 int inspect_gguf(const std::string& path, bool all);
 /// `ii inspect <llm> --plan`: loads a language model and prints its execution plan.

@@ -74,7 +74,9 @@ Notes:
 - `linux-gcc-debug` and `windows-msvc-release` run the tests a second time with two simulated devices
   (`II_TEST_DEVICES`, the ii-test-remote backend): every model then executes on mixed host/device plans with
   transfers, so the planner, the transfers and device states are exercised without a GPU
-  ([testing-and-benchmarks.md](testing-and-benchmarks.md) §2.3).
+  ([testing-and-benchmarks.md](testing-and-benchmarks.md) §2.3). A third run takes the devices from the
+  `ii-backend-test-remote` plugin (`II_PLUGIN_PATH=build/<preset>/plugins/<config>`), so every device operation
+  crosses the plugin interface ([guides/backend-plugins.md](guides/backend-plugins.md)).
 - Warnings are errors in CI (`-Werror` / `/WX`).
 - Compiler cache: `ccache` for every toolchain (MSVC included), keyed by OS + preset, restored from `master`.
 

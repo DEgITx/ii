@@ -405,13 +405,25 @@ public:
 
 ### Plugins
 
-- Third-party backends are built as separate `ii-backend-<name>` shared libraries so the core never depends on
-  their SDKs.
-- The stable boundary is a C struct `ii_backend_plugin_v1` (a table of function pointers) + an exported
-  `ii_backend_plugin_entry()`; ABI version handshake. Inside the plugin a C++ wrapper implements `Backend`.
-- Plugins are looked up next to the library, in `II_PLUGIN_PATH` and in paths given in `Context::Options`.
-  A missing SDK runtime (e.g. no TensorRT DLLs on the user's machine) makes the plugin report itself unavailable —
-  never a crash or a load failure of the core.
+*Implemented in stage 5.2; guide: [docs/guides/backend-plugins.md](guides/backend-plugins.md).*
+
+- Backends with large SDKs (ii-cuda, TensorRT, …) are built as separate `ii-backend-<name>` shared libraries so the
+  core never depends on their SDKs, and an application linked with ii runs where the SDK is absent.
+- The stable boundary is plain C (`include/ii/plugin.h`): the plugin exports `ii_backend_plugin_v1(host_abi_version)`
+  returning a table of function pointers (`ii_plugin_v1`: `abi_version` + `struct_size` handshake, backends,
+  device info, `supports` / `estimate_us` / `create_kernel`, kernels, device memory and queues). Errors are status
+  codes with a fixed-size message buffer; no C++ type or exception crosses it, so a plugin built with MSVC works with
+  an ii built with MinGW and vice versa.
+- Nodes cross as a one-node graph in the IR text format; constant data is elided (`{...}`) and passed by pointer
+  (no copy). Graph backends will receive larger subgraphs through the same functions.
+- Inside a plugin, the SDK (`src/plugin/sdk.h`, target `ii_plugin_sdk`) adapts ordinary C++ `Backend`s to the C
+  table; on the ii side `src/plugin/host.cpp` adapts the table back to `Backend`, `Kernel`, `DeviceApi` and `Queue`,
+  so the planner and runtime treat plugin backends like built-in ones. `ii-test-remote` is also built as the plugin
+  `ii-backend-test-remote`; CI runs the whole test suite with the simulated devices coming from it.
+- Plugins are looked up in `ContextOptions::plugin_paths`, in `II_PLUGIN_PATH` and next to the ii library; libraries
+  are loaded once per process and never unloaded. A missing SDK runtime (e.g. no TensorRT DLLs on the user's machine)
+  makes the plugin report itself unavailable — never a crash or a load failure of the core. `Context::plugins()`,
+  `ii info` and `ii check-backends` show what was loaded.
 - Built-in backends are registered **explicitly** in `Context::create()` (no static initializers — they break with
   static linking and cause initialization-order problems).
 
@@ -751,8 +763,8 @@ CUDA compute capability 7.5+ (matches TensorRT 10).
 - **ABI**: the C ABI is stable within a major version; the C++ API lives in inline namespace `ii::v1`; symbols are
   hidden by default (`-fvisibility=hidden`, explicit `II_API`); public headers contain no third-party types (pimpl).
   The C ABI also solves MinGW ↔ MSVC interop: a DLL built with one compiler is usable from the other.
-- **Configuration without globals**: `Context::Options { allocator, executor (thread pool), log_sink, cache_dir,
-  plugin_paths, … }`; `II_*` environment variables only override defaults and are documented.
+- **Configuration without globals**: `ContextOptions { allocator, executor (thread pool), logger, plugin_paths,
+  plugin_options, … }`; `II_*` environment variables only override defaults and are documented.
 - **Windows naming detail**: the library and the CLI are both called `ii`, so the CMake targets differ
   (`ii` / `ii_cli`) and PDB names are set explicitly to avoid `ii.pdb` collisions.
 
@@ -774,7 +786,8 @@ ii inspect <model> [--plan]      inputs and outputs, the execution plan with bac
                                  it (estimates, copies, memory, declines); --graph, --imported; for LLMs too
 ii convert <in> <out.ii>         conversion to the native format (+ pre-packing)
 ii quantize <in.gguf> <out.gguf> --type q4_k_m   GGUF weights to q8_0 … q6_k or the llama.cpp mixes
-ii check-backends [<model>]      verify every available backend against the reference on this machine
+ii check-backends                small models of common operations on every backend (and plugin) compared with
+                                 the reference on this machine; --backends, --plugin, --json
 ii train <config>                training from a config (later)
 ```
 
@@ -795,7 +808,8 @@ ii/
 │   ├── ops/           OpSchemas: shapes, decompositions, gradients, costs
 │   ├── passes/        canonicalization, constant folding, DCE/CSE, fusion, autodiff, layouts
 │   ├── runtime/       context, model, program, session, planner, memory_planner, executor, profiler
-│   ├── backend_api/   Backend, Device, Buffer, Stream, KernelBackend, plugin ABI
+│   ├── backend/       Backend, Kernel, KernelBackend; device.h: DeviceInfo, DeviceApi, Queue
+│   ├── plugin/        plugin loading (host.cpp) and the plugin SDK (sdk.h); the C ABI is include/ii/plugin.h
 │   ├── backends/
 │   │   ├── ref/       reference kernels
 │   │   ├── cpu/       ii-cpu: drivers; isa/ (SIMD layer, math, kernels compiled per ISA)

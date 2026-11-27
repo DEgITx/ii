@@ -4,6 +4,7 @@ add_executable(ii_cli
     main.cpp
     args.cpp
     console.cpp
+    command_check.cpp
     command_info.cpp
     command_inspect.cpp
     command_llm.cpp
@@ -33,6 +34,16 @@ endif()
 if(II_BUILD_TESTS)
     set(_ii_example_model "${PROJECT_SOURCE_DIR}/examples/models/attention.ii.txt")
     add_test(NAME cli_info COMMAND ii_cli info)
+    add_test(NAME cli_check_backends COMMAND ii_cli check-backends --backends ii-cpu)
+    set_tests_properties(cli_check_backends PROPERTIES PASS_REGULAR_EXPRESSION "ii-cpu +cpu +[0-9]+ passed, 0 failed")
+    if(TARGET ii-backend-test-remote)
+        # The test-remote plugin, loaded explicitly, with one simulated device.
+        add_test(NAME cli_check_backends_plugin
+                 COMMAND ii_cli check-backends --plugin $<TARGET_FILE:ii-backend-test-remote> --backends ii-test-remote)
+        set_tests_properties(cli_check_backends_plugin PROPERTIES
+            ENVIRONMENT "II_TEST_DEVICES=default"
+            PASS_REGULAR_EXPRESSION "ii-test-remote +test:0 +[0-9]+ passed, 0 failed")
+    endif()
     add_test(NAME cli_inspect COMMAND ii_cli inspect "${_ii_example_model}" --graph)
     add_test(NAME cli_run COMMAND ii_cli run "${_ii_example_model}" --dims B=2,S=16 --repeat 2 --profile trace.json)
     add_test(NAME cli_run_generic COMMAND ii_cli run "${_ii_example_model}" --shapes x=1x7x8 --isa generic --no-fuse)

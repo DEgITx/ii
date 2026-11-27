@@ -26,6 +26,10 @@ std::string test_dynlib_path() {
     return ii::platform::get_env("II_TEST_DYNLIB_PATH").value_or(II_TEST_DYNLIB_PATH);
 }
 
+std::string test_plugin_path() {
+    return ii::platform::get_env("II_TEST_PLUGIN_PATH").value_or(II_TEST_PLUGIN_PATH);
+}
+
 ii::Tensor random_tensor(ii::DType dtype, const ii::Shape& shape, std::uint32_t seed, double low, double high) {
     ii::Tensor tensor = ii::Tensor::empty(dtype, shape).value();
     std::mt19937 rng(seed);

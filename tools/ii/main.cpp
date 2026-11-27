@@ -27,6 +27,7 @@ Commands:
   perplexity  Perplexity of a language model on a text file
   quantize    Convert the weights of a GGUF model (q4_k_m, q8_0, ...)
   tokenize    Show the tokens of a text for a language model
+  check-backends  Check the backends and plugins against the reference backend
   version     Print the version
   help        Show this help
 
@@ -82,6 +83,9 @@ int main(int argc, char** argv) {
     }
     if (command == "tokenize") {
         return ii::cli::run_tokenize(rest);
+    }
+    if (command == "check-backends") {
+        return ii::cli::run_check_backends(rest);
     }
     if (command == "version" || command == "--version" || command == "-V") {
         return print_version();

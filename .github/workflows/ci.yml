@@ -135,6 +135,23 @@ jobs:
             launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000;launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000,ops=add+mul+matmul+reshape+cast
         run: ctest --preset ${{ matrix.preset }}
 
+      # Once more with the devices of the ii-backend-test-remote plugin (loaded from II_PLUGIN_PATH) instead of the
+      # built-in backend: every node, kernel, copy and queue operation of the devices crosses the plugin interface.
+      - name: Tests through the test-remote plugin
+        if: matrix.devices
+        env:
+          II_TEST_DEVICES: >-
+            launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000;launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000,ops=add+mul+matmul+reshape+cast
+        run: |
+          config=$(echo "${{ matrix.preset }}" | sed -E 's/.*-(debug|release|relwithdebinfo)$/\1/')
+          case "$config" in debug) dir=Debug;; release) dir=Release;; *) dir=RelWithDebInfo;; esac
+          preset=$(echo "${{ matrix.preset }}" | sed -E 's/-(debug|release|relwithdebinfo)$//')
+          plugins="$PWD/build/$preset/plugins/$dir"
+          if command -v cygpath > /dev/null; then plugins=$(cygpath -w "$plugins"); fi
+          export II_PLUGIN_PATH="$plugins"
+          ./build/$preset/bin/$dir/ii info | grep -A1 "^Plugin"
+          ctest --preset ${{ matrix.preset }}
+
       - name: ii info
         run: |
           config=$(echo "${{ matrix.preset }}" | sed -E 's/.*-(debug|release|relwithdebinfo)$/\1/')

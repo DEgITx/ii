@@ -130,6 +130,17 @@ II_TEST_DEVICES="memory=250M,gflops=20000,bandwidth=800" ii inspect model.gguf -
 The first device takes every operation it can; the second is a realistic one with 250 MB of memory, so a larger
 model is split between it and the CPU. Keys: [testing-and-benchmarks.md](../testing-and-benchmarks.md) §2.3.
 
+With tests enabled, the same device is also built as a backend plugin into `build/<preset>/plugins/<config>`. Put
+that directory on `II_PLUGIN_PATH` to take the devices from the plugin instead (the plugin can come from another
+compiler's build — the interface is plain C):
+
+```sh
+II_PLUGIN_PATH=build/linux-gcc/plugins/Release II_TEST_DEVICES=default ctest --preset linux-gcc-release
+II_TEST_DEVICES=default ii check-backends --plugin build/linux-gcc/plugins/Release
+```
+
+Writing plugins: [backend-plugins.md](backend-plugins.md).
+
 ## Android
 
 Install the Android NDK (r27 or newer) and point `ANDROID_NDK_HOME` at it, then use the `android-arm64` or

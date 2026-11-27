@@ -15,6 +15,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 II_BEGIN_DLL_EXPORTS
@@ -50,6 +52,38 @@ struct ContextOptions {
     /// environment variable if set, otherwise none; "none": none. Keys are documented in
     /// docs/testing-and-benchmarks.md.
     std::string test_devices;
+
+    /// Backend plugins to load (ii/plugin.h): plugin files, or directories whose plugin files ("ii-backend-*.dll",
+    /// "libii-backend-*.so") are loaded. A plugin named here that cannot be loaded makes `Context::create` fail.
+    std::vector<std::string> plugin_paths;
+
+    /// Also load the plugins found in the directories of the `II_PLUGIN_PATH` environment variable (separated by ';'
+    /// on Windows, ':' elsewhere) and next to the ii library. Plugins found there that fail to load are reported by
+    /// `Context::plugins()` and logged.
+    bool search_plugins = true;
+
+    /// Configuration passed to plugins, e.g. {"cuda.device", "1"}; each plugin documents its keys.
+    std::vector<std::pair<std::string, std::string>> plugin_options;
+};
+
+/// Outcome of loading a backend plugin.
+enum class PluginState {
+    kLoaded,       ///< its backends are available (possibly none, e.g. no device present)
+    kUnavailable,  ///< the plugin cannot work on this machine (no driver, missing SDK libraries)
+    kFailed,       ///< the file is not a usable plugin (not a plugin, another ABI version, a name already loaded)
+};
+
+/// "loaded", "unavailable", "failed".
+II_API std::string_view to_string(PluginState state) noexcept;
+
+/// A backend plugin a context tried to load.
+struct PluginDescription {
+    std::string name;     ///< e.g. "ii-backend-cuda" (the file name when the plugin could not be loaded)
+    std::string path;     ///< file the plugin was loaded from
+    std::string version;  ///< version the plugin reports
+    PluginState state = PluginState::kFailed;
+    std::string message;                ///< why it is unavailable or failed, or notes about skipped backends
+    std::vector<std::string> backends;  ///< backends the plugin added
 };
 
 /// A device of a context and the backends running on it.
@@ -75,6 +109,9 @@ public:
 
     /// The devices of the available backends; the host comes first.
     std::vector<DeviceDescription> devices() const;
+
+    /// The backend plugins the context found, in loading order.
+    std::vector<PluginDescription> plugins() const;
 
     /// Internal: the implementation object.
     const std::shared_ptr<detail::ContextImpl>& impl() const noexcept { return impl_; }
