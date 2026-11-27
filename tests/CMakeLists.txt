@@ -34,6 +34,7 @@ add_executable(ii_tests
     unit/platform/dynlib_test.cpp
     unit/platform/mapped_file_test.cpp
     unit/platform/platform_test.cpp
+    unit/plugin/cuda_test.cpp
     unit/plugin/plugin_test.cpp
     unit/runtime/memory_planner_test.cpp
     unit/runtime/multi_device_test.cpp
@@ -55,6 +56,11 @@ target_compile_definitions(ii_tests PRIVATE
     "II_TEST_PLUGIN_PATH=\"$<TARGET_FILE:ii-backend-test-remote>\""
     "II_TEST_DATA_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/data\"")
 add_dependencies(ii_tests ii_test_dynlib ii-backend-test-remote)
+if(TARGET ii-backend-cuda)
+    # The CUDA plugin tests (unit/plugin/cuda_test.cpp) skip themselves without a GPU.
+    target_compile_definitions(ii_tests PRIVATE "II_TEST_CUDA_PLUGIN_PATH=\"$<TARGET_FILE:ii-backend-cuda>\"")
+    add_dependencies(ii_tests ii-backend-cuda)
+endif()
 
 add_subdirectory(fuzz)
 

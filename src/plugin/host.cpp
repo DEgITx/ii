@@ -643,8 +643,19 @@ Status add_plugin(detail::ContextImpl& context, const ii_plugin_v1& table, std::
 }
 
 Status load_plugins(detail::ContextImpl& context, const ContextOptions& options, std::string_view test_devices) {
+    // ContextOptions first: lookups return the first match, so they override II_PLUGIN_OPTIONS.
     std::vector<std::pair<std::string, std::string>> plugin_options = options.plugin_options;
     plugin_options.emplace_back("test_devices", std::string(test_devices));
+    const std::string environment = platform::get_env("II_PLUGIN_OPTIONS").value_or("");
+    for (std::string_view rest = environment; !rest.empty();) {
+        const std::size_t end = rest.find(';');
+        const std::string_view item = rest.substr(0, end);
+        rest = end == std::string_view::npos ? std::string_view() : rest.substr(end + 1);
+        const std::size_t eq = item.find('=');
+        if (eq != std::string_view::npos && eq > 0) {
+            plugin_options.emplace_back(std::string(item.substr(0, eq)), std::string(item.substr(eq + 1)));
+        }
+    }
     for (const auto& [path, explicit_path] : find_plugins(options)) {
         Result<const ii_plugin_v1*> table = load_library(path);
         if (!table.ok()) {

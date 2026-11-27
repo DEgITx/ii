@@ -218,6 +218,8 @@ public:
     Status reset_states();
 
     /// Enables or disables timing of every step in subsequent runs (costs two clock reads per step; no allocations).
+    /// Steps on devices other than the host are waited for one by one, so that each time is the step's own; work
+    /// that would overlap otherwise runs in sequence.
     void set_profiling(bool enabled);
 
     /// Step timings of the last run; fails unless profiling was enabled for it.

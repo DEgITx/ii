@@ -30,6 +30,7 @@ Context device_context(std::string devices, Allocator* allocator = nullptr) {
     ContextOptions options;
     options.num_threads = 2;
     options.test_devices = std::move(devices);
+    options.plugin_options = {{"cuda.devices", "none"}};  // only the simulated devices, also with a GPU plugin
     options.allocator = allocator;
     return Context::create(std::move(options)).value();
 }

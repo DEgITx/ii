@@ -19,7 +19,8 @@ constexpr const char* kUsage = R"(Usage: ii check-backends [options]
 
 Runs small models of common operations on every backend (except the reference ii-ref) and compares the results with
 ii-ref: checks that backends and plugins work on this machine. Operations a backend does not support are skipped.
-Plugins are loaded as usual (II_PLUGIN_PATH, next to the ii library); simulated devices come from II_TEST_DEVICES.
+Plugins are loaded as usual (II_PLUGIN_PATH, next to the ii library) and configured by II_PLUGIN_OPTIONS; simulated
+devices come from II_TEST_DEVICES.
 
 Options:
   --backends LIST     Comma-separated backends to check (default: all but ii-ref)

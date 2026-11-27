@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-EXTENSIONS = {".cpp", ".hpp", ".h", ".cc", ".c", ".in"}
+EXTENSIONS = {".cpp", ".hpp", ".h", ".cc", ".c", ".cu", ".cuh", ".in"}
 DIRECTORIES = ("include", "src", "tools", "tests", "bench", "examples")
 
 

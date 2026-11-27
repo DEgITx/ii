@@ -405,7 +405,8 @@ public:
 
 ### Plugins
 
-*Implemented in stage 5.2; guide: [docs/guides/backend-plugins.md](guides/backend-plugins.md).*
+*Implemented in stage 5.2; guide: [docs/guides/backend-plugins.md](guides/backend-plugins.md). First real plugin:
+`ii-backend-cuda` (5.3, §12).*
 
 - Backends with large SDKs (ii-cuda, TensorRT, …) are built as separate `ii-backend-<name>` shared libraries so the
   core never depends on their SDKs, and an application linked with ii runs where the SDK is absent.
@@ -421,7 +422,8 @@ public:
   so the planner and runtime treat plugin backends like built-in ones. `ii-test-remote` is also built as the plugin
   `ii-backend-test-remote`; CI runs the whole test suite with the simulated devices coming from it.
 - Plugins are looked up in `ContextOptions::plugin_paths`, in `II_PLUGIN_PATH` and next to the ii library; libraries
-  are loaded once per process and never unloaded. A missing SDK runtime (e.g. no TensorRT DLLs on the user's machine)
+  are loaded once per process and never unloaded. Their options come from `ContextOptions::plugin_options` and the
+  `II_PLUGIN_OPTIONS` environment variable (`key=value` pairs separated by `;`; the context's options win). A missing SDK runtime (e.g. no TensorRT DLLs on the user's machine)
   makes the plugin report itself unavailable — never a crash or a load failure of the core. `Context::plugins()`,
   `ii info` and `ii check-backends` show what was loaded.
 - Built-in backends are registered **explicitly** in `Context::create()` (no static initializers — they break with
@@ -642,6 +644,36 @@ minimax polynomials). Accuracy is stated in the header and verified by sweeps ag
 - **ii-cuda** — maximum performance on NVIDIA: own kernels (quantized matmul, attention, fused elementwise) +
   cuBLASLt for GEMM, NVRTC for generated fused kernels, CUDA Graphs to cut launch overhead in decode. Shares its
   memory domain with the TensorRT plugin.
+
+  *Part 5.3 (the base) is implemented* (`src/backends/cuda/`, the plugin `ii-backend-cuda`):
+  - **Build.** Built where CMake finds a CUDA compiler (`II_BUILD_CUDA`, on by default); on Windows only by the
+    MSVC presets, since nvcc needs MSVC as its host compiler — ii built with MinGW or Clang loads the MSVC-built
+    plugin (the interface is plain C). Kernels are compiled by nvcc for `CMAKE_CUDA_ARCHITECTURES` (default real
+    code for sm_86/89/120 and PTX for sm_75+). The CUDA runtime is linked statically; cuBLASLt and NVRTC are loaded
+    when the plugin starts (`cuda.library_path`, the plugin's directory, `CUDA_PATH`, the toolkit ii was built
+    with, the system path), so a machine without them or without a GPU gets a plugin that reports itself
+    *unavailable* with the reason.
+  - **Device.** One backend per GPU (`ii-cuda`, `ii-cuda.1`, …) with its `DeviceInfo` from the device properties
+    (memory free at start minus a reserve, FP32 peak, memory bandwidth); memory is `cudaMalloc`, queues are CUDA
+    streams (one per session), copies are asynchronous. Kernels report errors found on the GPU (a gather index out
+    of range) through a word of mapped host memory that the queue checks when it synchronizes, so the caller gets
+    the same error as on the CPU.
+  - **Kernels.** Elementwise operations and `fused_elementwise` chains become CUDA C++ generated from the IR (one
+    expression per operation, values in registers, the `cast` rules of ii-ref) and compiled by NVRTC when the
+    kernel is created; identical programs share one module. Matrix products (`matmul` with batch broadcasting,
+    `linear` with the bias in the epilogue, f16 / bf16 weights with f32 activations) use cuBLASLt with descriptors
+    on the stack and the algorithm cached per shape (f32 computes in f32; `cuda.tf32=1` allows TF32). `conv` and
+    `fused_conv`: 1×1 convolutions are one batched GEMM, others im2col + GEMM, grouped ones a direct kernel; the
+    `fused_conv` epilogue is a generated elementwise kernel over the result. nvcc kernels cover reductions
+    (`reduce_*`, `argmax` / `argmin`), `softmax` / `log_softmax`, `layer_norm` / `rms_norm`, data movement
+    (`reshape`, `permute`, `slice`, `expand`, `concat`, `split`, `flip`, `pad`, `tile`, `gather`), `iota`, `fill`,
+    pooling and `resize` (taps precomputed for static shapes). Floats f32 / f16 / bf16; elementwise and movement
+    also integers and bool.
+  - **Verification.** The whole test suite runs with `II_PLUGIN_OPTIONS=cuda.prefer=1` (the GPU reported so fast
+    that the planner gives it everything it supports): 1662 tests pass with ii built by MSVC (Release and Debug)
+    and by MinGW GCC loading the MSVC-built plugin; `tests/unit/plugin/cuda_test.cpp` checks each kernel path
+    against ii-ref; `ii check-backends --backends ii-cuda` passes all 29 cases. ResNet-50, YOLOv8n and BERT-base
+    run on the GPU and match ONNX Runtime; speeds: `bench/results/stage5-cuda.md`.
 - **ii-vulkan** — the universal GPU backend (Windows/Linux/Android, all vendors). GLSL → SPIR-V at build time; heavy
   ops (matmul with cooperative matrices, attention, quantized matmul) are hand-written; elementwise chains are
   generated and compiled at runtime (pipeline cache on disk).
@@ -814,7 +846,8 @@ ii/
 │   │   ├── ref/       reference kernels
 │   │   ├── cpu/       ii-cpu: drivers; isa/ (SIMD layer, math, kernels compiled per ISA)
 │   │   ├── test_remote/  ii-test-remote: a simulated device for multi-device tests
-│   │   ├── cuda/  vulkan/  metal/
+│   │   ├── cuda/      ii-cuda (plugin ii-backend-cuda): device, cuBLASLt GEMM, NVRTC elementwise, nvcc kernels
+│   │   ├── vulkan/  metal/
 │   │   └── plugins/   tensorrt/, onnxruntime/, openvino/, coreml/, …
 │   ├── formats/       onnx/ (+ protobuf wire decoder), npy/npz, gguf, safetensors; later native/
 │   ├── llm/           hparams (+ weight names), graph, tokenizer, unicode, jinja, sampler, llm (API)

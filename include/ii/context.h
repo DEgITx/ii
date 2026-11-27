@@ -62,7 +62,9 @@ struct ContextOptions {
     /// `Context::plugins()` and logged.
     bool search_plugins = true;
 
-    /// Configuration passed to plugins, e.g. {"cuda.device", "1"}; each plugin documents its keys.
+    /// Configuration passed to plugins, e.g. {"cuda.devices", "1"}; each plugin documents its keys. Entries of the
+    /// `II_PLUGIN_OPTIONS` environment variable ("key=value;key=value") are added after these (a key given here
+    /// wins).
     std::vector<std::pair<std::string, std::string>> plugin_options;
 };
 

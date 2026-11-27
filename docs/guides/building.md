@@ -141,6 +141,46 @@ II_TEST_DEVICES=default ii check-backends --plugin build/linux-gcc/plugins/Relea
 
 Writing plugins: [backend-plugins.md](backend-plugins.md).
 
+## The CUDA backend
+
+The NVIDIA GPU backend `ii-cuda` is the plugin `ii-backend-cuda`, built when CMake finds the CUDA Toolkit
+(`-DII_BUILD_CUDA=OFF` skips it). nvcc needs MSVC as its host compiler on Windows, so it is built by the MSVC presets
+(`windows-msvc*`, not the ASan one); Linux builds it with GCC or Clang. An ii built with MinGW or clang-cl uses the
+plugin built by MSVC: the interface between them is plain C.
+
+```bat
+rem a Visual Studio developer prompt (vcvars64.bat), CUDA 12.x or 13.x on PATH
+cmake --preset windows-msvc
+cmake --build build/windows-msvc --config Release
+set II_PLUGIN_PATH=%CD%\build\windows-msvc\plugins\Release
+build\windows-msvc\bin\Release\ii info
+build\windows-msvc\bin\Release\ii check-backends --backends ii-cuda
+build\windows-msvc\bin\Release\ii bench model.onnx
+```
+
+Kernels are compiled for `CMAKE_CUDA_ARCHITECTURES` (default `75-virtual;86-real;89-real;120-real`; `native` builds
+for the GPU of the build machine only, which is faster). At run time the plugin needs an NVIDIA driver, cuBLASLt and
+NVRTC of the toolkit's major version; it finds them in the plugin option `cuda.library_path`, next to the plugin, in
+`CUDA_PATH`, in the toolkit it was built with and on the system's library path (CUDA 13 on Windows keeps its DLLs in
+`bin\x64`, which the plugin also searches). Without them `ii info` lists the plugin as unavailable with the reason.
+
+Options (`ContextOptions::plugin_options` or `II_PLUGIN_OPTIONS=key=value;key=value`):
+
+| Option | Meaning |
+|--------|---------|
+| `cuda.devices` | `all` (default), device indices (`0,2`) or `none` |
+| `cuda.tf32` | `1`: f32 matrix products and convolutions may use TF32 tensor cores (faster, ~1e-3 relative error) |
+| `cuda.library_path` | a directory with cuBLASLt and NVRTC, searched first |
+| `cuda.prefer` | `1`: the device reports itself so fast that the planner gives it everything it supports (tests) |
+
+The whole test suite can run on the GPU (every operation ii-cuda supports goes there):
+
+```bat
+set II_PLUGIN_PATH=%CD%\build\windows-msvc\plugins\Release
+set II_PLUGIN_OPTIONS=cuda.prefer=1
+ctest --preset windows-msvc-release
+```
+
 ## Android
 
 Install the Android NDK (r27 or newer) and point `ANDROID_NDK_HOME` at it, then use the `android-arm64` or

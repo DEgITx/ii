@@ -41,11 +41,13 @@ Context make_context() {
     return Context::create(std::move(options)).value();
 }
 
-/// A context with the CPU backends only, also when II_TEST_DEVICES adds simulated devices: for tests of CPU plans.
+/// A context with the CPU backends only, also when II_TEST_DEVICES adds simulated devices or II_PLUGIN_PATH a GPU
+/// plugin: for tests of CPU plans.
 Context make_cpu_context() {
     ContextOptions options;
     options.num_threads = 2;
     options.test_devices = "none";
+    options.plugin_options = {{"cuda.devices", "none"}};
     return Context::create(std::move(options)).value();
 }
 

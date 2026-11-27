@@ -645,6 +645,13 @@ Status SessionImpl::execute() {
             context.queue = queues[device].get();
             status = step.kernel->run(context);
         }
+        if (profiling && status.ok()) {
+            // Device work is asynchronous: wait for it, so that a step's time is its own.
+            const int device = step.is_transfer() ? (step.transfer_from == 0 ? step.device : 0) : step.device;
+            if (device != 0) {
+                status = queues[static_cast<std::size_t>(device)]->synchronize();
+            }
+        }
         if (!status.ok()) {
             const std::string& name = step.node->name();
             return status.add_context(std::format("step {} ('{}'{}, {})", s, step.node->op_name(),

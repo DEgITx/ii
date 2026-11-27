@@ -86,6 +86,18 @@ against ii-ref.
 **GPU backends** (`ii-cuda`, TensorRT, later Vulkan/Metal) run the same differential suite on GPU runners; TensorRT
 additionally tests engine-cache invalidation (different shapes / precision / version produce a rebuild).
 
+`ii-cuda` (stage 5.3): `tests/unit/plugin/cuda_test.cpp` loads the plugin built with the tests (or the one named by
+`II_TEST_CUDA_PLUGIN_PATH`) and skips itself without a usable GPU. It runs small models with ii-cuda alone against
+ii-ref, one per kernel path (broadcast chains in f16 / bf16, integer arithmetic, saturating casts, reductions over
+any axes, argmax with ties, softmax over inner and outer axes, matmul with broadcast batches and 1-D operands,
+linear with bf16 weights, grouped / 1-D / f16 / pointwise convolutions and fused epilogues, pooling, resize,
+movement), random models, concurrent sessions and errors found on the GPU. Beyond that, the whole test suite runs
+with the GPU preferred for everything it supports — `II_PLUGIN_PATH=<build>/plugins/<config>
+II_PLUGIN_OPTIONS=cuda.prefer=1 ctest ...` — so every model of the unit, conformance and ONNX node tests executes
+on the GPU wherever ii-cuda has a kernel (1662 tests; MSVC Release and Debug, and MinGW GCC loading the MSVC-built
+plugin). Tests of CPU plans and of the simulated devices set `cuda.devices=none`. Fused elementwise chains keep
+intermediate values in f32 like ii-cpu, so models with f16 / bf16 inputs are compared with the 16-bit tolerance.
+
 ### 2.3a Importers and formats (`tests/unit/formats/`, `tests/onnx/`, `tests/models/`)
 - Protobuf decoding (round trips, malformed input), ONNX import of models built in memory (symbolic shape
   arithmetic, conv + batch norm + Gemm against the builder API, functions, constant `If`, external data and its
@@ -229,7 +241,7 @@ Summary only; workflows, triggers, runners and security rules are defined in [ci
 | Linux ARM64 | GCC, Clang | all tests, NEON/dotprod/i8mm paths | stage 0 |
 | macOS ARM64 / x86-64 | Apple Clang | all tests (+ Metal later) | stage 0 |
 | Android ARM64 / x86-64 | NDK Clang | build, tests on emulator (CI) and devices (`ctest --preset android-arm64-release` over adb) | stage 2 (done) |
-| GPU runner (self-hosted, NVIDIA) | MSVC / GCC + CUDA | differential tests for ii-cuda and TensorRT, GPU benchmarks | stage 5 |
+| GPU runner (self-hosted, NVIDIA) | MSVC / GCC + CUDA | differential tests for ii-cuda (the whole suite with `cuda.prefer=1`) and TensorRT, GPU benchmarks | stage 5 (runner: 5.6) |
 | iOS, WebAssembly | Apple Clang, Emscripten | build, tests where possible | stage 6 |
 | Nightly | — | real models, long fuzzing, benchmarks with history | stage 1+ |
 

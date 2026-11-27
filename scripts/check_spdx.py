@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-EXTENSIONS = {".cpp", ".hpp", ".h", ".cc", ".c", ".py", ".cmake", ".in"}
+EXTENSIONS = {".cpp", ".hpp", ".h", ".cc", ".c", ".cu", ".cuh", ".py", ".cmake", ".in"}
 NAMES = {"CMakeLists.txt"}
 EXEMPT = {"cmake/ii.pc.in"}  # pkg-config files cannot contain comments before the variables reliably
 HEADER = "SPDX-License-Identifier: MIT"

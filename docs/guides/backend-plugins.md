@@ -34,7 +34,16 @@ Plugin    ii-backend-test-remote 0.1.0 (loaded)
           F:\ii\build\windows-mingw-gcc\plugins\Release\libii-backend-test-remote.dll
 ```
 
-Plugins take configuration from `ContextOptions::plugin_options` (key/value pairs each plugin documents).
+Plugins take configuration from `ContextOptions::plugin_options` and the `II_PLUGIN_OPTIONS` environment variable
+(`key=value` pairs separated by `;`, e.g. `II_PLUGIN_OPTIONS=cuda.tf32=1;cuda.devices=0`); the context's options win.
+Each plugin documents its keys.
+
+The plugins built with ii:
+
+| Plugin | Backends | Built |
+|---|---|---|
+| `ii-backend-cuda` | `ii-cuda` (one per NVIDIA GPU: `ii-cuda`, `ii-cuda.1`, …) | where the CUDA Toolkit is found; on Windows by MSVC ([building.md](building.md#the-cuda-backend)) |
+| `ii-backend-test-remote` | `ii-test-remote` (simulated devices, `test_devices`) | with the tests |
 
 `ii check-backends` runs small models of common operations on every backend and compares the results with ii-ref —
 a quick check that a plugin works on a machine:
@@ -42,6 +51,7 @@ a quick check that a plugin works on a machine:
 ```
 $ II_TEST_DEVICES=default ii check-backends --plugin build/plugins/Release
 ii-cpu             cpu      27 passed, 0 failed,  2 skipped
+ii-cuda            cuda:0   29 passed, 0 failed,  0 skipped
 ii-test-remote     test:0   29 passed, 0 failed,  0 skipped
 ```
 

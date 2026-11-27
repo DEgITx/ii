@@ -221,16 +221,26 @@ TEST(Plugin, DirectoriesAreScanned) {
     options.search_plugins = false;
     options.test_devices = std::string(kFast);
     options.plugin_paths = {platform::path_to_utf8(file.parent_path())};
+    options.plugin_options = {{"cuda.devices", "none"}};  // the directory may also hold the CUDA plugin
+    auto test_plugins = [](const Context& context) {
+        std::vector<PluginDescription> found;
+        for (const PluginDescription& plugin : context.plugins()) {
+            if (plugin.name == "ii-backend-test-remote") {
+                found.push_back(plugin);
+            }
+        }
+        return found;
+    };
     Result<Context> context = Context::create(options);
     ASSERT_TRUE(context.ok()) << context.status().to_string();
-    ASSERT_EQ(context->plugins().size(), 1u);
-    EXPECT_EQ(context->plugins()[0].state, PluginState::kLoaded);
+    ASSERT_EQ(test_plugins(*context).size(), 1u);
+    EXPECT_EQ(test_plugins(*context)[0].state, PluginState::kLoaded);
 
     // The same plugin named twice is loaded once.
     options.plugin_paths.push_back(ii_test::test_plugin_path());
     context = Context::create(options);
     ASSERT_TRUE(context.ok()) << context.status().to_string();
-    EXPECT_EQ(context->plugins().size(), 1u);
+    EXPECT_EQ(test_plugins(*context).size(), 1u);
 }
 
 TEST(Plugin, FileNames) {

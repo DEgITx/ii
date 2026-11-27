@@ -87,8 +87,8 @@ Status ensure_supported(ir::Graph& graph, const std::vector<const backend::Backe
 }
 
 /// Composite nodes the plan leaves on another device than all of their neighbours (producers and readers), where no
-/// backend implements them. Decomposed, their primitives can run next to the neighbours instead of costing copies
-/// there and back (a backend only has to implement primitives, P3).
+/// backend implements them but some backend runs. Decomposed, their primitives can run next to the neighbours
+/// instead of costing copies there and back (a backend only has to implement primitives, P3).
 std::vector<ir::Node*> stranded_composites(const ir::Graph& graph, const runtime::GraphPlan& plan,
                                            const std::vector<runtime::PlanBackend>& backends) {
     std::unordered_map<const ir::Node*, int> device_of;
@@ -120,11 +120,13 @@ std::vector<ir::Node*> stranded_composites(const ir::Graph& graph, const runtime
         if (neighbours < 0 || neighbours == device_of.at(node.get())) {
             continue;
         }
+        bool reachable = false;  // a backend runs on the neighbours' device: the primitives could move there
         bool native = false;
         for (const runtime::PlanBackend& backend : backends) {
+            reachable = reachable || backend.device == neighbours;
             native = native || (backend.device == neighbours && backend.backend->supports(*node).ok());
         }
-        if (!native) {
+        if (reachable && !native) {
             stranded.push_back(node.get());
         }
     }
