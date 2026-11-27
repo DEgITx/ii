@@ -30,14 +30,32 @@ ii 0.1.0 (stage 4), MinGW-w64 GCC 14.2, kernel variant `avx_vnni`, 20 threads. M
 
 ### Against llama.cpp
 
-Not measured: the comparison needs running llama.cpp's `llama-bench` on this machine (official release b12728,
-`llama-b12728-bin-win-cpu-x64.zip`), which the sandbox of the session that produced these numbers did not allow.
-Command for the same tests:
+llama.cpp b12728 (official Windows CPU release `llama-b12728-bin-win-cpu-x64.zip`, Clang 22.1.8, backend
+`ggml-cpu-alderlake`: AVX2 + AVX-VNNI, flash attention `auto`) against ii on the same machine and the same GGUF files,
+run one after the other. Each side at its best thread count of 8 / 16 / 20 (in parentheses); llama.cpp reports the mean
+of its runs, ii the median.
 
 ```sh
-llama-bench -m <model>.gguf -p 512 -n 128 -r 3          # llama.cpp
-ii bench <model>.gguf --llm -p 512 -n 128 -r 3 --ctx 1024
+llama-bench -m <model>.gguf -p 512 -n 128 -r 3 -t 8,16,20
+ii bench <model>.gguf --llm -p 512 -n 128 -r 3 --ctx 1024 --threads 20   # and 16
 ```
+
+| model | pp512 ii | pp512 llama.cpp | ii / llama.cpp | tg128 ii | tg128 llama.cpp | ii / llama.cpp |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen2.5-0.5B-Instruct q4_k_m | 2617 (20) | 1264 (20) | 2.07 | 174 (16) | 180 (16) | 0.97 |
+| Qwen3-0.6B q8_0 | 2479 (20) | 1100 (20) | 2.25 | 107 (16) | 114 (16) | 0.94 |
+| TinyLlama-1.1B-Chat q4_k_m | 1191 (20) | 1067 (20) | 1.12 | 107 (20) | 109 (16) | 0.98 |
+| Llama-3.2-1B-Instruct q4_k_m | 1201 (20) | 1114 (20) | 1.08 | 86 (16) | 92 (16) | 0.94 |
+| gemma-3-1b-it q4_k_m | 1433 (20) | 686 (20) | 2.09 | 86 (20) | 91 (20) | 0.94 |
+
+- **Prompt processing:** ii is faster on every model. The gain is 2× and more where most weights are `q5_0` / `q8_0`
+  (Qwen2.5, Qwen3) or the output matrix is large (gemma 3: 262k tokens), and 8-12% on the models made mostly of
+  `q4_K` / `q6_K` (TinyLlama, Llama 3.2).
+- **Generation:** llama.cpp is 2-6% faster: it reads 72 GB/s of weights per second on Qwen3 and Llama 3.2, ii
+  68 GB/s. Both are limited by memory; the plan below (prefetch of the next panels, threads per machine) targets
+  this gap.
+- The best thread count differs between the phases for both libraries: 20 for prompts, 16 for generation on most
+  models (E-cores add compute but little memory throughput).
 
 ## Qualcomm Snapdragon 732G (2 × Cortex-A76 + 6 × Cortex-A55), Android 13
 

@@ -174,11 +174,11 @@ OpenBLAS — в `bench/results/`.
 > (9.1393 против 9.1365 на 8 фрагментах; 9.2903 = 9.2903 на 20), q4_k_m — +3.9%. Скорость (Core Ultra 7 265KF,
 > 20 потоков): Qwen2.5-0.5B q4_k_m pp512 ≈ 2570 / tg128 ≈ 157 ток/с, TinyLlama q4_k_m ≈ 1170 / 99, Llama-3.2-1B
 > q4_k_m ≈ 1180 / 85; телефон: Qwen2.5-0.5B pp128 134 / tg64 21 ток/с —
-> [bench/results/stage4-llm.md](../bench/results/stage4-llm.md). Сравнение с llama.cpp на этой машине не выполнено
-> (запуск скачанного бинарника llama.cpp был заблокирован политикой песочницы) — команда для сравнения в
-> stage4-llm.md. Перенесено: tiled flash-attention для длинных промптов, панели для q5_K и типов q2_K/q3_K,
-> `avx512_vnni`/`neon_i8mm`, yarn/longrope, MoE, пакетная обработка последовательностей, конвертация HF → GGUF в
-> `ii quantize`.
+> [bench/results/stage4-llm.md](../bench/results/stage4-llm.md). Против llama.cpp b12728 на той же машине и тех же
+> GGUF: pp512 у ii быстрее на всех пяти моделях (×1.08–2.25), tg128 — 0.94–0.98 от llama.cpp (оба упираются в
+> память; план — prefetch панелей). Перенесено: tiled flash-attention для длинных промптов, панели для q5_K и
+> типов q2_K/q3_K, `avx512_vnni`/`neon_i8mm`, yarn/longrope, MoE, пакетная обработка последовательностей,
+> конвертация HF → GGUF в `ii quantize`.
 
 **Цель:** `ii chat model.gguf` быстро работает на обычном CPU (в т.ч. на Android).
 
