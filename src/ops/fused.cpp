@@ -195,7 +195,27 @@ Result<std::unique_ptr<ir::Graph>> parse_fused_program(const ir::Node& node) {
     return program;
 }
 
+namespace {
+
+Status infer_transfer(const InferContext& context, std::vector<TensorType>& outputs) {
+    outputs.push_back(*context.input(0));
+    return ok_status();
+}
+
+}  // namespace
+
 void register_internal_ops(ir::OpRegistry& registry) {
+    registry.add(OpSchema{
+        .name = kTransfer,
+        .category = "internal",
+        .doc = "Copies a value from the memory of device `from` to device `to` (inserted by the planner between "
+               "nodes on different devices; executed by the runtime).",
+        .inputs = {InputSpec{"x"}},
+        .outputs = {OutputSpec{"y"}},
+        .attrs = {AttrSpec{"from", AttrKind::kString, std::nullopt}, AttrSpec{"to", AttrKind::kString, std::nullopt}},
+        .infer = infer_transfer,
+        .flags = ir::kOpDataMovement | ir::kOpInternal | ir::kOpNoConstantFold,
+    });
     registry.add(OpSchema{
         .name = kFusedElementwise,
         .category = "internal",

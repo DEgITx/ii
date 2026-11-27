@@ -35,6 +35,7 @@ add_executable(ii_tests
     unit/platform/mapped_file_test.cpp
     unit/platform/platform_test.cpp
     unit/runtime/memory_planner_test.cpp
+    unit/runtime/multi_device_test.cpp
     unit/runtime/session_test.cpp
     unit/ir/graph_test.cpp
     unit/llm/jinja_test.cpp

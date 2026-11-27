@@ -6,6 +6,9 @@
 /// the runtime owns scheduling and memory. Graph backends (TensorRT, ...; later stages) compile whole subgraphs into
 /// a single `Kernel` with the subgraph's inputs and outputs.
 ///
+/// A backend runs on one device (`device.h`). The planner chooses a backend for every node from the estimates of
+/// the backends (`estimate_us`) and the cost of moving values between devices.
+///
 /// Kernels are created once per compiled `Program`, are immutable and shared by all sessions; `run()` receives
 /// concrete shapes and memory and must not allocate (P7) — it may use the workspace it requested instead.
 #pragma once
@@ -16,7 +19,9 @@
 #include <ii/status.h>
 #include <ii/tensor.h>
 
+#include "backend/device.h"
 #include "ir/graph.h"
+#include "ir/op_schema.h"
 
 #include <cstddef>
 #include <memory>
@@ -49,8 +54,9 @@ struct TensorView {
 struct KernelContext {
     std::span<const TensorView> inputs;
     std::span<const TensorView> outputs;
-    std::span<std::byte> workspace;  ///< 64-byte aligned scratch memory of the requested size
+    std::span<std::byte> workspace;  ///< 64-byte aligned scratch memory of the requested size, on the device
     Executor* executor = nullptr;    ///< for parallel work; never null during execution
+    Queue* queue = nullptr;          ///< kernels of a device other than the host enqueue their work here
 
     /// Input `index`; an absent view for omitted trailing optional inputs (a node may have fewer inputs than its
     /// schema declares).
@@ -84,6 +90,14 @@ public:
         return false;
     }
 
+    /// True if the kernel copied constant input `input` when it was created (into its own packed layout or device
+    /// memory) and never reads it at run time. The runtime then does not copy that constant to the kernel's device;
+    /// the input pointer passed to `run` may point to another device.
+    virtual bool captures_input(int input) const {
+        (void)input;
+        return false;
+    }
+
 protected:
     Kernel() = default;
     Kernel(const Kernel&) = default;
@@ -98,8 +112,17 @@ public:
     /// Short unique name, e.g. "ii-ref".
     virtual std::string_view name() const noexcept = 0;
 
-    /// The device whose memory the kernels read and write.
-    virtual Device device() const noexcept { return Device::cpu(); }
+    /// The device whose memory the kernels read and write, and its performance figures.
+    virtual const DeviceInfo& device_info() const noexcept = 0;
+    Device device() const noexcept { return device_info().device; }
+
+    /// Memory and queues of the device; nullptr for host backends. Backends on the same device may return the same
+    /// object; the runtime uses the first one.
+    virtual DeviceApi* device_api() const noexcept { return nullptr; }
+
+    /// Estimated execution time of a supported node with the given concrete shapes, in microseconds. The default is
+    /// the roofline of `device_info()`: max(flops / peak, bytes / bandwidth) + launch overhead.
+    virtual double estimate_us(const ir::CostContext& context) const;
 
     /// OK if the backend can execute the node; otherwise an `kUnsupported` status explaining why (shown by
     /// `ii inspect --plan`).

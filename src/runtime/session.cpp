@@ -5,9 +5,11 @@
 #include "runtime/memory_planner.h"
 #include "runtime/runtime.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <format>
+#include <limits>
 
 namespace ii {
 
@@ -65,6 +67,27 @@ std::string shape_text(const Shape& shape) {
 
 }  // namespace
 
+Status SessionImpl::initialize_state(std::size_t s) {
+    const ProgramImpl& p = *program;
+    const Tensor& state = states[s];
+    const Tensor& initial = p.states[s].initial;
+    const bool has_initial = initial.defined() && initial.shape() == state.shape();
+    const int device = p.states[s].device;
+    if (device == 0) {
+        if (has_initial) {
+            return state.copy_from(initial);
+        }
+        std::memset(state.data(), 0, state.nbytes());
+        return ok_status();
+    }
+    backend::Queue& queue = *queues[static_cast<std::size_t>(device)];
+    if (has_initial) {
+        II_ASSIGN_OR_RETURN(const Tensor dense, initial.contiguous(p.context.allocator()));
+        return queue.copy_to_device(state.data(), dense.data(), state.nbytes());
+    }
+    return queue.fill_zero(state.data(), state.nbytes());
+}
+
 Status SessionImpl::allocate_states() {
     const ProgramImpl& p = *program;
     Allocator& allocator = p.context.allocator();
@@ -81,32 +104,42 @@ Status SessionImpl::allocate_states() {
         if (states[s].defined() && state_shapes[s] == shape) {
             continue;
         }
-        II_ASSIGN_OR_RETURN(states[s], Tensor::empty(info.type.dtype, shape, allocator));
-        state_shapes[s] = shape;
-        const Tensor& initial = p.states[s].initial;
-        if (initial.defined() && initial.shape() == shape) {
-            II_TRY(states[s].copy_from(initial));
+        const int device = p.states[s].device;
+        if (device == 0) {
+            II_ASSIGN_OR_RETURN(states[s], Tensor::empty(info.type.dtype, shape, allocator));
         } else {
-            std::memset(states[s].data(), 0, states[s].nbytes());
+            const std::size_t nbytes = storage_size(info.type.dtype, shape.numel());
+            backend::DeviceApi& api = *p.devices[static_cast<std::size_t>(device)].api;
+            II_ASSIGN_OR_RETURN(std::shared_ptr<Buffer> buffer, api.allocate(std::max<std::size_t>(nbytes, 1)));
+            II_ASSIGN_OR_RETURN(states[s],
+                                Tensor::view(std::move(buffer), info.type.dtype, shape, contiguous_strides(shape)));
         }
+        state_shapes[s] = shape;
+        II_TRY(initialize_state(s));
     }
     return ok_status();
 }
 
 Status SessionImpl::reset_states() {
-    const ProgramImpl& p = *program;
-    for (std::size_t s = 0; s < p.states.size(); ++s) {
-        if (!states[s].defined()) {
-            continue;
-        }
-        const Tensor& initial = p.states[s].initial;
-        if (initial.defined() && initial.shape() == states[s].shape()) {
-            II_TRY(states[s].copy_from(initial));
-        } else {
-            std::memset(states[s].data(), 0, states[s].nbytes());
+    for (std::size_t s = 0; s < program->states.size(); ++s) {
+        if (states[s].defined()) {
+            II_TRY(initialize_state(s));
         }
     }
-    return ok_status();
+    return synchronize();
+}
+
+Status SessionImpl::synchronize() {
+    Status first = ok_status();
+    for (const std::unique_ptr<backend::Queue>& queue : queues) {
+        if (queue) {
+            Status status = queue->synchronize();
+            if (first.ok() && !status.ok()) {
+                first = std::move(status);
+            }
+        }
+    }
+    return first;
 }
 
 Status SessionImpl::prepare() {
@@ -311,7 +344,7 @@ Status SessionImpl::prepare() {
             buffer_last[static_cast<std::size_t>(v)] = last_use_of(v);
             buffer_size[static_cast<std::size_t>(v)] = nbytes_of(v);
         }
-        if (step.outputs.size() != 1 || step.inputs.empty() || step.inputs[0] < 0) {
+        if (step.is_transfer() || step.outputs.size() != 1 || step.inputs.empty() || step.inputs[0] < 0) {
             continue;
         }
         const int out = step.outputs[0];
@@ -371,16 +404,20 @@ Status SessionImpl::prepare() {
         }
     }
 
-    // --- Memory plan ---
-    std::vector<runtime::MemoryRequest> requests;
-    std::vector<int> request_value;  // value index, or -(step + 1) for a workspace
+    // --- Memory plan: one arena per device ---
+    const std::size_t num_devices = p.devices.size();
+    std::vector<std::vector<runtime::MemoryRequest>> requests(num_devices);
+    // Per request: the value index, -(step + 1) for a workspace, or kStaging - state for a state staging buffer.
+    std::vector<std::vector<int>> request_value(num_devices);
+    constexpr int kStaging = std::numeric_limits<int>::min() / 2;
     for (std::size_t v = 0; v < p.values.size(); ++v) {
         const ValueInfo& info = p.values[v];
         if (info.kind != ir::ValueKind::kNode || root[v] != static_cast<int>(v)) {
             continue;
         }
-        requests.push_back(runtime::MemoryRequest{buffer_size[v], info.producer, buffer_last[v]});
-        request_value.push_back(static_cast<int>(v));
+        const auto d = static_cast<std::size_t>(info.device);
+        requests[d].push_back(runtime::MemoryRequest{buffer_size[v], info.producer, buffer_last[v]});
+        request_value[d].push_back(static_cast<int>(v));
     }
     next.workspace_sizes.assign(p.steps.size(), 0);
     next.workspace_offsets.assign(p.steps.size(), 0);
@@ -388,6 +425,9 @@ Status SessionImpl::prepare() {
     std::vector<Shape> out_shapes;
     for (std::size_t s = 0; s < p.steps.size(); ++s) {
         const Step& step = p.steps[s];
+        if (step.is_transfer()) {
+            continue;
+        }
         in_shapes.clear();
         out_shapes.clear();
         for (const int v : step.inputs) {
@@ -399,46 +439,46 @@ Status SessionImpl::prepare() {
         const std::size_t size = step.kernel->workspace_size(in_shapes, out_shapes);
         next.workspace_sizes[s] = size;
         if (size > 0) {
-            requests.push_back(runtime::MemoryRequest{size, static_cast<int>(s), static_cast<int>(s)});
-            request_value.push_back(-static_cast<int>(s) - 1);
+            const auto d = static_cast<std::size_t>(step.device);
+            requests[d].push_back(runtime::MemoryRequest{size, static_cast<int>(s), static_cast<int>(s)});
+            request_value[d].push_back(-static_cast<int>(s) - 1);
         }
     }
     // Staging for state updates whose source is another state (e.g. swapping two states).
     const int end = static_cast<int>(p.steps.size());
-    std::vector<std::size_t> staging_request(p.states.size(), static_cast<std::size_t>(-1));
     for (std::size_t s = 0; s < p.states.size(); ++s) {
         const int update = p.states[s].update;
         if (update >= 0 && p.values[static_cast<std::size_t>(update)].kind == ir::ValueKind::kState &&
             update != p.states[s].value) {
-            staging_request[s] = requests.size();
-            requests.push_back(
+            const auto d = static_cast<std::size_t>(p.states[s].device);
+            requests[d].push_back(
                 runtime::MemoryRequest{storage_size(p.values[static_cast<std::size_t>(update)].type.dtype,
                                                     next.shapes[static_cast<std::size_t>(update)].numel()),
                                        end, end});
-            request_value.push_back(std::numeric_limits<int>::min());
+            request_value[d].push_back(kStaging - static_cast<int>(s));
         }
     }
-    const runtime::MemoryPlan memory = runtime::plan_memory(requests);
-    next.arena_size = memory.total;
     next.offsets.assign(p.values.size(), ExecutionPlan::kNotInArena);
-    for (std::size_t r = 0; r < requests.size(); ++r) {
-        const int target = request_value[r];
-        if (target >= 0) {
-            next.offsets[static_cast<std::size_t>(target)] = memory.offsets[r];
-        } else if (target != std::numeric_limits<int>::min()) {
-            next.workspace_offsets[static_cast<std::size_t>(-target - 1)] = memory.offsets[r];
+    next.state_staging_offsets.assign(p.states.size(), ExecutionPlan::kNotInArena);
+    next.arena_sizes.assign(num_devices, 0);
+    for (std::size_t d = 0; d < num_devices; ++d) {
+        const runtime::MemoryPlan memory = runtime::plan_memory(requests[d], d == 0 ? 64 : 256);
+        next.arena_sizes[d] = memory.total;
+        for (std::size_t r = 0; r < requests[d].size(); ++r) {
+            const int target = request_value[d][r];
+            if (target >= 0) {
+                next.offsets[static_cast<std::size_t>(target)] = memory.offsets[r];
+            } else if (target <= kStaging) {
+                next.state_staging_offsets[static_cast<std::size_t>(kStaging - target)] = memory.offsets[r];
+            } else {
+                next.workspace_offsets[static_cast<std::size_t>(-target - 1)] = memory.offsets[r];
+            }
         }
     }
     for (std::size_t v = 0; v < p.values.size(); ++v) {
         if (p.values[v].kind == ir::ValueKind::kNode && root[v] != static_cast<int>(v)) {
             next.offsets[v] =
                 root[v] >= 0 ? next.offsets[static_cast<std::size_t>(root[v])] : ExecutionPlan::kNotInArena;
-        }
-    }
-    next.state_staging_offsets.assign(p.states.size(), ExecutionPlan::kNotInArena);
-    for (std::size_t s = 0; s < p.states.size(); ++s) {
-        if (staging_request[s] != static_cast<std::size_t>(-1)) {
-            next.state_staging_offsets[s] = memory.offsets[staging_request[s]];
         }
     }
 
@@ -463,9 +503,19 @@ Status SessionImpl::prepare() {
         next.input_shapes.push_back(inputs[i].shape());
     }
 
-    // --- Commit: arena and states ---
-    if (!arena || arena->size() < next.arena_size) {
-        II_ASSIGN_OR_RETURN(arena, Buffer::allocate(next.arena_size, p.context.allocator()));
+    // --- Commit: arenas and states ---
+    for (std::size_t d = 0; d < num_devices; ++d) {
+        std::shared_ptr<Buffer>& arena = arenas[d];
+        const std::size_t size = std::max<std::size_t>(next.arena_sizes[d], 1);
+        if (arena && arena->size() >= size) {
+            continue;
+        }
+        if (d == 0) {
+            II_ASSIGN_OR_RETURN(arena, Buffer::allocate(size, p.context.allocator()));
+        } else {
+            arena.reset();  // free the old arena first
+            II_ASSIGN_OR_RETURN(arena, p.devices[d].api->allocate(size));
+        }
     }
     if (planned) {
         if (plan_cache.size() == kPlanCacheSize) {
@@ -479,6 +529,18 @@ Status SessionImpl::prepare() {
 }
 
 Status SessionImpl::run() {
+    Status status = execute();
+    // Device work still in flight must finish before the caller reuses inputs or reads results, also after errors.
+    Status synchronized = synchronize();
+    if (!status.ok()) {
+        return status;
+    }
+    II_TRY(synchronized);
+    has_run = true;
+    return ok_status();
+}
+
+Status SessionImpl::execute() {
     const ProgramImpl& p = *program;
     for (std::size_t i = 0; i < p.inputs.size(); ++i) {
         if (!inputs[i].defined()) {
@@ -487,7 +549,9 @@ Status SessionImpl::run() {
     }
     II_TRY(prepare());
 
-    auto* base = static_cast<std::byte*>(arena->data());
+    for (std::size_t d = 0; d < arenas.size(); ++d) {
+        bases[d] = static_cast<std::byte*>(arenas[d]->data());
+    }
     for (std::size_t v = 0; v < p.values.size(); ++v) {
         const ValueInfo& info = p.values[v];
         switch (info.kind) {
@@ -504,7 +568,9 @@ Status SessionImpl::run() {
             if (plan.state_alias[v] >= 0) {
                 value_data[v] = states[static_cast<std::size_t>(plan.state_alias[v])].data();
             } else {
-                value_data[v] = plan.offsets[v] != ExecutionPlan::kNotInArena ? base + plan.offsets[v] : nullptr;
+                value_data[v] = plan.offsets[v] != ExecutionPlan::kNotInArena
+                                    ? bases[static_cast<std::size_t>(info.device)] + plan.offsets[v]
+                                    : nullptr;
             }
             break;
         }
@@ -545,23 +611,45 @@ Status SessionImpl::run() {
                 value_data[static_cast<std::size_t>(step.inputs[0])];
             continue;
         }
-        const std::size_t begin = plan.view_begin[s];
-        const std::size_t middle = begin + step.inputs.size();
-        const std::size_t end = plan.view_begin[s + 1];
-        for (std::size_t i = 0; i < step.inputs.size(); ++i) {
-            const int v = step.inputs[i];
-            plan.views[begin + i].data = v < 0 ? nullptr : value_data[static_cast<std::size_t>(v)];
+        Status status;
+        if (step.is_transfer()) {
+            const auto in = static_cast<std::size_t>(step.inputs[0]);
+            void* destination = value_data[static_cast<std::size_t>(step.outputs[0])];
+            const std::size_t nbytes = storage_size(p.values[in].type.dtype, plan.shapes[in].numel());
+            if (step.transfer_from == 0) {
+                status =
+                    queues[static_cast<std::size_t>(step.device)]->copy_to_device(destination, value_data[in], nbytes);
+            } else {
+                backend::Queue& queue = *queues[static_cast<std::size_t>(step.transfer_from)];
+                status = queue.copy_to_host(destination, value_data[in], nbytes);
+                if (status.ok()) {
+                    status = queue.synchronize();  // the host steps after this one read the copy
+                }
+            }
+        } else {
+            const std::size_t begin = plan.view_begin[s];
+            const std::size_t middle = begin + step.inputs.size();
+            const std::size_t end = plan.view_begin[s + 1];
+            for (std::size_t i = 0; i < step.inputs.size(); ++i) {
+                const int v = step.inputs[i];
+                plan.views[begin + i].data = v < 0 ? nullptr : value_data[static_cast<std::size_t>(v)];
+            }
+            for (std::size_t o = 0; o < step.outputs.size(); ++o) {
+                plan.views[middle + o].data = value_data[static_cast<std::size_t>(step.outputs[o])];
+            }
+            const auto device = static_cast<std::size_t>(step.device);
+            context.inputs = std::span<const backend::TensorView>(plan.views.data() + begin, middle - begin);
+            context.outputs = std::span<const backend::TensorView>(plan.views.data() + middle, end - middle);
+            context.workspace =
+                std::span<std::byte>(bases[device] + plan.workspace_offsets[s], plan.workspace_sizes[s]);
+            context.queue = queues[device].get();
+            status = step.kernel->run(context);
         }
-        for (std::size_t o = 0; o < step.outputs.size(); ++o) {
-            plan.views[middle + o].data = value_data[static_cast<std::size_t>(step.outputs[o])];
-        }
-        context.inputs = std::span<const backend::TensorView>(plan.views.data() + begin, middle - begin);
-        context.outputs = std::span<const backend::TensorView>(plan.views.data() + middle, end - middle);
-        context.workspace = std::span<std::byte>(base + plan.workspace_offsets[s], plan.workspace_sizes[s]);
-        if (Status status = step.kernel->run(context); !status.ok()) {
+        if (!status.ok()) {
             const std::string& name = step.node->name();
             return status.add_context(std::format("step {} ('{}'{}, {})", s, step.node->op_name(),
-                                                  name.empty() ? "" : " " + name, step.backend->name()));
+                                                  name.empty() ? "" : " " + name,
+                                                  step.backend != nullptr ? step.backend->name() : "transfer"));
         }
         if (profiling) {
             step_times[2 * s + 1] = elapsed_ns();
@@ -569,6 +657,7 @@ Status SessionImpl::run() {
     }
 
     // Bound outputs that were not written in place (inputs, constants, states, or the same value bound twice).
+    // Outputs are always in host memory (the planner adds transfers).
     for (std::size_t o = 0; o < p.outputs.size(); ++o) {
         const Tensor& bound = bound_outputs[o];
         const auto v = static_cast<std::size_t>(p.outputs[o]);
@@ -578,11 +667,19 @@ Status SessionImpl::run() {
     }
 
     // State updates: stage updates read from other states first, then write all states.
+    auto copy_on = [&](int device, void* destination, const void* source, std::size_t nbytes) -> Status {
+        if (device == 0) {
+            std::memmove(destination, source, nbytes);
+            return ok_status();
+        }
+        return queues[static_cast<std::size_t>(device)]->copy(destination, source, nbytes);
+    };
     for (std::size_t s = 0; s < p.states.size(); ++s) {
         if (plan.state_staging_offsets[s] != ExecutionPlan::kNotInArena) {
             const auto update = static_cast<std::size_t>(p.states[s].update);
-            std::memcpy(base + plan.state_staging_offsets[s], value_data[update],
-                        storage_size(p.values[update].type.dtype, plan.shapes[update].numel()));
+            const int device = p.states[s].device;
+            II_TRY(copy_on(device, bases[static_cast<std::size_t>(device)] + plan.state_staging_offsets[s],
+                           value_data[update], storage_size(p.values[update].type.dtype, plan.shapes[update].numel())));
         }
     }
     for (std::size_t s = 0; s < p.states.size(); ++s) {
@@ -590,14 +687,14 @@ Status SessionImpl::run() {
         if (update < 0) {
             continue;
         }
+        const int device = p.states[s].device;
         const void* source = plan.state_staging_offsets[s] != ExecutionPlan::kNotInArena
-                                 ? base + plan.state_staging_offsets[s]
+                                 ? bases[static_cast<std::size_t>(device)] + plan.state_staging_offsets[s]
                                  : value_data[static_cast<std::size_t>(update)];
         if (source != states[s].data()) {
-            std::memmove(states[s].data(), source, states[s].nbytes());
+            II_TRY(copy_on(device, states[s].data(), source, states[s].nbytes()));
         }
     }
-    has_run = true;
     if (profiling) {
         run_time_ns = elapsed_ns();
         profiled = true;
@@ -622,8 +719,8 @@ Result<Tensor> SessionImpl::value_tensor(int value) const {
         return states[static_cast<std::size_t>(state)];
     }
     const Shape& shape = plan.shapes[static_cast<std::size_t>(value)];
-    return Tensor::view(arena, info.type.dtype, shape, contiguous_strides(shape),
-                        plan.offsets[static_cast<std::size_t>(value)]);
+    return Tensor::view(arenas[static_cast<std::size_t>(info.device)], info.type.dtype, shape,
+                        contiguous_strides(shape), plan.offsets[static_cast<std::size_t>(value)]);
 }
 
 }  // namespace detail
@@ -639,7 +736,14 @@ Result<Session> Program::new_session() const {
     impl->states.resize(impl_->states.size());
     impl->state_shapes.resize(impl_->states.size());
     impl->value_data.resize(impl_->values.size());
+    impl->arenas.resize(impl_->devices.size());
+    impl->bases.resize(impl_->devices.size());
+    impl->queues.resize(impl_->devices.size());
+    for (std::size_t d = 1; d < impl_->devices.size(); ++d) {
+        II_ASSIGN_OR_RETURN(impl->queues[d], impl_->devices[d].api->create_queue());
+    }
     II_TRY(impl->allocate_states());
+    II_TRY(impl->synchronize());
     return Session(std::move(impl));
 }
 
@@ -736,7 +840,16 @@ Result<Tensor> Session::state(std::string_view name) const {
     if (!state.defined()) {
         return errors::invalid_argument("state '{}' has a symbolic shape and is allocated by the first run()", name);
     }
-    return state;
+    const int device = impl_->program->states[static_cast<std::size_t>(index)].device;
+    if (device == 0) {
+        return state;
+    }
+    // A state in device memory: a host copy.
+    II_ASSIGN_OR_RETURN(Tensor copy, Tensor::empty(state.dtype(), state.shape(), impl_->program->context.allocator()));
+    backend::Queue& queue = *impl_->queues[static_cast<std::size_t>(device)];
+    II_TRY(queue.copy_to_host(copy.data(), state.data(), state.nbytes()));
+    II_TRY(queue.synchronize());
+    return copy;
 }
 
 Status Session::reset_states() {
@@ -761,7 +874,9 @@ Result<Profile> Session::profile() const {
         StepProfile item;
         item.op = std::string(step.node->op_name());
         item.name = step.node->name();
-        item.backend = s.plan.alias_steps[i] != 0 ? "view" : std::string(step.backend->name());
+        item.backend = s.plan.alias_steps[i] != 0 ? "view"
+                       : step.is_transfer()       ? "transfer"
+                                                  : std::string(step.backend->name());
         if (!step.outputs.empty()) {
             const auto v = static_cast<std::size_t>(step.outputs[0]);
             item.output = std::string(to_string(p.values[v].type.dtype)) + s.plan.shapes[v].to_string();

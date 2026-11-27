@@ -58,7 +58,29 @@ CpuConfig make_config(Isa isa, int threads) {
     return config;
 }
 
-CpuBackend::CpuBackend(CpuConfig config) : config_(config) {
+namespace {
+
+/// Single-precision operations per cycle and core of an ISA variant (FMA units x lanes x 2).
+double flops_per_cycle(Isa isa) noexcept {
+    switch (isa) {
+    case Isa::kAvx2:
+    case Isa::kAvxVnni:
+        return 32;
+    case Isa::kAvx512:
+        return 64;
+    case Isa::kNeon:
+    case Isa::kNeonDotprod:
+        return 16;
+    case Isa::kGeneric:
+        break;
+    }
+    return 8;
+}
+
+}  // namespace
+
+CpuBackend::CpuBackend(CpuConfig config)
+    : config_(config), info_(backend::host_device_info(config.threads, flops_per_cycle(config.isa))) {
     register_elementwise_kernels(*this);
     register_gemm_kernels(*this);
     register_reduction_kernels(*this);

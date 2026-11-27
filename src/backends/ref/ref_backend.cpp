@@ -10,6 +10,11 @@ namespace {
 class RefBackend final : public backend::KernelBackend {
 public:
     RefBackend() {
+        // Plain single-threaded loops in double precision: far below the machine's peaks. The planner uses ii-ref
+        // only for what no faster backend supports.
+        info_ = backend::host_device_info(1, 1);
+        info_.gflops = 0.5;
+        info_.bandwidth_gbs = 2;
         register_elementwise_kernels(*this);
         register_reduction_kernels(*this);
         register_linalg_kernels(*this);
@@ -20,6 +25,10 @@ public:
     }
 
     std::string_view name() const noexcept override { return kBackendName; }
+    const backend::DeviceInfo& device_info() const noexcept override { return info_; }
+
+private:
+    backend::DeviceInfo info_;
 };
 
 }  // namespace

@@ -336,21 +336,29 @@ namespace ii::backend {  // src/backend/backend.h
 class Backend {
 public:
     virtual std::string_view name() const noexcept = 0;
-    virtual Device device() const noexcept;              // the memory its kernels read and write
-    /// OK, or kUnsupported with the reason (dtype, attributes, shapes) — shown by `ii inspect`.
+    /// The device whose memory its kernels read and write, with capacity and speed (the planner's cost model).
+    virtual const DeviceInfo& device_info() const noexcept = 0;
+    /// Memory and queues of a device other than the host (nullptr for host backends).
+    virtual DeviceApi* device_api() const noexcept;
+    /// OK, or kUnsupported with the reason (dtype, attributes, shapes) — shown by `ii inspect --plan`.
     virtual Status supports(const ir::Node&) const = 0;
+    /// Estimated time of a node with concrete shapes; default: roofline of device_info() + launch overhead.
+    virtual double estimate_us(const ir::CostContext&) const;
     virtual Result<std::unique_ptr<Kernel>> create_kernel(const ir::Node&) const = 0;
-    // Grows with the multi-backend work (stage 5): devices() with DeviceInfo/PerfModel, estimate(node, device),
-    // and for graph backends claim(graph) → subgraphs, each compiled into one Kernel.
+    // Graph backends (TensorRT, part 5.5): claim(graph) → subgraphs, each compiled into one Kernel.
 };
 
 /// Executes one node (or a fused subgraph). Created once per Program and shared by all its sessions.
 class Kernel {
 public:
-    /// Scratch memory for concrete shapes; planned into the session arena like any other buffer.
+    /// Scratch memory for concrete shapes; planned into the session arena (of the kernel's device).
     virtual std::size_t workspace_size(std::span<const Shape> inputs, std::span<const Shape> outputs) const;
-    /// Dense row-major inputs/outputs with concrete shapes. Thread-safe and allocation-free.
+    /// Dense row-major inputs/outputs with concrete shapes. Thread-safe and allocation-free. Kernels of a device
+    /// other than the host enqueue their work on `context.queue` (a CUDA stream).
     virtual Status run(const KernelContext&) const = 0;
+    /// True if the kernel copied a constant input when it was created (packed layout, device memory) and never
+    /// reads it: the runtime then does not copy that constant to the device.
+    virtual bool captures_input(int input) const;
 };
 
 } // namespace ii::backend
@@ -358,12 +366,30 @@ public:
 
 ### Devices, memory domains, synchronization
 
-- A `Device` allocates `Buffer`s, copies data (host↔device, device↔device), provides `Stream`s and `Event`s.
-- **Memory domains.** Several backends may work on the same physical memory: `ii-ref`, `ii-cpu` and ORT-CPU share
-  the host domain; `ii-cuda`, TensorRT and cuBLAS share the domain of one CUDA device. Buffers move between backends
-  of the same domain **without copies** — only stream synchronization. Unified-memory devices (Apple, iGPUs) expose
-  the host domain as well.
-- Cross-domain transitions are explicit `transfer` steps in the plan, with synchronization events.
+`src/backend/device.h`:
+
+- **`DeviceInfo`** — the device (`cpu`, `cuda:0`, `test:0`), its name, the memory ii may use, peak GFLOP/s, memory
+  bandwidth, kernel launch overhead and the host link (bandwidth, latency): the inputs of the planner's cost model.
+  Host figures are a rough estimate from the core count and ISA (`ii info --roofline` measures the real ones).
+- **`DeviceApi`** (one per device, thread-safe) allocates device memory as reference-counted `Buffer`s whose data
+  pointer is a device address, and creates **`Queue`s** — ordered, possibly asynchronous work, one per session (a
+  CUDA stream): `copy_to_device` (the host source may be reused as soon as the call returns), `copy_to_host` (the data
+  is there after `synchronize()`), device copies, zero fills.
+- **Memory domains.** Backends on the same device share its memory: `ii-ref` and `ii-cpu` share the host; `ii-cuda`
+  and TensorRT will share a GPU. Values move between backends of one device **without copies**.
+- **Transfers.** Where the plan reads a value on another device than the one holding it, the compiler inserts an
+  internal `transfer` node (`{from = "cpu", to = "test:0"}`, one per value and destination; between two devices
+  through the host). The runtime executes it itself: `copy_to_device` on the destination's queue, or `copy_to_host`
+  followed by a synchronization, because the host steps after it read the data. Constants read by device kernels
+  are copied once, when the program is compiled (unless the kernel `captures_input` them); graph outputs always come
+  back to the host; states live on the device the planner gives them (a KV cache next to the attention that reads
+  it; `Session::state` then returns a host copy). `run()` ends by synchronizing every queue.
+- A tensor in device memory can be viewed but not read by the host functions of `Tensor` (they fail or terminate).
+- **`ii-test-remote`** (`src/backends/test_remote/`) simulates a device without a GPU: its own tracked memory, filled
+  with NaN when allocated; kernels (those of ii-ref) check that every input, output and workspace lies in that
+  memory, so a missing transfer is an error; work runs only when the queue is synchronized, like a GPU stream, so a
+  missing synchronization yields NaN or stale data. Operations, memory size and speed are configurable
+  (`ContextOptions::test_devices`, `II_TEST_DEVICES`); the whole test suite runs on it in CI.
 
 ### TensorRT backend (plugin)
 
@@ -410,6 +436,13 @@ public:
 
 Goal: minimize estimated time (or energy — per policy) subject to memory and capability constraints.
 
+Implemented (part 5.1, `src/runtime/planner.h`): steps 2–6 below with the roofline estimates of the backends;
+estimates use concrete shapes with symbols from `CompileOptions::plan_dims` (others = 1, e.g. one generated token).
+A composite node left alone on another device than all of its neighbours, where no backend implements it, is
+decomposed and the graph planned again, so that its primitives run next to the neighbours (P3). With all backends on
+the host the plan is simply the fastest backend per node (ii-cpu, ii-ref for the rest). Autotuning (step 7) comes
+with ii-cuda (part 5.4); policies and graph backends' `claim()` later.
+
 **Algorithm:**
 
 1. **Discovery.** `Context` queries backends for devices, `DeviceInfo` and supported dtypes. The `PerfModel` comes
@@ -423,9 +456,11 @@ Goal: minimize estimated time (or energy — per policy) subject to memory and c
    assigned predecessors.
 5. **Refinement** — local search: merge "islands" (a lone node on another device between large partitions) when this
    reduces total time; eliminates transfer ping-pong.
-6. **Memory constraint.** Weights + peak activations per device ≤ `capacity × (1 − reserve)`. On overflow, repeated
-   blocks (transformer layers) are moved one by one to the next cheapest device — **automatic layer offload** when
-   the model does not fit into VRAM.
+6. **Memory constraint.** Weights + states + peak activations per device ≤ `capacity × (1 − reserve)` (capacity:
+   the device's, or `CompileOptions::device_memory`; reserve 10%). On overflow the nodes at the front of the graph
+   move one by one to their best other device, so the graph is cut once — for a transformer the first layers run on
+   the CPU and the rest on the GPU: **automatic layer offload** when the model does not fit into VRAM. The local
+   search respects the limits; a model that fits nowhere is an `OutOfMemory` error that names the device.
 7. **Autotuning (optional).** `TuneMode::Measure`: run the top-K plans on real data and pick the best. Results are
    cached by `(model hash, shapes, device, driver version, ii version)` in `<cache>/ii/tuning.json`. Kernel
    parameters (block sizes, decode thread count) are tuned the same way.
@@ -433,14 +468,15 @@ Goal: minimize estimated time (or energy — per policy) subject to memory and c
 **Policies and overrides:** `Policy::{Latency, Throughput, LowPower, LowMemory}`, allow/deny lists of backends and
 devices, memory limits; overridable via `CompileOptions`, the CLI (`--backend tensorrt,cuda,cpu`) and `II_BACKENDS`.
 
-**Explanation:** `ii inspect model --plan` prints partitions, devices, estimates and the reasons backends declined
-nodes ("ii-vulkan: op `scatter` with dtype i64 is not supported").
+**Explanation:** `ii inspect model --plan` (`Program::describe_plan`) prints the devices, partitions (runs of steps
+on one backend) with estimated times, the copies between devices, memory per device, decisions forced by memory
+limits and the reasons backends declined nodes ("ii-test-remote: no kernel for 'relu' (12 nodes)").
 
 ---
 
 ## 10. Runtime: memory and execution
 
-- **Memory planning**: value lifetimes → offsets in one arena per session via "greedy by size" (as in TFLite);
+- **Memory planning**: value lifetimes → offsets in one arena per session and device via "greedy by size" (as in TFLite);
   kernel workspaces and state-update staging are planned like ordinary values. Constants (weights) live outside the
   arena (mmap or packed copies). Values share buffers: a view (`reshape`, flag `kOpView`) aliases its input and its
   step is skipped; a kernel that declares `can_run_in_place(i)` writes into input `i`'s buffer when that buffer dies
@@ -734,7 +770,8 @@ ii chat <llm>                    interactive chat
 ii perplexity <llm> -f text      perplexity like llama-perplexity (chunks of --ctx tokens)
 ii tokenize <llm> -p "…"         the tokens of a text
 ii bench <model> [--llm]         benchmark: latency p50/p90/p99 and throughput; for LLMs pp / tg tokens per second
-ii inspect <model> [--plan]      inputs and outputs, the execution plan with backends; --graph, --imported
+ii inspect <model> [--plan]      inputs and outputs, the execution plan with backends and devices; --plan explains
+                                 it (estimates, copies, memory, declines); --graph, --imported; for LLMs too
 ii convert <in> <out.ii>         conversion to the native format (+ pre-packing)
 ii quantize <in.gguf> <out.gguf> --type q4_k_m   GGUF weights to q8_0 … q6_k or the llama.cpp mixes
 ii check-backends [<model>]      verify every available backend against the reference on this machine
@@ -762,6 +799,7 @@ ii/
 │   ├── backends/
 │   │   ├── ref/       reference kernels
 │   │   ├── cpu/       ii-cpu: drivers; isa/ (SIMD layer, math, kernels compiled per ISA)
+│   │   ├── test_remote/  ii-test-remote: a simulated device for multi-device tests
 │   │   ├── cuda/  vulkan/  metal/
 │   │   └── plugins/   tensorrt/, onnxruntime/, openvino/, coreml/, …
 │   ├── formats/       onnx/ (+ protobuf wire decoder), npy/npz, gguf, safetensors; later native/

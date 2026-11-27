@@ -79,6 +79,15 @@ struct CompileOptions {
     /// Decompose every composite operation into primitives, even when a backend implements it natively.
     /// Mostly useful for testing decompositions and backends.
     bool decompose_composites = false;
+
+    /// Values of symbolic dimensions the planner assumes when it estimates costs, e.g. {"S", 1} to plan a language
+    /// model for generating one token at a time. Other symbols count as 1.
+    std::vector<std::pair<std::string, std::int64_t>> plan_dims;
+
+    /// Memory limits in bytes for devices, by name ("cuda:0", "test:0"), replacing what the devices report. The
+    /// planner moves operations to other devices to stay within them (a model larger than a GPU's memory is split
+    /// between the GPU and the CPU).
+    std::vector<std::pair<std::string, std::uint64_t>> device_memory;
 };
 
 class Program;
@@ -154,6 +163,10 @@ public:
 
     /// Human-readable execution plan: every step with its operation, shapes and the backend executing it.
     std::string describe() const;
+
+    /// The planner's view: devices, partitions (runs of steps on one backend) with estimated times, copies between
+    /// devices, memory per device, decisions forced by memory limits and why backends declined operations.
+    std::string describe_plan() const;
 
     /// The optimized graph in the IR text format.
     std::string to_text(std::int64_t max_constant_elements = 16) const;

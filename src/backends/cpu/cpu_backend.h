@@ -54,6 +54,7 @@ public:
     explicit CpuBackend(CpuConfig config);
 
     std::string_view name() const noexcept override { return kBackendName; }
+    const backend::DeviceInfo& device_info() const noexcept override { return info_; }
     Status supports(const ir::Node& node) const override;
     Result<std::unique_ptr<Kernel>> create_kernel(const ir::Node& node) const override;
 
@@ -66,6 +67,7 @@ private:
         SupportCheck check;
     };
     CpuConfig config_;
+    backend::DeviceInfo info_;
     std::unordered_map<std::string_view, Entry> kernels_;
 };
 

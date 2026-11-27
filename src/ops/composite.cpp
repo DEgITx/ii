@@ -197,6 +197,11 @@ Status infer_sdpa(const InferContext& context, std::vector<TensorType>& outputs)
     return ok_status();
 }
 
+/// In place: only the update is read and written.
+Cost cost_slice_update(const CostContext& context) {
+    return Cost{0, 2.0 * static_cast<double>(storage_size(context.node.output()->dtype(), context.inputs[1].numel()))};
+}
+
 Cost cost_sdpa(const CostContext& context) {
     const Shape& q = context.inputs[0];
     const Shape& k = context.inputs[1];
@@ -606,6 +611,7 @@ void register_llm_ops(ir::OpRegistry& registry) {
         .attrs = {AttrSpec{"axis", AttrKind::kInt, std::nullopt}},
         .infer = infer_slice_update,
         .decompose = decompose_slice_update,
+        .cost = cost_slice_update,
     });
 }
 

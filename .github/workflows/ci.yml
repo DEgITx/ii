@@ -47,12 +47,12 @@ jobs:
         include:
           # Windows
           - { os: windows-2025, preset: windows-msvc-debug, env: msvc }
-          - { os: windows-2025, preset: windows-msvc-release, env: msvc }
+          - { os: windows-2025, preset: windows-msvc-release, env: msvc, devices: true }
           - { os: windows-2025, preset: windows-msvc-shared-release, env: msvc }
           - { os: windows-2025, preset: windows-clang-cl-release, env: msvc }
           - { os: windows-2025, preset: windows-mingw-gcc-release, env: msys2 }
           # Linux x86-64
-          - { os: ubuntu-24.04, preset: linux-gcc-debug, env: gcc14 }
+          - { os: ubuntu-24.04, preset: linux-gcc-debug, env: gcc14, devices: true }
           - { os: ubuntu-24.04, preset: linux-gcc-release, env: gcc14, generic-isa: true }
           - { os: ubuntu-24.04, preset: linux-gcc-shared-release, env: gcc14 }
           - { os: ubuntu-24.04, preset: linux-clang-release, env: gcc14 }
@@ -124,6 +124,15 @@ jobs:
         if: matrix.generic-isa
         env:
           II_CPU_ISA: generic
+        run: ctest --preset ${{ matrix.preset }}
+
+      # Every test once more with two simulated devices (ii-test-remote): one takes every operation it supports,
+      # the other a few. All models then run on mixed host/device plans with transfers; results must not change.
+      - name: Tests on simulated devices
+        if: matrix.devices
+        env:
+          II_TEST_DEVICES: >-
+            launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000;launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000,ops=add+mul+matmul+reshape+cast
         run: ctest --preset ${{ matrix.preset }}
 
       - name: ii info

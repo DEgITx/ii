@@ -18,6 +18,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <type_traits>
 
 II_BEGIN_DLL_EXPORTS
@@ -26,8 +27,13 @@ namespace ii {
 
 /// Kind of device that owns a memory region.
 enum class DeviceKind : std::uint8_t {
-    kCpu,  ///< Host memory, directly addressable by the CPU.
+    kCpu,   ///< Host memory, directly addressable by the CPU.
+    kCuda,  ///< Memory of an NVIDIA GPU.
+    kTest,  ///< Memory of a simulated device (the ii-test-remote backend, for testing multi-device plans).
 };
+
+/// "cpu", "cuda", "test".
+II_API std::string_view to_string(DeviceKind kind) noexcept;
 
 /// Identifies a device: its kind and an index among devices of that kind.
 struct Device {
@@ -35,8 +41,12 @@ struct Device {
     int index = 0;
 
     static constexpr Device cpu() noexcept { return {}; }
+    constexpr bool is_host() const noexcept { return kind == DeviceKind::kCpu; }
     friend constexpr bool operator==(const Device&, const Device&) noexcept = default;
 };
+
+/// "cpu" for the host, otherwise kind and index, e.g. "cuda:0".
+II_API std::string to_string(Device device);
 
 /// A reference-counted region of memory on a device.
 ///
@@ -85,6 +95,9 @@ private:
 ///
 /// For block-quantized dtypes the innermost dimension must be contiguous and every view must start on a block
 /// boundary; strides are still counted in elements.
+///
+/// A tensor in device memory (`device()` is not the host) can be viewed, but not read or written by the host
+/// functions below: `clone`, `to` and `copy_from` fail, `values` and `data_as` terminate.
 class II_API Tensor {
 public:
     Tensor() noexcept = default;
@@ -152,6 +165,7 @@ public:
     template <class T>
     T* data_as() const {
         check_dtype(dtype_of<T>());
+        check_host_access();
         return static_cast<T*>(data());
     }
 
@@ -159,6 +173,7 @@ public:
     template <class T>
     std::span<T> values() const {
         check_dtype(dtype_of<T>());
+        check_host_access();
         check_contiguous();
         return {static_cast<T*>(data()), static_cast<std::size_t>(numel())};
     }
@@ -205,7 +220,9 @@ public:
 
 private:
     void check_dtype(DType requested) const;
+    void check_host_access() const;
     void check_contiguous() const;
+    Status check_host(std::string_view operation) const;
 
     std::shared_ptr<Buffer> buffer_;
     std::size_t offset_ = 0;

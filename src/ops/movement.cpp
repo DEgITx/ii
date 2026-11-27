@@ -14,6 +14,16 @@ using ir::OpSchema;
 using ir::OutputSpec;
 using ir::TensorType;
 
+/// Selections (slice, gather) read only the elements they produce (plus the indices), not the whole input.
+ir::Cost cost_selection(const ir::CostContext& context) {
+    const double out = static_cast<double>(storage_size(context.node.output()->dtype(), context.outputs[0].numel()));
+    double indices = 0;
+    if (const ir::Value* index = context.node.input(1); index != nullptr && context.inputs.size() > 1) {
+        indices = static_cast<double>(storage_size(index->dtype(), context.inputs[1].numel()));
+    }
+    return ir::Cost{0, 2 * out + indices};
+}
+
 bool is_plain_dtype(DType dtype) noexcept {
     return is_plain(dtype);
 }
@@ -303,6 +313,7 @@ void register_movement_ops(ir::OpRegistry& registry) {
                   AttrSpec{"ends", AttrKind::kInts, std::nullopt},
                   AttrSpec{"steps", AttrKind::kInts, std::vector<std::int64_t>{}}},
         .infer = infer_slice,
+        .cost = cost_selection,
         .flags = kMove,
     });
     registry.add(OpSchema{
@@ -357,6 +368,7 @@ void register_movement_ops(ir::OpRegistry& registry) {
         .outputs = {OutputSpec{"y"}},
         .attrs = {AttrSpec{"axis", AttrKind::kInt, std::int64_t{0}}},
         .infer = infer_gather,
+        .cost = cost_selection,
         .flags = kMove,
     });
     registry.add(OpSchema{

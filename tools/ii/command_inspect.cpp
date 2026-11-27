@@ -5,7 +5,9 @@
 #include "args.h"
 #include "commands.h"
 
+#include <algorithm>
 #include <charconv>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <string>
@@ -21,6 +23,13 @@ Describes a model (inputs, outputs, states) and its execution plan. Formats: ONN
 
 Options:
   --graph             Print the optimized graph
+  --plan              Explain the plan: devices, partitions with estimated times, copies between devices,
+                      memory per device and why backends declined operations
+  --plan-dims LIST    Symbol values assumed for the estimates, e.g. N=1 (other symbols count as 1)
+  --device-memory LIST  Memory limits per device, e.g. cuda:0=4G,test:0=64M (suffixes K, M, G)
+
+Language models (GGUF or Hugging Face directory) print metadata and tensors; with --plan they are loaded (options
+--ctx, --kv-type, --threads, --backends, --device-memory as for ii generate) and the plan is explained.
   --imported          Print the graph as loaded (before optimization)
   --dims LIST         Fix symbolic dimensions when loading, e.g. batch=1,seq=128
   --backends LIST     Comma-separated backends to compile for (default: all)
@@ -60,9 +69,50 @@ Result<LoadOptions> parse_dims(const std::optional<std::string>& text) {
 
 }  // namespace
 
+Result<std::vector<std::pair<std::string, std::uint64_t>>> parse_device_memory(std::string_view text) {
+    std::vector<std::pair<std::string, std::uint64_t>> limits;
+    while (!text.empty()) {
+        const std::size_t comma = text.find(',');
+        const std::string_view item = text.substr(0, comma);
+        text = comma == std::string_view::npos ? std::string_view() : text.substr(comma + 1);
+        const std::size_t eq = item.find('=');
+        std::string_view number = eq == std::string_view::npos ? std::string_view() : item.substr(eq + 1);
+        std::uint64_t scale = 1;
+        if (!number.empty()) {
+            switch (number.back()) {
+            case 'K':
+                scale = std::uint64_t{1} << 10;
+                break;
+            case 'M':
+                scale = std::uint64_t{1} << 20;
+                break;
+            case 'G':
+                scale = std::uint64_t{1} << 30;
+                break;
+            default:
+                break;
+            }
+            if (scale != 1) {
+                number.remove_suffix(1);
+            }
+        }
+        std::uint64_t value = 0;
+        if (number.empty() || std::from_chars(number.data(), number.data() + number.size(), value).ec != std::errc() ||
+            value > UINT64_MAX / scale) {
+            return errors::invalid_argument("expected DEVICE=BYTES in --device-memory, got '{}'", item);
+        }
+        limits.emplace_back(std::string(item.substr(0, eq)), value * scale);
+    }
+    return limits;
+}
+
 int run_inspect(const std::vector<std::string>& args) {
-    auto parsed =
-        Args::parse(args, {"graph", "imported", "no-fold", "no-fuse", "decompose", "help"}, {"backends", "dims"});
+    if (!args.empty() && is_llm_path(args.front()) &&
+        std::find(args.begin(), args.end(), std::string("--plan")) != args.end()) {
+        return inspect_llm_plan(args);
+    }
+    auto parsed = Args::parse(args, {"graph", "imported", "no-fold", "no-fuse", "decompose", "plan", "help"},
+                              {"backends", "dims", "plan-dims", "device-memory"});
     if (!parsed.ok()) {
         std::fprintf(stderr, "ii inspect: %s\n\n%s", std::string(parsed.status().message()).c_str(), kUsage);
         return 2;
@@ -116,11 +166,25 @@ int run_inspect(const std::vector<std::string>& args) {
             rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
         }
     }
+    const Result<LoadOptions> plan_dims = parse_dims(parsed->option("plan-dims"));
+    if (!plan_dims.ok()) {
+        return fail(plan_dims.status());
+    }
+    options.plan_dims = plan_dims->dims;
+    const Result<std::vector<std::pair<std::string, std::uint64_t>>> memory =
+        parse_device_memory(parsed->option("device-memory").value_or(""));
+    if (!memory.ok()) {
+        return fail(memory.status());
+    }
+    options.device_memory = *memory;
     const Result<Program> program = model->compile(options);
     if (!program.ok()) {
         return fail(program.status());
     }
     std::printf("\nExecution plan: %s", program->describe().c_str());
+    if (parsed->flag("plan")) {
+        std::printf("\n%s", program->describe_plan().c_str());
+    }
     if (parsed->flag("graph")) {
         std::printf("\nOptimized graph:\n%s", program->to_text().c_str());
     }

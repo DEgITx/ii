@@ -211,8 +211,34 @@ Result<Tensor> Tensor::from_bytes(DType dtype, const Shape& shape, const void* d
     return tensor;
 }
 
+std::string_view to_string(DeviceKind kind) noexcept {
+    switch (kind) {
+    case DeviceKind::kCpu:
+        return "cpu";
+    case DeviceKind::kCuda:
+        return "cuda";
+    case DeviceKind::kTest:
+        return "test";
+    }
+    return "?";
+}
+
+std::string to_string(Device device) {
+    if (device.is_host()) {
+        return "cpu";
+    }
+    return std::format("{}:{}", to_string(device.kind), device.index);
+}
+
 Device Tensor::device() const noexcept {
     return buffer_ ? buffer_->device() : Device::cpu();
+}
+
+Status Tensor::check_host(std::string_view operation) const {
+    if (!device().is_host()) {
+        return errors::unsupported("{} of a tensor in the memory of {}", operation, ii::to_string(device()));
+    }
+    return ok_status();
 }
 
 void* Tensor::data() const noexcept {
@@ -236,6 +262,11 @@ bool Tensor::is_contiguous() const noexcept {
 void Tensor::check_dtype(DType requested) const {
     II_CHECK(requested == dtype_, "tensor element type is {}, but {} was requested", ii::to_string(dtype_),
              ii::to_string(requested));
+}
+
+void Tensor::check_host_access() const {
+    II_CHECK(device().is_host(), "the tensor is in the memory of {}, not accessible from the host",
+             ii::to_string(device()));
 }
 
 void Tensor::check_contiguous() const {
@@ -373,6 +404,7 @@ Result<Tensor> Tensor::clone(Allocator& allocator) const {
     if (!defined()) {
         return Tensor();
     }
+    II_TRY(check_host("clone"));
     II_ASSIGN_OR_RETURN(Tensor copy, empty(dtype_, shape_, allocator));
     strided_copy(copy, *this);
     return copy;
@@ -385,6 +417,7 @@ Result<Tensor> Tensor::to(DType dtype, Allocator& allocator) const {
     if (dtype == dtype_) {
         return clone(allocator);
     }
+    II_TRY(check_host("conversion"));
     auto float_like = [](DType t) {
         return t == DType::kF32 || t == DType::kF16 || t == DType::kBF16 || t == DType::kF64;
     };
@@ -472,6 +505,8 @@ Status Tensor::copy_from(const Tensor& source) const {
         return errors::invalid_argument("cannot copy a {}{} tensor into a {}{} tensor", ii::to_string(source.dtype_),
                                         source.shape_.to_string(), ii::to_string(dtype_), shape_.to_string());
     }
+    II_TRY(check_host("copy"));
+    II_TRY(source.check_host("copy"));
     strided_copy(*this, source);
     return ok_status();
 }
@@ -518,6 +553,9 @@ std::string Tensor::to_string(int max_values) const {
         return "<empty tensor>";
     }
     std::string result = std::format("{}{}", ii::to_string(dtype_), shape_.to_string());
+    if (!device().is_host()) {
+        return result + " (" + ii::to_string(device()) + ")";
+    }
     if (is_block_quantized(dtype_) || max_values <= 0) {
         return result;
     }

@@ -61,8 +61,18 @@ values, f16/bf16 rounding of random bit patterns). Instruction sets missing on t
 SDE in CI; ARM on ARM runners (Linux ARM64, macOS) and on Android (emulator in CI, phones over adb). `II_CPU_ISA`
 forces a variant for any test or tool.
 
-**Fake remote device**: the test backend `ii-test-remote` has a separate "memory domain" (copies through a separate
-arena) — cross-device transfers, events and offload are tested without a GPU.
+**Simulated devices** (`ii-test-remote`, `src/backends/test_remote/`): multi-device plans without a GPU. A
+simulated device has its own tracked memory (NaN when allocated), its kernels (ii-ref's) reject pointers outside of
+it — a missing transfer is an error — and its queue runs work only when synchronized, like a GPU stream, so a missing
+synchronization shows up as NaN or stale results. `tests/unit/runtime/multi_device_test.cpp` checks the planner's
+choices (operations a device lacks, slow links, two devices exchanging through the host, memory limits cutting the
+graph once, a model that fits nowhere), states in device memory, the queue semantics and zero allocations. Devices
+are created by `ContextOptions::test_devices` or `II_TEST_DEVICES`, so **the whole test suite also runs with them**
+(CI does, in a Debug and a Release job): every model of every test then executes on mixed host/device plans and
+must give the same results. Specification: devices separated by `;`, each a list of `key=value` — `memory` (bytes,
+suffix K/M/G), `gflops`, `bandwidth` (GB/s), `launch` (us), `link` (GB/s), `latency` (us), `ops` (names joined by
+`+`; default: everything ii-ref supports); `default` for the defaults. A device that takes everything it can:
+`launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000`.
 
 **GPU backends** (`ii-cuda`, TensorRT, later Vulkan/Metal) run the same differential suite on GPU runners; TensorRT
 additionally tests engine-cache invalidation (different shapes / precision / version produce a rebuild).
@@ -205,8 +215,8 @@ Summary only; workflows, triggers, runners and security rules are defined in [ci
 
 | Platform | Compilers | What runs | From |
 |----------|-----------|-----------|------|
-| Windows x86-64 | MSVC, clang-cl, MinGW-GCC | all tests, C ABI interop across compilers | stage 0 |
-| Linux x86-64 | GCC, Clang | all tests, sanitizers, short fuzzing, coverage, SDE for AVX-512/AMX | stage 0 |
+| Windows x86-64 | MSVC, clang-cl, MinGW-GCC | all tests (MSVC Release also on simulated devices), C ABI interop across compilers | stage 0 |
+| Linux x86-64 | GCC, Clang | all tests (GCC Debug also on simulated devices), sanitizers, short fuzzing, coverage, SDE for AVX-512/AMX | stage 0 |
 | Linux ARM64 | GCC, Clang | all tests, NEON/dotprod/i8mm paths | stage 0 |
 | macOS ARM64 / x86-64 | Apple Clang | all tests (+ Metal later) | stage 0 |
 | Android ARM64 / x86-64 | NDK Clang | build, tests on emulator (CI) and devices (`ctest --preset android-arm64-release` over adb) | stage 2 (done) |

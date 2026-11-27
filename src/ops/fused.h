@@ -36,6 +36,11 @@ inline constexpr std::string_view kFusedElementwise = "fused_elementwise";
 /// channel, or a scalar); the result has the shape of the convolution and dtype `dtype`.
 inline constexpr std::string_view kFusedConv = "fused_conv";
 
+/// `transfer(x) {from, to}`: copies a value from the memory of device `from` to device `to` (names as printed by
+/// `to_string(Device)`, e.g. "cpu", "cuda:0"). Inserted by the compiler when the planner places a value and a node
+/// reading it on different devices; executed by the runtime itself, not by a backend.
+inline constexpr std::string_view kTransfer = "transfer";
+
 /// Parses the `program` attribute of a `fused_elementwise` node and checks it against the node's inputs.
 Result<std::unique_ptr<ir::Graph>> parse_fused_program(const ir::Node& node);
 

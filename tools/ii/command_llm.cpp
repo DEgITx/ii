@@ -33,6 +33,7 @@ constexpr const char* kModelOptions = R"(Model:
   --threads N         Threads (default: all logical CPUs)
   --backends LIST     Comma-separated backends in order of preference (default: all)
   --isa NAME          Kernel variant of ii-cpu: generic, avx2, avx512, neon (default: the best supported)
+  --device-memory LIST  Memory limits per device, e.g. cuda:0=4G (the rest of the model runs on the CPU)
 )";
 
 constexpr const char* kSamplingOptions = R"(Sampling:
@@ -101,7 +102,8 @@ Converts the weights of a GGUF model. Matrices are converted, vectors (norms, bi
                       for the output matrix)
 )";
 
-const std::set<std::string, std::less<>> kModelOptionNames = {"ctx", "kv-type", "threads", "backends", "isa"};
+const std::set<std::string, std::less<>> kModelOptionNames = {"ctx",      "kv-type", "threads",
+                                                              "backends", "isa",     "device-memory"};
 const std::set<std::string, std::less<>> kSamplingOptionNames = {"temp",           "top-k",         "top-p", "min-p",
                                                                  "repeat-penalty", "repeat-last-n", "seed"};
 
@@ -169,6 +171,7 @@ Result<Loaded> load_llm(const Args& args, bool all_logits = false) {
     if (const auto backends = args.option("backends")) {
         options.compile.backends = split_list(*backends);
     }
+    II_ASSIGN_OR_RETURN(options.compile.device_memory, parse_device_memory(args.option("device-memory").value_or("")));
     const auto start = std::chrono::steady_clock::now();
     II_ASSIGN_OR_RETURN(llm::Llm llm, llm::Llm::load(context, to_path(args.positionals()[0]), options));
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
@@ -785,6 +788,20 @@ int run_quantize(const std::vector<std::string>& raw) {
     if (!status.ok()) {
         return fail(status);
     }
+    return 0;
+}
+
+int inspect_llm_plan(const std::vector<std::string>& raw) {
+    const auto parsed = Args::parse(raw, {"plan", "help"}, kModelOptionNames);
+    if (!parsed.ok()) {
+        return fail(parsed.status());
+    }
+    const Result<Loaded> loaded = load_llm(*parsed);
+    if (!loaded.ok()) {
+        return fail(loaded.status());
+    }
+    std::printf("Execution plan: %s\n%s", loaded->llm.program().describe().c_str(),
+                loaded->llm.program().describe_plan().c_str());
     return 0;
 }
 

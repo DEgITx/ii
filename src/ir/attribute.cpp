@@ -361,6 +361,9 @@ std::string format_tensor_literal(const Tensor& tensor, std::int64_t max_element
     }
     const DType dtype = tensor.dtype();
     std::string result = std::format("{}{}", ii::to_string(dtype), tensor.shape().to_string());
+    if (!tensor.device().is_host()) {
+        return result + " {...}";  // device memory is not readable here
+    }
     if (max_elements >= 0 && tensor.numel() > max_elements) {
         result += " {...}";
         return result;

@@ -103,6 +103,21 @@ void print_text(const OsInfo& os, const CpuInfo& cpu, const MemoryInfo& memory, 
     } else {
         std::printf("Selected  error: %s\n", selected.status().to_string().c_str());
     }
+    if (const Result<Context> context = Context::create(); context.ok()) {
+        for (const DeviceDescription& device : context->devices()) {
+            std::string backends;
+            for (const std::string& backend : device.backends) {
+                backends += (backends.empty() ? "" : ", ") + backend;
+            }
+            std::string line = std::format("{:<8} {}", device.id, device.name);
+            if (device.memory_bytes != 0) {
+                line += ", " + format_bytes(device.memory_bytes);
+            }
+            std::printf("Device    %s (%s)\n", line.c_str(), backends.c_str());
+        }
+    } else {
+        std::printf("Devices   error: %s\n", context.status().to_string().c_str());
+    }
 
     if (roofline != nullptr) {
         std::printf("\n");
@@ -193,6 +208,25 @@ void print_json(const OsInfo& os, const CpuInfo& cpu, const MemoryInfo& memory, 
         json.field("error", selected.status().to_string());
     }
     json.end_object();
+
+    json.key("devices");
+    json.begin_array();
+    if (const Result<Context> context = Context::create(); context.ok()) {
+        for (const DeviceDescription& device : context->devices()) {
+            json.begin_object();
+            json.field("id", device.id);
+            json.field("name", device.name);
+            json.field("memory_bytes", device.memory_bytes);
+            json.key("backends");
+            json.begin_array();
+            for (const std::string& backend : device.backends) {
+                json.value(backend);
+            }
+            json.end_array();
+            json.end_object();
+        }
+    }
+    json.end_array();
 
     if (roofline != nullptr) {
         json.key("roofline");

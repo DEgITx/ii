@@ -71,6 +71,10 @@ A `changes` job (paths filter) lets docs-only changes skip build jobs while stil
 Notes:
 - Image labels are pinned explicitly (not `*-latest`) and bumped deliberately.
 - Debug builds enable `II_ASSERT` and `Graph::verify()` after every pass — they catch logic errors Release hides.
+- `linux-gcc-debug` and `windows-msvc-release` run the tests a second time with two simulated devices
+  (`II_TEST_DEVICES`, the ii-test-remote backend): every model then executes on mixed host/device plans with
+  transfers, so the planner, the transfers and device states are exercised without a GPU
+  ([testing-and-benchmarks.md](testing-and-benchmarks.md) §2.3).
 - Warnings are errors in CI (`-Werror` / `/WX`).
 - Compiler cache: `ccache` for every toolchain (MSVC included), keyed by OS + preset, restored from `master`.
 

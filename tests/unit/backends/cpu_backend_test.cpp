@@ -680,13 +680,15 @@ TEST(CpuBackend, ReportsSelectedIsaAndRejectsUnknownOnes) {
     EXPECT_FALSE(Context::create(std::move(options)).ok());
     const Context context = ii_test::test_context();
     const std::vector<std::string> names = context.backend_names();
-    ASSERT_EQ(names.size(), 2u);
+    ASSERT_GE(names.size(), 2u);  // simulated devices (II_TEST_DEVICES) come after
     EXPECT_EQ(names[0], "ii-cpu");
     EXPECT_EQ(names[1], "ii-ref");
 }
 
 TEST(CpuBackend, UnsupportedNodesFallBackToReference) {
-    const Context context = ii_test::test_context();
+    ContextOptions options;
+    options.test_devices = "none";  // no simulated devices (II_TEST_DEVICES)
+    const Context context = Context::create(std::move(options)).value();
     GraphBuilder b;
     const Var x = b.input("x", DType::kI32, {4});
     b.output("y", cumsum(x * x, 0));  // integer arithmetic and cumsum are not accelerated

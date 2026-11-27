@@ -117,6 +117,19 @@ on most desktops) can be tested under [Intel SDE](https://www.intel.com/content/
 
 `ii info` lists the compiled variants and which of them the CPU supports.
 
+## Testing multi-device plans without a GPU
+
+`II_TEST_DEVICES` adds simulated devices (the `ii-test-remote` backend) to every context, so any test or tool runs
+on mixed host/device plans with transfers between them:
+
+```sh
+II_TEST_DEVICES="launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000" ctest --preset linux-gcc-release
+II_TEST_DEVICES="memory=250M,gflops=20000,bandwidth=800" ii inspect model.gguf --plan --ctx 256
+```
+
+The first device takes every operation it can; the second is a realistic one with 250 MB of memory, so a larger
+model is split between it and the CPU. Keys: [testing-and-benchmarks.md](../testing-and-benchmarks.md) §2.3.
+
 ## Android
 
 Install the Android NDK (r27 or newer) and point `ANDROID_NDK_HOME` at it, then use the `android-arm64` or

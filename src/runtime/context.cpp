@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "backends/cpu/cpu_backend.h"
 #include "backends/ref/ref_backend.h"
+#include "backends/test_remote/test_remote.h"
 #include "core/assert.h"
+#include "core/platform/platform.h"
 #include "runtime/runtime.h"
 
 #include <optional>
@@ -53,6 +55,20 @@ Result<Context> Context::create(ContextOptions options) {
                         cpu::create_cpu_backend(cpu_isa, impl->executor->concurrency()));
     impl->backends.push_back(std::move(cpu));
     impl->backends.push_back(ref::create_ref_backend());
+    std::string test_devices = options.test_devices;
+    if (test_devices.empty()) {
+        test_devices = platform::get_env("II_TEST_DEVICES").value_or("");
+    }
+    if (!test_devices.empty() && test_devices != "none") {
+        Result<std::vector<test_remote::TestDeviceOptions>> devices = test_remote::parse_test_devices(test_devices);
+        if (!devices.ok()) {
+            Status status = std::move(devices).status();
+            return status.add_context("test devices");
+        }
+        for (const test_remote::TestDeviceOptions& device : *devices) {
+            impl->backends.push_back(test_remote::create_test_remote_backend(device));
+        }
+    }
     return Context(std::move(impl));
 }
 
@@ -66,6 +82,32 @@ Executor& Context::executor() const noexcept {
 
 const Logger& Context::logger() const noexcept {
     return impl_->logger;
+}
+
+std::vector<DeviceDescription> Context::devices() const {
+    std::vector<DeviceDescription> result;
+    auto add = [&](const backend::Backend& backend) {
+        const backend::DeviceInfo& info = backend.device_info();
+        const std::string id = to_string(info.device);
+        for (DeviceDescription& device : result) {
+            if (device.id == id) {
+                device.backends.emplace_back(backend.name());
+                return;
+            }
+        }
+        result.push_back(DeviceDescription{id, info.name, info.memory_bytes, {std::string(backend.name())}});
+    };
+    for (const auto& backend : impl_->backends) {
+        if (backend->device().is_host()) {
+            add(*backend);
+        }
+    }
+    for (const auto& backend : impl_->backends) {
+        if (!backend->device().is_host()) {
+            add(*backend);
+        }
+    }
+    return result;
 }
 
 std::vector<std::string> Context::backend_names() const {

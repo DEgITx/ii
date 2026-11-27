@@ -22,7 +22,7 @@ using ::testing::HasSubstr;
 
 /// Test access to the session's execution plan (Session keeps its implementation private).
 struct SessionTestAccess {
-    static std::size_t arena_size(const Session& session) { return session.impl_->plan.arena_size; }
+    static std::size_t arena_size(const Session& session) { return session.impl_->plan.arena_sizes[0]; }
     static std::ptrdiff_t state_aliases(const Session& session) {
         const auto& alias = session.impl_->plan.state_alias;
         return std::count_if(alias.begin(), alias.end(), [](int state) { return state >= 0; });
@@ -38,6 +38,14 @@ std::size_t session_arena_size(const Session& session) {
 Context make_context() {
     ContextOptions options;
     options.num_threads = 2;
+    return Context::create(std::move(options)).value();
+}
+
+/// A context with the CPU backends only, also when II_TEST_DEVICES adds simulated devices: for tests of CPU plans.
+Context make_cpu_context() {
+    ContextOptions options;
+    options.num_threads = 2;
+    options.test_devices = "none";
     return Context::create(std::move(options)).value();
 }
 
@@ -77,7 +85,7 @@ std::vector<float> mlp_reference(const std::vector<float>& x) {
 }
 
 TEST(SessionTest, RunsMlpWithDynamicBatch) {
-    const Context context = make_context();
+    const Context context = make_cpu_context();
     const Model model = mlp_model(context);
     EXPECT_EQ(model.inputs().size(), 1u);
     EXPECT_EQ(to_string(model.inputs()[0].shape), "[N, 3]");
@@ -188,7 +196,7 @@ TEST(SessionTest, StatesCanSwap) {
 
 /// The LLM pattern: a preallocated KV cache state, written in place by slice_update and read by sdpa with kv_len.
 TEST(SessionTest, KvCacheStateIsUpdatedInPlace) {
-    const Context context = make_context();
+    const Context context = make_cpu_context();
     GraphBuilder b;
     const Var x = b.input("x", DType::kF32, {1, 1, "S", 4});
     const Var pos = b.input("pos", DType::kI64, {});
@@ -339,7 +347,7 @@ TEST(SessionTest, ViewsAndInPlaceOperationsShareMemory) {
 }
 
 TEST(SessionTest, ProfilesSteps) {
-    const Context context = make_context();
+    const Context context = make_cpu_context();
     const Program program = mlp_model(context).compile().value();
     Session session = program.new_session().value();
     std::vector<float> x(6, 1.0f);
