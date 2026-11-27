@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include "backends/cuda/cuda_device.h"
 
+#include <ii/version.h>
+
 #include <algorithm>
 #include <cstring>
 #include <format>
@@ -82,9 +84,34 @@ Result<std::unique_ptr<CudaDevice>> CudaDevice::create(int index, const Librarie
     info.gflops =
         std::max(1.0, properties.multiProcessorCount * fp32_lanes(properties.major, properties.minor) * 2 * clock_ghz);
     info.bandwidth_gbs = std::max(1.0, 2 * memory_clock_ghz * properties.memoryBusWidth / 8);
-    info.launch_us = 4;
+    // A kernel of a recorded run (CUDA graph) costs about 1.5 us more than its work; without graphs about 4.
+    info.launch_us = options.graphs ? 2 : 4;
     info.link_gbs = 20;
     info.link_latency_us = 10;
+    if (options.autotune) {
+        const std::string key = to_hex(properties.uuid.bytes, sizeof(properties.uuid.bytes));
+        const std::string identity =
+            std::format("{} ({}), compute capability {}, cuBLASLt {}, ii {}", properties.name, key,
+                        device->compute_capability_, libraries.lt_version(), II_VERSION_STRING);
+        device->tuning_ = std::make_unique<TuningCache>(tuning_cache_path(options.cache, key), identity);
+        // The planner's figures, measured once per device.
+        std::optional<DeviceFigures> figures;
+        if (const std::optional<std::string> cached = device->tuning_->find("device")) {
+            figures = DeviceFigures::parse(*cached);
+        }
+        if (!figures && !options.prefer) {
+            if (Result<DeviceFigures> measured = measure_device(); measured.ok()) {
+                figures = *measured;
+                device->tuning_->store("device", figures->to_string());
+            }
+        }
+        if (figures) {
+            info.launch_us = figures->launch_us;
+            info.bandwidth_gbs = figures->bandwidth_gbs;
+            info.link_gbs = figures->link_gbs;
+            info.link_latency_us = figures->link_latency_us;
+        }
+    }
     if (options.prefer) {
         info.gflops = 1e9;
         info.bandwidth_gbs = 1e9;
@@ -207,6 +234,61 @@ Status CudaQueue::fill_zero(void* dst, std::size_t size) {
     return ok_status();
 }
 
+namespace {
+
+/// An instantiated CUDA graph.
+class CudaRecording final : public backend::Recording {
+public:
+    CudaRecording(const CudaDevice& device, cudaGraphExec_t graph) noexcept : device_(device), graph_(graph) {}
+    ~CudaRecording() override {
+        if (device_.activate().ok()) {
+            cudaGraphExecDestroy(graph_);
+        }
+    }
+    CudaRecording(const CudaRecording&) = delete;
+    CudaRecording& operator=(const CudaRecording&) = delete;
+
+    const CudaDevice& device() const noexcept { return device_; }
+    cudaGraphExec_t graph() const noexcept { return graph_; }
+
+private:
+    const CudaDevice& device_;
+    cudaGraphExec_t graph_;
+};
+
+}  // namespace
+
+Status CudaQueue::begin_recording() {
+    if (!device_.options().graphs) {
+        return Queue::begin_recording();
+    }
+    II_TRY(device_.activate());
+    // Thread-local mode: other threads (other sessions) may allocate memory meanwhile.
+    II_CUDA_TRY(cudaStreamBeginCapture(stream_, cudaStreamCaptureModeThreadLocal));
+    return ok_status();
+}
+
+Result<std::unique_ptr<backend::Recording>> CudaQueue::end_recording() {
+    II_TRY(device_.activate());
+    cudaGraph_t graph = nullptr;
+    II_CUDA_TRY(cudaStreamEndCapture(stream_, &graph));
+    cudaGraphExec_t exec = nullptr;
+    const cudaError_t error = cudaGraphInstantiate(&exec, graph, 0);
+    cudaGraphDestroy(graph);
+    II_CUDA_TRY(error);
+    return std::unique_ptr<backend::Recording>(std::make_unique<CudaRecording>(device_, exec));
+}
+
+Status CudaQueue::replay(const backend::Recording& recording) {
+    const auto* own = dynamic_cast<const CudaRecording*>(&recording);
+    if (own == nullptr || &own->device() != &device_) {
+        return errors::internal("a recording of another device");
+    }
+    II_TRY(device_.activate());
+    II_CUDA_TRY(cudaGraphLaunch(own->graph(), stream_));
+    return ok_status();
+}
+
 Status CudaQueue::synchronize() {
     II_CUDA_TRY(cudaStreamSynchronize(stream_));
     volatile DeviceError* error = error_host_;
@@ -216,10 +298,17 @@ Status CudaQueue::synchronize() {
     }
     const long long value = error->value;
     const long long limit = error->limit;
+    const long long extra = error->extra;
     error->code = 0;
     switch (code) {
     case DeviceErrorCode::kGatherIndex:
         return errors::out_of_range("gather index {} is out of range for axis size {}", value, limit);
+    case DeviceErrorCode::kSliceUpdateStart:
+        // The messages match those of ii-cpu.
+        return errors::out_of_range("'slice_update' writes [{}, {}) of an axis of size {}", value, value + extra,
+                                    limit);
+    case DeviceErrorCode::kKvLength:
+        return errors::out_of_range("'sdpa' kv_len {} is outside [0, {}]", value, limit);
     default:
         return errors::internal("device error {}", static_cast<long long>(code));
     }

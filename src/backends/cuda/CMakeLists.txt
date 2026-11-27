@@ -32,8 +32,11 @@ message(STATUS "ii: building ii-backend-cuda with CUDA ${CUDAToolkit_VERSION} fo
 # Kernels compiled by nvcc. Kept apart from the plugin's C++ sources, which get the project's warning flags.
 add_library(ii_cuda_kernels STATIC
     kernels_conv.cu
+    kernels_flash.cu
+    kernels_llm.cu
     kernels_movement.cu
     kernels_norm.cu
+    kernels_quant.cu
     kernels_reduce.cu)
 target_include_directories(ii_cuda_kernels PRIVATE "${PROJECT_SOURCE_DIR}/src")
 target_compile_features(ii_cuda_kernels PRIVATE cuda_std_17)
@@ -48,11 +51,13 @@ if(MSVC)
 endif()
 
 ii_add_backend_plugin(ii-backend-cuda SOURCES
+    autotune.cpp
     cuda_backend.cpp
     cuda_device.cpp
     elementwise.cpp
     gemm.cpp
     libraries.cpp
+    llm.cpp
     ops.cpp
     plugin.cpp)
 target_link_libraries(ii-backend-cuda PRIVATE ii_cuda_kernels CUDA::cudart_static)

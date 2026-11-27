@@ -115,6 +115,21 @@ struct ExecutionPlan {
     std::vector<backend::TensorView> views;  ///< per step: inputs then outputs
     std::vector<std::size_t> view_begin;     ///< per step, plus a final end entry
 
+    /// A run of steps on one device whose kernels can be recorded (`Kernel::can_record`; views in between are only
+    /// pointer bookkeeping). When a run repeats the kernel arguments of the previous one, the queue records the
+    /// steps once (a CUDA graph) and later runs replay the recording instead of calling the kernels.
+    struct Segment {
+        std::size_t begin = 0;  ///< first step
+        std::size_t end = 0;    ///< one past the last step
+        int device = 0;
+        std::vector<const void*> pointers;              ///< kernel arguments of the last run
+        int repeats = 0;                                ///< runs in a row with `pointers`
+        std::unique_ptr<backend::Recording> recording;  ///< recorded with `pointers`
+        bool disabled = false;                          ///< the queue or a kernel could not record
+    };
+    std::vector<Segment> segments;
+    std::vector<int> segment_at;  ///< per step: the segment starting there, or -1
+
     static constexpr std::size_t kNotInArena = static_cast<std::size_t>(-1);
 };
 
@@ -139,9 +154,14 @@ struct SessionImpl {
     std::vector<std::int64_t> step_times;  ///< per step: start and end in ns since the start of the run
     std::int64_t run_time_ns = 0;
 
+    std::vector<const void*> segment_pointers;  ///< scratch of run_segment
+
     Status prepare();  ///< builds or reuses the execution plan for the bound input shapes
     Status run();
-    Status execute();      ///< the steps of `run()`; queues may hold work when it fails
+    Status execute();  ///< the steps of `run()`; queues may hold work when it fails
+    Status run_step(std::size_t step, backend::KernelContext& context);
+    /// Replays (or records and replays) a segment; false when its steps must run one by one.
+    Result<bool> run_segment(ExecutionPlan::Segment& segment, backend::KernelContext& context);
     Status synchronize();  ///< waits for the work of every device queue
     Result<Tensor> value_tensor(int value) const;
     Status reset_states();

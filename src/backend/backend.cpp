@@ -26,7 +26,34 @@ DeviceInfo host_device_info(int threads, double flops_per_cycle) {
     return info;
 }
 
+bool keeps_element_order(std::span<const std::int64_t> perm, const Shape& shape) {
+    int last = -1;
+    for (const std::int64_t axis : perm) {
+        const int a = static_cast<int>(axis < 0 ? axis + shape.rank() : axis);
+        if (a < 0 || a >= shape.rank() || shape[a] == 1) {
+            continue;
+        }
+        if (a < last) {
+            return false;
+        }
+        last = a;
+    }
+    return true;
+}
+
+bool is_free_view(const ir::CostContext& context) {
+    const ir::Node& node = context.node;
+    if (node.op().has_flag(ir::kOpView)) {
+        return true;
+    }
+    return node.op_name() == "permute" && !context.inputs.empty() &&
+           keeps_element_order(node.attrs().get_ints("perm"), context.inputs[0]);
+}
+
 double Backend::estimate_us(const ir::CostContext& context) const {
+    if (is_free_view(context)) {
+        return 0;
+    }
     const DeviceInfo& info = device_info();
     const ir::Cost cost = ir::estimate_cost(context);
     const double compute = cost.flops / (std::max(info.gflops, 1e-3) * 1e3);

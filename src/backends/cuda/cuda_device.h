@@ -5,6 +5,7 @@
 #pragma once
 
 #include "backend/backend.h"
+#include "backends/cuda/autotune.h"
 #include "backends/cuda/kernels.h"
 #include "backends/cuda/libraries.h"
 
@@ -29,6 +30,13 @@ struct Options {
     bool prefer = false;
     /// "cuda.tf32=1": f32 matrix products and convolutions may use TF32 tensor cores (faster, ~1e-3 relative error).
     bool tf32 = false;
+    /// "cuda.graphs=0": no CUDA graphs (the runtime then launches every kernel of every run).
+    bool graphs = true;
+    /// "cuda.autotune=0": no measurements (cuBLASLt's first algorithm, the default warps per weight row, the
+    /// device's nominal figures for the planner) and no cache file.
+    bool autotune = true;
+    /// "cuda.cache": the autotuning cache file; empty: in ii's cache directory; "none": kept in memory only.
+    std::string cache;
 };
 
 class CudaDevice final : public backend::DeviceApi {
@@ -56,6 +64,9 @@ public:
     /// Device memory owned by a kernel (e.g. precomputed tables), freed with it.
     Result<std::shared_ptr<void>> allocate_owned(std::size_t size) const;
 
+    /// Measured choices kept between runs; nullptr without autotuning.
+    TuningCache* tuning() const noexcept { return tuning_.get(); }
+
 private:
     CudaDevice(int index, const Libraries& libraries, const Options& options)
         : index_(index), libraries_(libraries), options_(options) {}
@@ -67,6 +78,7 @@ private:
     int sm_count_ = 1;
     int compute_capability_ = 0;
     cublasLtHandle_t blas_ = nullptr;
+    std::unique_ptr<TuningCache> tuning_;
 };
 
 /// A CUDA stream.
@@ -82,6 +94,10 @@ public:
     Status copy(void* dst, const void* src, std::size_t size) override;
     Status fill_zero(void* dst, std::size_t size) override;
     Status synchronize() override;
+    /// CUDA graphs: stream capture, then cudaGraphLaunch.
+    Status begin_recording() override;
+    Result<std::unique_ptr<backend::Recording>> end_recording() override;
+    Status replay(const backend::Recording& recording) override;
 
     cudaStream_t stream() const noexcept { return stream_; }
     const CudaDevice& device() const noexcept { return device_; }

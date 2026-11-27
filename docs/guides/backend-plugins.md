@@ -70,9 +70,12 @@ context. Each backend then:
 - describes its device (`device_info`: kind, index, memory, speed — the inputs of the planner's cost model);
 - answers whether it can execute a node (`supports`) and, optionally, how long it takes (`estimate_us`; without it
   ii uses the roofline of the device info);
-- creates kernels (`create_kernel`) which ii runs (`run`), with `kernel_flags` (in-place, captured inputs) and
-  `workspace_size`;
-- for a device other than the host: allocates memory and creates queues of ordered work (copies, `synchronize`).
+- creates kernels (`create_kernel`) which ii runs (`run`), with `kernel_flags` (in-place, captured inputs, and with
+  input -1 whether the kernel's work can be recorded) and `workspace_size`;
+- for a device other than the host: allocates memory and creates queues of ordered work (copies, `synchronize`);
+  optionally a queue records work (`begin_recording`, `end_recording`, `replay`, `destroy_recording`, appended to the
+  table later; ii-cuda records CUDA graphs): ii then records a run of recordable kernels once their arguments repeat
+  and replays it instead of calling them.
 
 The semantics are those of the C++ interfaces `ii::backend::Backend`, `Kernel`, `DeviceApi` and `Queue`
 (`src/backend/backend.h`, `src/backend/device.h`).
@@ -141,7 +144,8 @@ in-process plugin, so every node crosses the interface as text.
 ## Compatibility
 
 - ii loads plugins whose `abi_version` equals its `II_PLUGIN_ABI_VERSION`; a breaking change gets a new entry point
-  (`ii_backend_plugin_v2`). New functions are appended to the table; `struct_size` tells which exist.
+  (`ii_backend_plugin_v2`). New functions are appended to the table; `struct_size` tells which exist (a table that
+  ends before the recording functions loads, and its queues simply do not record).
 - A plugin built with MSVC works with an ii built with MinGW GCC and vice versa (checked for the test plugin: the
   whole test suite passes both ways).
 - The text format of nodes follows the ii version of the plugin's sources: an operation unknown to the plugin is

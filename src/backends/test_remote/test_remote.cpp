@@ -80,6 +80,7 @@ public:
     }
 
     Status copy_to_device(void* dst, const void* src, std::size_t size) override {
+        II_TRY(not_recording("copy_to_device"));
         II_TRY(check(dst, size, "copy destination"));
         // Earlier work may still read the destination; the source is consumed now.
         II_TRY(synchronize());
@@ -107,6 +108,7 @@ public:
     }
 
     Status synchronize() override {
+        II_TRY(not_recording("synchronize"));
         Status first = ok_status();
         for (const Task& task : tasks_) {
             if (!first.ok()) {
@@ -135,6 +137,48 @@ public:
         return first;
     }
 
+    // Recording keeps the tasks enqueued meanwhile (with their arguments) instead of running them, like CUDA stream
+    // capture; replay enqueues copies of them.
+    Status begin_recording() override {
+        II_TRY(not_recording("begin_recording"));
+        recording_ = true;
+        record_tasks_ = tasks_.size();
+        record_views_ = views_.size();
+        return ok_status();
+    }
+
+    Result<std::unique_ptr<backend::Recording>> end_recording() override {
+        if (!recording_) {
+            return errors::internal("{}: end_recording without begin_recording", device_);
+        }
+        recording_ = false;
+        auto recording = std::make_unique<TestRecording>();
+        recording->queue = this;
+        recording->tasks.assign(tasks_.begin() + static_cast<std::ptrdiff_t>(record_tasks_), tasks_.end());
+        recording->views.assign(views_.begin() + static_cast<std::ptrdiff_t>(record_views_), views_.end());
+        for (Task& task : recording->tasks) {
+            task.first_view -= record_views_;
+        }
+        tasks_.resize(record_tasks_);
+        views_.resize(record_views_);
+        return std::unique_ptr<backend::Recording>(std::move(recording));
+    }
+
+    Status replay(const backend::Recording& recording) override {
+        II_TRY(not_recording("replay"));
+        const auto* own = dynamic_cast<const TestRecording*>(&recording);
+        if (own == nullptr || own->queue != this) {
+            return errors::internal("{}: a recording of another queue", device_);
+        }
+        const std::size_t offset = views_.size();
+        views_.insert(views_.end(), own->views.begin(), own->views.end());
+        for (Task task : own->tasks) {
+            task.first_view += offset;
+            tasks_.push_back(task);
+        }
+        return ok_status();
+    }
+
     /// Defers a kernel. The views are copied (like the arguments of a GPU kernel launch): the caller's arrays need not
     /// outlive the call. The executor must stay valid until the queue is synchronized.
     void enqueue(const backend::Kernel& kernel, const backend::KernelContext& context) {
@@ -159,9 +203,23 @@ private:
         std::size_t first_view = 0;  // kernels: inputs, then outputs, in views_
     };
 
+    struct TestRecording final : backend::Recording {
+        const TestQueue* queue = nullptr;
+        std::vector<Task> tasks;
+        std::vector<backend::TensorView> views;
+    };
+
     Status check(const void* data, std::size_t size, std::string_view what) const {
         if (size != 0 && !memory_.contains(data, size)) {
             return errors::invalid_argument("{} of {} bytes is not in the memory of {}", what, size, device_);
+        }
+        return ok_status();
+    }
+
+    /// Operations that cannot be recorded (they run or wait on the host now) fail while recording, as with CUDA.
+    Status not_recording(std::string_view what) const {
+        if (recording_) {
+            return errors::internal("{}: {} while recording", device_, what);
         }
         return ok_status();
     }
@@ -170,6 +228,9 @@ private:
     std::string device_;
     std::vector<Task> tasks_;
     std::vector<backend::TensorView> views_;
+    bool recording_ = false;
+    std::size_t record_tasks_ = 0;
+    std::size_t record_views_ = 0;
 };
 
 class TestDeviceApi final : public backend::DeviceApi {
@@ -204,6 +265,9 @@ public:
     }
 
     bool can_run_in_place(int input) const override { return inner_->can_run_in_place(input); }
+
+    /// The kernel only enqueues itself; the queue runs it with the recorded arguments.
+    bool can_record() const override { return true; }
 
     Status run(const backend::KernelContext& context) const override {
         if (context.queue == nullptr) {

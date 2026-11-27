@@ -5,8 +5,9 @@
 /// Kernels enqueue their work on the CUDA stream of the session's queue. Matrix products and convolutions use
 /// cuBLASLt (gemm.cpp); elementwise operations and fused elementwise chains are generated as CUDA C++ and compiled
 /// with NVRTC when the kernel is created (elementwise.cpp); reductions, normalizations, pooling and data movement
-/// are kernels compiled by nvcc (kernels_*.cu, launched from ops.cpp). Operations, dtypes or attributes it does not
-/// support are left to the CPU by the planner.
+/// are kernels compiled by nvcc (kernels_*.cu, launched from ops.cpp); the operations of language models (products
+/// with quantized weights, attention, rope, KV cache writes) are in llm.cpp. Operations, dtypes or attributes it
+/// does not support are left to the CPU by the planner.
 #pragma once
 
 #include <ii/log.h>
@@ -60,6 +61,8 @@ private:
 /// A kernel defined by a function (most kernels of ii-cuda).
 class FunctionKernel final : public Kernel {
 public:
+    bool can_record() const override { return true; }  // only enqueues work on the stream
+
     using Run = std::function<Status(const KernelContext& context, cudaStream_t stream)>;
     using Workspace = std::function<std::size_t(std::span<const Shape> inputs, std::span<const Shape> outputs)>;
 
@@ -116,9 +119,19 @@ Status launch_elementwise(const ElementwiseModule& module, std::span<const Tenso
 /// returns nullptr).
 Result<const ElementwiseModule*> compile_epilogue(const ir::Node& node, const CudaDevice* device);
 
+/// The weight layout of a float or block-quantized dtype.
+std::optional<WeightType> weight_type_of(DType dtype) noexcept;
+
+/// True for `linear` / `matmul` nodes whose weights are block-quantized or 16-bit with f32 activations (llm.cpp);
+/// the matmul and linear kernels hand such nodes to the weight product kernel.
+bool is_weight_product(const ir::Node& node);
+Status check_weight_product(const ir::Node& node);
+Result<std::unique_ptr<Kernel>> create_weight_product(const ir::Node& node, const CudaDevice& device);
+
 void register_elementwise_kernels(CudaBackend& backend);
 void register_gemm_kernels(CudaBackend& backend);
 void register_ops_kernels(CudaBackend& backend);
+void register_llm_kernels(CudaBackend& backend);
 
 /// Creates the backends of the CUDA devices for a plugin instance.
 Result<std::vector<std::unique_ptr<backend::Backend>>>

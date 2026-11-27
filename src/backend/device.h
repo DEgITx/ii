@@ -34,6 +34,17 @@ struct DeviceInfo {
     double link_latency_us = 0;      ///< fixed cost of one host <-> device copy
 };
 
+/// Work recorded by a queue (a CUDA graph), replayed by the same queue. Owned by the runtime.
+class Recording {
+public:
+    virtual ~Recording() = default;
+
+protected:
+    Recording() = default;
+    Recording(const Recording&) = default;
+    Recording& operator=(const Recording&) = default;
+};
+
 /// Ordered work on a device for one session (a CUDA stream). Not thread-safe; a session uses it from one thread.
 ///
 /// Operations execute in the order they are enqueued, possibly after the call returns. Pointers are device
@@ -58,6 +69,21 @@ public:
 
     /// Waits until all enqueued work has finished; returns the first error of that work.
     virtual Status synchronize() = 0;
+
+    /// Recording (optional; CUDA graphs). Between begin_recording() and end_recording() the queue records the work
+    /// enqueued on it instead of executing it; replay() enqueues the recorded work again, with the same memory. The
+    /// runtime records a run of kernels that can be recorded (`Kernel::can_record`) once their arguments repeat, and
+    /// then replays it instead of calling the kernels: one launch instead of hundreds. A queue that cannot record
+    /// returns kUnsupported from begin_recording().
+    virtual Status begin_recording() { return errors::unsupported("the queue cannot record work"); }
+    /// Ends recording. On failure the recording is discarded and nothing was executed.
+    virtual Result<std::unique_ptr<Recording>> end_recording() {
+        return errors::unsupported("the queue cannot record work");
+    }
+    virtual Status replay(const Recording& recording) {
+        (void)recording;
+        return errors::unsupported("the queue cannot record work");
+    }
 
 protected:
     Queue() = default;

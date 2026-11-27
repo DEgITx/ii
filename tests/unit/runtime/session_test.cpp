@@ -302,7 +302,8 @@ TEST(SessionTest, SteadyStateRunDoesNotAllocate) {
     Session session = program.new_session().value();
     const Tensor input = floats(std::vector<float>(12, 0.5f), Shape{3, 4});
     ASSERT_TRUE(session.set_input("x", input).ok());
-    ASSERT_TRUE(session.run().ok());  // first run plans memory
+    ASSERT_TRUE(session.run().ok());  // the first run plans memory
+    ASSERT_TRUE(session.run().ok());  // the second records the work of a device that can record it (CUDA graphs)
     const std::int64_t arena_allocations = allocator.allocations.load();
     {
         ii_test::AllocationCounter allocations;  // counts nothing under ThreadSanitizer (kCountsAllocations)
@@ -312,7 +313,7 @@ TEST(SessionTest, SteadyStateRunDoesNotAllocate) {
         EXPECT_EQ(allocations.count(), 0) << "heap allocations in steady-state run()";
     }
     EXPECT_EQ(allocator.allocations.load(), arena_allocations);
-    EXPECT_EQ(session.state("counter").value().values<std::int64_t>()[0], 6);
+    EXPECT_EQ(session.state("counter").value().values<std::int64_t>()[0], 7);
 }
 
 TEST(SessionTest, ViewsAndInPlaceOperationsShareMemory) {

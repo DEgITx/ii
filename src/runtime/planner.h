@@ -15,6 +15,9 @@
 ///      (for a transformer: the first layers run on the CPU, the rest on the GPU);
 ///   3. local search: single nodes, runs of consecutive nodes on one device ("islands") and states move to
 ///      other devices while that lowers the total estimate and respects the memory limits.
+/// Besides the greedy assignment, the planner starts once per device from "every node the device supports on that
+/// device" (steps 2 and 3 follow each start) and keeps the cheapest plan: the greedy start alone can end in a mixed
+/// plan that no single move improves.
 ///
 /// With all backends on the host there are no copies, so every node simply gets its fastest backend.
 #pragma once

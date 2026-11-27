@@ -103,11 +103,8 @@ __global__ void gather_kernel(T* out, const T* data, const void* indices, Gather
             index += p.axis_size;
         }
         const bool inside = index >= 0 && index < p.axis_size;
-        if (!inside && word == 0 && o == 0 &&
-            atomicCAS(reinterpret_cast<unsigned long long*>(&p.error->code), 0ull,
-                      static_cast<unsigned long long>(DeviceErrorCode::kGatherIndex)) == 0ull) {
-            p.error->value = given;
-            p.error->limit = p.axis_size;
+        if (!inside && word == 0 && o == 0) {
+            report_error(p.error, DeviceErrorCode::kGatherIndex, given, p.axis_size);
         }
         out[i] = inside ? data[(o * p.axis_size + index) * words_per_slice + word] : T{};
     }
@@ -287,6 +284,17 @@ cudaError_t pad(void* out, const void* in, int element_size, const PadParams& pa
         }
         return cudaGetLastError();
     });
+}
+
+namespace {
+
+__global__ void empty_kernel() {}
+
+}  // namespace
+
+cudaError_t launch_empty(cudaStream_t stream) {
+    empty_kernel<<<1, 32, 0, stream>>>();
+    return cudaGetLastError();
 }
 
 }  // namespace ii::cuda

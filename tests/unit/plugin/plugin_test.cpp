@@ -378,7 +378,8 @@ TEST(Plugin, SteadyStateRunDoesNotAllocate) {
     const Model model = mlp(context, 3, 16);
     Session session = model.compile().value().new_session().value();
     ASSERT_TRUE(session.set_input("x", ii_test::random_tensor(DType::kF32, Shape{4, 16}, 5)).ok());
-    ASSERT_TRUE(session.run().ok());
+    ASSERT_TRUE(session.run().ok());  // the first run plans memory
+    ASSERT_TRUE(session.run().ok());  // the second records the device's work
     CompileOptions host_only;
     host_only.backends = {"ii-plugin-ref"};
     Session host_session = model.compile(host_only).value().new_session().value();

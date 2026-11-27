@@ -98,6 +98,11 @@ public:
         return false;
     }
 
+    /// True if `run` only enqueues work on the device queue (`Queue::begin_recording`) whose arguments depend on
+    /// nothing but the shapes and pointers it gets: no reads of device data on the host, no waits, no host memory.
+    /// The runtime may then record the work once and replay it in later runs without calling `run`.
+    virtual bool can_record() const { return false; }
+
 protected:
     Kernel() = default;
     Kernel(const Kernel&) = default;
@@ -121,7 +126,8 @@ public:
     virtual DeviceApi* device_api() const noexcept { return nullptr; }
 
     /// Estimated execution time of a supported node with the given concrete shapes, in microseconds. The default is
-    /// the roofline of `device_info()`: max(flops / peak, bytes / bandwidth) + launch overhead.
+    /// the roofline of `device_info()`: max(flops / peak, bytes / bandwidth) + launch overhead; 0 for views the
+    /// runtime does not execute (`is_free_view`).
     virtual double estimate_us(const ir::CostContext& context) const;
 
     /// OK if the backend can execute the node; otherwise an `kUnsupported` status explaining why (shown by
@@ -136,6 +142,14 @@ protected:
     Backend(const Backend&) = default;
     Backend& operator=(const Backend&) = default;
 };
+
+/// True if permuting `shape` by `perm` keeps the order of the elements (it only moves dimensions of size 1, e.g.
+/// [1, S, H, D] -> [1, H, S, D] with S = 1): the runtime then runs the permute as a view of its input.
+bool keeps_element_order(std::span<const std::int64_t> perm, const Shape& shape);
+
+/// True for nodes the runtime turns into views of their input instead of running them: view operations (reshape)
+/// and permutes that keep the element order.
+bool is_free_view(const ir::CostContext& context);
 
 /// A backend built from a table of per-operation kernel factories.
 class KernelBackend : public Backend {

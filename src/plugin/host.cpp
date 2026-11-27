@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <format>
 #include <mutex>
 #include <unordered_map>
@@ -31,6 +32,17 @@ struct CallError {
 
 Status check(int32_t code, const CallError& error) {
     return code == 0 ? ok_status() : abi::to_status(code, error.error);
+}
+
+/// Size of the first version of the function table (up to `synchronize`); later functions are optional.
+constexpr std::size_t kFirstTableSize = offsetof(ii_plugin_v1, synchronize) + sizeof(ii_plugin_v1::synchronize);
+
+/// True if the plugin's table has the recording functions (covered by its struct_size and set). The size is checked
+/// first: an older plugin's table ends before them.
+bool has_recording(const ii_plugin_v1& table) {
+    return table.struct_size >= offsetof(ii_plugin_v1, destroy_recording) + sizeof(table.destroy_recording) &&
+           table.begin_recording != nullptr && table.end_recording != nullptr && table.replay != nullptr &&
+           table.destroy_recording != nullptr;
 }
 
 // --- Nodes as text ---
@@ -155,10 +167,51 @@ public:
         return check(table_.synchronize(handle_, error.get()), error);
     }
 
+    Status begin_recording() override {
+        if (!has_recording(table_)) {
+            return Queue::begin_recording();
+        }
+        CallError error;
+        return check(table_.begin_recording(handle_, error.get()), error);
+    }
+
+    Result<std::unique_ptr<backend::Recording>> end_recording() override {
+        if (!has_recording(table_)) {
+            return Queue::end_recording();
+        }
+        CallError error;
+        ii_plugin_recording* recording = nullptr;
+        II_TRY(check(table_.end_recording(handle_, &recording, error.get()), error));
+        return std::unique_ptr<backend::Recording>(std::make_unique<PluginRecording>(table_, recording));
+    }
+
+    Status replay(const backend::Recording& recording) override {
+        const auto* own = dynamic_cast<const PluginRecording*>(&recording);
+        if (own == nullptr || !has_recording(table_)) {
+            return errors::internal("a recording of another queue");
+        }
+        CallError error;
+        return check(table_.replay(handle_, own->handle(), error.get()), error);
+    }
+
     const ii_plugin_v1& table() const noexcept { return table_; }
     ii_plugin_queue* handle() const noexcept { return handle_; }
 
 private:
+    class PluginRecording final : public backend::Recording {
+    public:
+        PluginRecording(const ii_plugin_v1& table, ii_plugin_recording* handle) noexcept
+            : table_(table), handle_(handle) {}
+        ~PluginRecording() override { table_.destroy_recording(handle_); }
+        PluginRecording(const PluginRecording&) = delete;
+        PluginRecording& operator=(const PluginRecording&) = delete;
+        ii_plugin_recording* handle() const noexcept { return handle_; }
+
+    private:
+        const ii_plugin_v1& table_;
+        ii_plugin_recording* handle_;
+    };
+
     const ii_plugin_v1& table_;
     ii_plugin_queue* handle_;
 };
@@ -269,6 +322,10 @@ public:
 
     bool captures_input(int input) const override {
         return input < inputs_ && (table_.kernel_flags(handle_, input) & II_PLUGIN_KERNEL_CAPTURES_INPUT) != 0;
+    }
+
+    bool can_record() const override {
+        return has_recording(table_) && (table_.kernel_flags(handle_, -1) & II_PLUGIN_KERNEL_RECORDABLE) != 0;
     }
 
 private:
@@ -456,9 +513,9 @@ Status validate_table(const ii_plugin_v1* table) {
         return errors::unsupported("the plugin uses plugin ABI version {}; this ii supports version {}",
                                    table->abi_version, II_PLUGIN_ABI_VERSION);
     }
-    if (table->struct_size < sizeof(ii_plugin_v1)) {
+    if (table->struct_size < kFirstTableSize) {
         return errors::unsupported("the plugin's function table is incomplete ({} of {} bytes)", table->struct_size,
-                                   sizeof(ii_plugin_v1));
+                                   kFirstTableSize);
     }
     if (table->name == nullptr || table->create_backends == nullptr || table->destroy_backend == nullptr ||
         table->backend_name == nullptr || table->device_info == nullptr || table->supports == nullptr ||

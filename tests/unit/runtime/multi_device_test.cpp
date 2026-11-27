@@ -229,6 +229,31 @@ TEST(MultiDevice, StatesLiveInDeviceMemory) {
     }
 }
 
+TEST(MultiDevice, RecordedWorkSeesNewData) {
+    // From the second run with the same memory, the device's steps are recorded and replayed (like CUDA graphs):
+    // decoding with a KV cache in device memory must still see every new position and input, also when a prompt of
+    // another length (another plan) comes in between.
+    const Context context = device_context(fast());
+    const Context host = device_context("none");
+    Session session = kv_cache_model(context).compile().value().new_session().value();
+    Session expected = kv_cache_model(host).compile().value().new_session().value();
+    std::int64_t position = 0;
+    for (const int length : {1, 1, 1, 1, 2, 1, 1}) {
+        SCOPED_TRACE(position);
+        const Tensor x =
+            ii_test::random_tensor(DType::kF32, Shape{1, 1, length, 4}, static_cast<std::uint32_t>(position + 50));
+        const Tensor pos = Tensor::scalar<std::int64_t>(position).value();
+        for (Session* s : {&session, &expected}) {
+            ASSERT_TRUE(s->set_input("x", x).ok());
+            ASSERT_TRUE(s->set_input("pos", pos).ok());
+            ASSERT_TRUE(s->run().ok());
+        }
+        position += length;
+        EXPECT_EQ(ii_test::compare(session.output("y").value(), expected.output("y").value(), {1e-5, 1e-6}), "");
+    }
+    EXPECT_EQ(ii_test::compare(session.state("cache").value(), expected.state("cache").value(), {0, 0}), "");
+}
+
 TEST(MultiDevice, ProfileShowsTransfers) {
     const Context context = device_context(fast("ops=linear"));
     Session session = mlp(context, 1, 8).compile().value().new_session().value();
@@ -251,7 +276,8 @@ TEST(MultiDevice, SteadyStateRunDoesNotAllocate) {
     const Tensor pos = Tensor::scalar<std::int64_t>(2).value();
     ASSERT_TRUE(session.set_input("x", x).ok());
     ASSERT_TRUE(session.set_input("pos", pos).ok());
-    ASSERT_TRUE(session.run().ok());
+    ASSERT_TRUE(session.run().ok());  // the first run plans memory
+    ASSERT_TRUE(session.run().ok());  // the second records the device's work
     const std::int64_t arena_allocations = allocator.allocations.load();
     {
         ii_test::AllocationCounter allocations;

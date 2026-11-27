@@ -34,7 +34,6 @@ __device__ __forceinline__ typename Traits<T>::Acc highest_value() {
 template <class T, ReduceOp kOp>
 struct Reducer {
     using Acc = typename Traits<T>::Acc;
-    static constexpr bool kFloat = std::is_same_v<Acc, float>;
 
     static __device__ __forceinline__ Acc identity() {
         if constexpr (kOp == ReduceOp::kProd) {
@@ -50,13 +49,13 @@ struct Reducer {
 
     static __device__ __forceinline__ Acc combine(Acc a, Acc b) {
         if constexpr (kOp == ReduceOp::kSum || kOp == ReduceOp::kMean) {
-            if constexpr (kFloat) {
+            if constexpr (std::is_same_v<Acc, float>) {
                 return a + b;
             } else {
                 return static_cast<Acc>(static_cast<unsigned long long>(a) + static_cast<unsigned long long>(b));
             }
         } else if constexpr (kOp == ReduceOp::kProd) {
-            if constexpr (kFloat) {
+            if constexpr (std::is_same_v<Acc, float>) {
                 return a * b;
             } else {
                 return static_cast<Acc>(static_cast<unsigned long long>(a) * static_cast<unsigned long long>(b));
@@ -75,7 +74,7 @@ struct Reducer {
 
     static __device__ __forceinline__ T finish(Acc acc, std::int64_t count) {
         if constexpr (kOp == ReduceOp::kMean) {
-            if constexpr (kFloat) {
+            if constexpr (std::is_same_v<Acc, float>) {
                 return Traits<T>::store(count == 0 ? quiet_nan() : acc / static_cast<float>(count));
             } else {
                 return Traits<T>::store(count == 0 ? 0 : acc / count);

@@ -172,6 +172,14 @@ Options (`ContextOptions::plugin_options` or `II_PLUGIN_OPTIONS=key=value;key=va
 | `cuda.tf32` | `1`: f32 matrix products and convolutions may use TF32 tensor cores (faster, ~1e-3 relative error) |
 | `cuda.library_path` | a directory with cuBLASLt and NVRTC, searched first |
 | `cuda.prefer` | `1`: the device reports itself so fast that the planner gives it everything it supports (tests) |
+| `cuda.graphs` | `0`: no CUDA graphs (repeated runs are otherwise recorded once and replayed) |
+| `cuda.autotune` | `0`: no measurements (cuBLASLt's first algorithm, default kernel parameters, nominal device figures) |
+| `cuda.cache` | the autotuning cache file; default `cuda-<device uuid>.json` in ii's cache directory (`II_CACHE_DIR`, `%LOCALAPPDATA%\ii\cache`, `$XDG_CACHE_HOME/ii`); `none`: in memory only |
+
+The first context on a GPU measures the device for the planner (well under a second) and later runs measure the
+cuBLASLt algorithm and kernel parameters of every new product shape once; the results are kept in the cache file.
+Language models run on the GPU by default: `ii generate model.gguf -p ...`, `ii bench model.gguf --llm`; with
+`--device-memory cuda:0=4G` the front of the model runs on the CPU.
 
 The whole test suite can run on the GPU (every operation ii-cuda supports goes there):
 

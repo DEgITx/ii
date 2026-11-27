@@ -70,6 +70,10 @@ struct ii_plugin_queue {
     ii::plugin::detail::HostExecutor executor;  // kernels enqueued on the queue may run after `run` returns
 };
 
+struct ii_plugin_recording {
+    std::unique_ptr<ii::backend::Recording> recording;
+};
+
 namespace ii::plugin {
 
 namespace {
@@ -239,6 +243,9 @@ void destroy_kernel(ii_plugin_kernel* kernel) {
 }
 
 uint32_t kernel_flags(const ii_plugin_kernel* kernel, int32_t input) {
+    if (input < 0) {
+        return kernel->kernel->can_record() ? II_PLUGIN_KERNEL_RECORDABLE : 0;
+    }
     uint32_t flags = 0;
     if (kernel->kernel->can_run_in_place(input)) {
         flags |= II_PLUGIN_KERNEL_IN_PLACE;
@@ -371,6 +378,28 @@ int32_t synchronize(ii_plugin_queue* queue, ii_plugin_error* error) {
     return guarded(error, [&] { return queue->queue->synchronize(); });
 }
 
+int32_t begin_recording(ii_plugin_queue* queue, ii_plugin_error* error) {
+    return guarded(error, [&] { return queue->queue->begin_recording(); });
+}
+
+int32_t end_recording(ii_plugin_queue* queue, ii_plugin_recording** recording, ii_plugin_error* error) {
+    *recording = nullptr;
+    return guarded(error, [&]() -> Status {
+        auto handle = std::make_unique<ii_plugin_recording>();
+        II_ASSIGN_OR_RETURN(handle->recording, queue->queue->end_recording());
+        *recording = handle.release();
+        return ok_status();
+    });
+}
+
+int32_t replay(ii_plugin_queue* queue, const ii_plugin_recording* recording, ii_plugin_error* error) {
+    return guarded(error, [&] { return queue->queue->replay(*recording->recording); });
+}
+
+void destroy_recording(ii_plugin_recording* recording) {
+    delete recording;
+}
+
 }  // namespace
 
 std::string PluginHost::option(std::string_view key) const {
@@ -423,6 +452,10 @@ const ii_plugin_v1* make_plugin_table(const PluginDefinition& definition) {
         t.copy = &copy;
         t.fill_zero = &fill_zero;
         t.synchronize = &synchronize;
+        t.begin_recording = &begin_recording;
+        t.end_recording = &end_recording;
+        t.replay = &replay;
+        t.destroy_recording = &destroy_recording;
         return t;
     }();
     return &table;

@@ -94,9 +94,17 @@ linear with bf16 weights, grouped / 1-D / f16 / pointwise convolutions and fused
 movement), random models, concurrent sessions and errors found on the GPU. Beyond that, the whole test suite runs
 with the GPU preferred for everything it supports — `II_PLUGIN_PATH=<build>/plugins/<config>
 II_PLUGIN_OPTIONS=cuda.prefer=1 ctest ...` — so every model of the unit, conformance and ONNX node tests executes
-on the GPU wherever ii-cuda has a kernel (1662 tests; MSVC Release and Debug, and MinGW GCC loading the MSVC-built
-plugin). Tests of CPU plans and of the simulated devices set `cuda.devices=none`. Fused elementwise chains keep
+on the GPU wherever ii-cuda has a kernel (1671 tests at stage 5.4; MSVC Release and Debug, and MinGW GCC and Clang
+loading the MSVC-built plugin). Tests of CPU plans and of the simulated devices set `cuda.devices=none`. Fused elementwise chains keep
 intermediate values in f32 like ii-cpu, so models with f16 / bf16 inputs are compared with the 16-bit tolerance.
+
+Stage 5.4 adds the language-model kernels to `cuda_test.cpp`: products with every GGUF block type and f16 / bf16
+weights on the decoding (GEMV) and prompt (cuBLASLt) paths, attention on the CUDA-core and the tensor-core kernel
+(grouped heads, `kv_len`, windows, soft caps, masks, 16-bit caches, head sizes up to 256), rope, slice_update and
+its range error, dequantize, runs replayed from CUDA graphs with new data, and the autotuning cache. The whole
+suite also passes with the plugin found but no preference (the planner decides; LLM tests then run on the GPU).
+`scripts/llm_tests.py` with `II_PLUGIN_PATH` set runs the real-model checks on the GPU (logits and greedy generation
+against transformers, perplexity).
 
 ### 2.3a Importers and formats (`tests/unit/formats/`, `tests/onnx/`, `tests/models/`)
 - Protobuf decoding (round trips, malformed input), ONNX import of models built in memory (symbolic shape

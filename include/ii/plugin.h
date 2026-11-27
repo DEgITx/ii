@@ -134,9 +134,10 @@ typedef struct ii_plugin_executor {
                          void* user);
 } ii_plugin_executor;
 
-typedef struct ii_plugin_backend ii_plugin_backend; /**< a backend (opaque, owned by the plugin) */
-typedef struct ii_plugin_kernel ii_plugin_kernel;   /**< a kernel (opaque, owned by the plugin) */
-typedef struct ii_plugin_queue ii_plugin_queue;     /**< a queue of a device (opaque, owned by the plugin) */
+typedef struct ii_plugin_backend ii_plugin_backend;     /**< a backend (opaque, owned by the plugin) */
+typedef struct ii_plugin_kernel ii_plugin_kernel;       /**< a kernel (opaque, owned by the plugin) */
+typedef struct ii_plugin_queue ii_plugin_queue;         /**< a queue of a device (opaque, owned by the plugin) */
+typedef struct ii_plugin_recording ii_plugin_recording; /**< recorded queue work (opaque, owned by the plugin) */
 
 /** Arguments of one kernel execution (see `ii::backend::KernelContext`). */
 typedef struct ii_plugin_run_context {
@@ -166,8 +167,9 @@ typedef struct ii_plugin_host {
 
 /** Kernel properties (`kernel_flags`). */
 enum {
-    II_PLUGIN_KERNEL_IN_PLACE = 1,      /**< `Kernel::can_run_in_place(input)` */
-    II_PLUGIN_KERNEL_CAPTURES_INPUT = 2 /**< `Kernel::captures_input(input)` */
+    II_PLUGIN_KERNEL_IN_PLACE = 1,       /**< `Kernel::can_run_in_place(input)` */
+    II_PLUGIN_KERNEL_CAPTURES_INPUT = 2, /**< `Kernel::captures_input(input)` */
+    II_PLUGIN_KERNEL_RECORDABLE = 4      /**< `Kernel::can_record()`; asked with input -1 */
 };
 
 /** The function table of a plugin. */
@@ -202,7 +204,7 @@ typedef struct ii_plugin_v1 {
                              ii_plugin_error* error);
     void (*destroy_kernel)(ii_plugin_kernel* kernel);
 
-    /** `II_PLUGIN_KERNEL_*` flags for input `input`. */
+    /** `II_PLUGIN_KERNEL_*` flags for input `input`; with input -1 the kernel's own flags (`RECORDABLE`). */
     uint32_t (*kernel_flags)(const ii_plugin_kernel* kernel, int32_t input);
     int32_t (*workspace_size)(const ii_plugin_kernel* kernel, const ii_plugin_shape* inputs, int32_t input_count,
                               const ii_plugin_shape* outputs, int32_t output_count, size_t* size,
@@ -220,6 +222,16 @@ typedef struct ii_plugin_v1 {
     int32_t (*copy)(ii_plugin_queue* queue, void* dst, const void* src, size_t size, ii_plugin_error* error);
     int32_t (*fill_zero)(ii_plugin_queue* queue, void* dst, size_t size, ii_plugin_error* error);
     int32_t (*synchronize)(ii_plugin_queue* queue, ii_plugin_error* error);
+
+    /* Added later: present when `struct_size` covers them; may be NULL. */
+
+    /** Recording of queue work (`ii::backend::Queue::begin_recording`, CUDA graphs): `begin_recording` returns
+     *  `II_UNSUPPORTED` when the queue cannot record; `end_recording` returns the recording (or an error, discarding
+     *  it), which `replay` enqueues again and `destroy_recording` frees. */
+    int32_t (*begin_recording)(ii_plugin_queue* queue, ii_plugin_error* error);
+    int32_t (*end_recording)(ii_plugin_queue* queue, ii_plugin_recording** recording, ii_plugin_error* error);
+    int32_t (*replay)(ii_plugin_queue* queue, const ii_plugin_recording* recording, ii_plugin_error* error);
+    void (*destroy_recording)(ii_plugin_recording* recording);
 } ii_plugin_v1;
 
 /** The entry point a plugin exports. Returns NULL if the plugin does not support `host_abi_version`. */

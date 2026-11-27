@@ -64,6 +64,9 @@ __device__ __forceinline__ bool is_nan(long long) {
 __device__ __forceinline__ float quiet_nan() {
     return __int_as_float(0x7fc00000);
 }
+__device__ __forceinline__ float infinity() {
+    return __int_as_float(0x7f800000);
+}
 
 /// Calls `fn(T{})` with the element type of a float scalar type; integer types return cudaErrorInvalidValue.
 template <class Fn>

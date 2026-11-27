@@ -633,6 +633,8 @@ Result<const ElementwiseModule*> module_for(const CudaDevice& device, const std:
 
 class ElementwiseKernel final : public Kernel {
 public:
+    bool can_record() const override { return true; }  // only enqueues work on the stream
+
     ElementwiseKernel(const CudaDevice& device, const ElementwiseModule& module, std::vector<DType> input_dtypes,
                       DType out)
         : device_(device), module_(module), input_dtypes_(std::move(input_dtypes)), out_(out) {}

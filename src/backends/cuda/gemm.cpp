@@ -1,28 +1,21 @@
 // SPDX-License-Identifier: MIT
 // ii-cuda matrix products with cuBLASLt: matmul (batched, with broadcasting), linear (bias in the epilogue) and
 // conv (1x1 convolutions directly, others through im2col; grouped convolutions with a direct kernel).
-#include "backends/cuda/cuda_backend.h"
+#include "backends/cuda/gemm.h"
 
 #include "ops/fused.h"
 #include "ops/infer_util.h"
 
 #include <algorithm>
 #include <array>
+#include <format>
+#include <functional>
 #include <mutex>
 #include <vector>
 
 namespace ii::cuda {
 
 namespace {
-
-/// Workspace of cuBLASLt (plus alignment slack: cuBLASLt wants 256-byte aligned workspace).
-constexpr std::size_t kBlasWorkspace = std::size_t{32} << 20;
-constexpr std::size_t kAlign = 256;
-
-std::byte* align_up(std::byte* p) {
-    const auto address = reinterpret_cast<std::uintptr_t>(p);
-    return p + ((kAlign - address % kAlign) % kAlign);
-}
 
 cudaDataType cuda_type(DType dtype) {
     switch (dtype) {
@@ -35,186 +28,265 @@ cudaDataType cuda_type(DType dtype) {
     }
 }
 
-/// A row-major product C[m, n] = op(A) op(B) (A is [m, k], or [k, m] when trans_a), repeated `batch` times.
-struct GemmCall {
-    DType dtype = DType::kF32;
-    bool trans_a = false;
-    bool trans_b = false;
-    std::int64_t m = 0, n = 0, k = 0;
-    std::int64_t lda = 0, ldb = 0, ldc = 0;
-    std::int64_t batch = 1;
-    std::int64_t stride_a = 0, stride_b = 0, stride_c = 0;  // elements
-    const void* a = nullptr;
-    const void* b = nullptr;
-    void* c = nullptr;
-    const void* bias = nullptr;  ///< n elements added to every row
-};
-
-/// Runs GEMMs; caches the cuBLASLt algorithm of every shape it saw (shared by the sessions using the kernel).
-class Gemm {
-public:
-    explicit Gemm(const CudaDevice& device) : device_(device) {}
-
-    Status run(const GemmCall& call, std::span<std::byte> workspace, cudaStream_t stream) const {
-        if (call.m == 0 || call.n == 0 || call.batch == 0) {
-            return ok_status();
-        }
-        const Libraries& l = device_.libraries();
-        const std::size_t element = element_size(call.dtype);
-        if (call.k == 0) {
-            II_CUDA_TRY(
-                cudaMemsetAsync(call.c, 0, static_cast<std::size_t>(call.batch * call.m * call.ldc) * element, stream));
-            return ok_status();
-        }
-        const cudaDataType type = cuda_type(call.dtype);
-        const cublasComputeType_t compute =
-            call.dtype == DType::kF32 && device_.options().tf32 ? CUBLAS_COMPUTE_32F_FAST_TF32 : CUBLAS_COMPUTE_32F;
-        // Column-major view: C^T [n, m] = op(B)^T [n, k] * op(A)^T [k, m]; X is B's memory, Y is A's.
-        cublasLtMatmulDescOpaque_t desc_storage{};
-        auto* desc = reinterpret_cast<cublasLtMatmulDesc_t>(&desc_storage);
-        II_TRY(blas(l.matmul_desc_init(desc, sizeof(desc_storage), compute, CUDA_R_32F), "matmul descriptor"));
-        const cublasOperation_t op_x = call.trans_b ? CUBLAS_OP_T : CUBLAS_OP_N;
-        const cublasOperation_t op_y = call.trans_a ? CUBLAS_OP_T : CUBLAS_OP_N;
-        II_TRY(blas(l.matmul_desc_set(desc, CUBLASLT_MATMUL_DESC_TRANSA, &op_x, sizeof(op_x)), "TRANSA"));
-        II_TRY(blas(l.matmul_desc_set(desc, CUBLASLT_MATMUL_DESC_TRANSB, &op_y, sizeof(op_y)), "TRANSB"));
-        if (call.bias != nullptr) {
-            const cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_BIAS;
-            II_TRY(
-                blas(l.matmul_desc_set(desc, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue)), "EPILOGUE"));
-            II_TRY(blas(l.matmul_desc_set(desc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &call.bias, sizeof(call.bias)),
-                        "BIAS_POINTER"));
-        }
-        cublasLtMatrixLayoutOpaque_t x_storage{};
-        cublasLtMatrixLayoutOpaque_t y_storage{};
-        cublasLtMatrixLayoutOpaque_t d_storage{};
-        auto* x = reinterpret_cast<cublasLtMatrixLayout_t>(&x_storage);
-        auto* y = reinterpret_cast<cublasLtMatrixLayout_t>(&y_storage);
-        auto* d = reinterpret_cast<cublasLtMatrixLayout_t>(&d_storage);
-        II_TRY(layout(x, type, call.trans_b ? call.k : call.n, call.trans_b ? call.n : call.k, call.ldb, call.batch,
-                      call.stride_b));
-        II_TRY(layout(y, type, call.trans_a ? call.m : call.k, call.trans_a ? call.k : call.m, call.lda, call.batch,
-                      call.stride_a));
-        II_TRY(layout(d, type, call.n, call.m, call.ldc, call.batch, call.stride_c));
-
-        std::byte* work = align_up(workspace.data());
-        const std::size_t work_size =
-            workspace.size() >= kBlasWorkspace + kAlign ? kBlasWorkspace : 0;  // too small: algorithms without it
-        Key key{call.trans_a,
-                call.trans_b,
-                call.bias != nullptr,
-                call.m,
-                call.n,
-                call.k,
-                call.lda,
-                call.ldb,
-                call.ldc,
-                call.batch,
-                call.stride_a,
-                call.stride_b,
-                call.stride_c,
-                alignment(call.b, call.stride_b * static_cast<std::int64_t>(element)),
-                alignment(call.a, call.stride_a * static_cast<std::int64_t>(element)),
-                alignment(call.c, call.stride_c * static_cast<std::int64_t>(element)),
-                work_size};
-        II_ASSIGN_OR_RETURN(const cublasLtMatmulAlgo_t algo, algorithm(key, desc, x, y, d));
-        const float alpha = 1;
-        const float beta = 0;
-        II_TRY(blas(l.matmul(device_.blas(), desc, &alpha, call.b, x, call.a, y, &beta, call.c, d, call.c, d, &algo,
-                             work, work_size, stream),
-                    "cublasLtMatmul"));
-        return ok_status();
+/// The largest power of two up to 256 dividing the address and the batch stride in bytes.
+std::uint32_t alignment(const void* pointer, std::int64_t stride_bytes) {
+    std::uintptr_t bits = reinterpret_cast<std::uintptr_t>(pointer) | kAlign;
+    if (stride_bytes != 0) {
+        bits |= static_cast<std::uintptr_t>(stride_bytes);
     }
+    return static_cast<std::uint32_t>(bits & (~bits + 1));
+}
 
-private:
-    struct Key {
-        bool trans_a, trans_b, bias;
-        std::int64_t m, n, k, lda, ldb, ldc, batch, stride_a, stride_b, stride_c;
-        std::uint32_t align_x, align_y, align_d;
-        std::size_t workspace;
-        bool operator==(const Key&) const = default;
-    };
+}  // namespace
 
-    Status blas(cublasStatus_t status, std::string_view what) const {
-        if (status == CUBLAS_STATUS_SUCCESS) {
-            return ok_status();
-        }
-        return errors::internal("cuBLASLt {}: {}", what, device_.libraries().lt_status_string(status));
-    }
-
-    Status layout(cublasLtMatrixLayout_t layout, cudaDataType type, std::int64_t rows, std::int64_t cols,
-                  std::int64_t ld, std::int64_t batch, std::int64_t stride) const {
-        const Libraries& l = device_.libraries();
-        II_TRY(blas(l.layout_init(layout, sizeof(cublasLtMatrixLayoutOpaque_t), type, static_cast<std::uint64_t>(rows),
-                                  static_cast<std::uint64_t>(cols), ld),
-                    "matrix layout"));
-        if (batch > 1) {
-            const auto count = static_cast<std::int32_t>(batch);
-            II_TRY(blas(l.layout_set(layout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &count, sizeof(count)), "batch"));
-            II_TRY(blas(l.layout_set(layout, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &stride, sizeof(stride)),
-                        "batch stride"));
-        }
-        return ok_status();
-    }
-
-    /// The largest power of two up to 256 dividing the address and the batch stride in bytes.
-    static std::uint32_t alignment(const void* pointer, std::int64_t stride_bytes) {
-        std::uintptr_t bits = reinterpret_cast<std::uintptr_t>(pointer) | kAlign;
-        if (stride_bytes != 0) {
-            bits |= static_cast<std::uintptr_t>(stride_bytes);
-        }
-        return static_cast<std::uint32_t>(bits & (~bits + 1));
-    }
-
-    Result<cublasLtMatmulAlgo_t> algorithm(const Key& key, cublasLtMatmulDesc_t desc, cublasLtMatrixLayout_t x,
-                                           cublasLtMatrixLayout_t y, cublasLtMatrixLayout_t d) const {
-        {
-            const std::lock_guard lock(mutex_);
-            for (const auto& [cached, algo] : algos_) {
-                if (cached == key) {
-                    return algo;
-                }
+Result<int> fastest(int count, cudaStream_t stream, const std::function<cudaError_t(int)>& run) {
+    struct Events {
+        cudaEvent_t start = nullptr;
+        cudaEvent_t stop = nullptr;
+        ~Events() {
+            if (start != nullptr) {
+                cudaEventDestroy(start);
+            }
+            if (stop != nullptr) {
+                cudaEventDestroy(stop);
             }
         }
-        const Libraries& l = device_.libraries();
-        cublasLtMatmulPreference_t preference = nullptr;
-        II_TRY(blas(l.preference_create(&preference), "preference"));
-        struct Destroy {
-            const Libraries& l;
-            cublasLtMatmulPreference_t preference;
-            ~Destroy() { l.preference_destroy(preference); }
-        } destroy{l, preference};
-        const std::uint64_t workspace = key.workspace;
-        II_TRY(
-            blas(l.preference_set(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace, sizeof(workspace)),
-                 "workspace preference"));
-        II_TRY(blas(
-            l.preference_set(preference, CUBLASLT_MATMUL_PREF_MIN_ALIGNMENT_A_BYTES, &key.align_x, sizeof(key.align_x)),
-            "alignment preference"));
-        II_TRY(blas(
-            l.preference_set(preference, CUBLASLT_MATMUL_PREF_MIN_ALIGNMENT_B_BYTES, &key.align_y, sizeof(key.align_y)),
-            "alignment preference"));
-        II_TRY(blas(
-            l.preference_set(preference, CUBLASLT_MATMUL_PREF_MIN_ALIGNMENT_C_BYTES, &key.align_d, sizeof(key.align_d)),
-            "alignment preference"));
-        II_TRY(blas(
-            l.preference_set(preference, CUBLASLT_MATMUL_PREF_MIN_ALIGNMENT_D_BYTES, &key.align_d, sizeof(key.align_d)),
-            "alignment preference"));
-        cublasLtMatmulHeuristicResult_t result{};
-        int found = 0;
-        II_TRY(blas(l.algo_heuristic(device_.blas(), desc, x, y, d, d, preference, 1, &result, &found),
-                    "algorithm heuristic"));
-        if (found == 0) {
-            return errors::unsupported("cuBLASLt has no algorithm for a {}x{}x{} product", key.m, key.n, key.k);
+    } events;
+    II_CUDA_TRY(cudaEventCreate(&events.start));
+    II_CUDA_TRY(cudaEventCreate(&events.stop));
+    // Average time of `repeats` runs of a candidate in milliseconds; negative when it fails.
+    auto measure = [&](int candidate, int repeats) -> Result<float> {
+        II_CUDA_TRY(cudaEventRecord(events.start, stream));
+        bool ok = true;
+        for (int repeat = 0; repeat < repeats && ok; ++repeat) {
+            ok = run(candidate) == cudaSuccess;
         }
-        const std::lock_guard lock(mutex_);
-        algos_.emplace_back(key, result.algo);
-        return result.algo;
+        II_CUDA_TRY(cudaEventRecord(events.stop, stream));
+        II_CUDA_TRY(cudaEventSynchronize(events.stop));
+        float ms = 0;
+        II_CUDA_TRY(cudaEventElapsedTime(&ms, events.start, events.stop));
+        cudaGetLastError();
+        return ok ? ms / static_cast<float>(repeats) : -1.0f;
+    };
+    // Repetitions per measurement: about 0.2 ms of work (short kernels are noisy), between 3 and 64.
+    std::vector<int> repeats(static_cast<std::size_t>(count), 0);
+    for (int candidate = 0; candidate < count; ++candidate) {
+        II_ASSIGN_OR_RETURN(const float once, measure(candidate, 1));  // also the warm-up
+        if (once >= 0) {
+            repeats[static_cast<std::size_t>(candidate)] =
+                std::clamp(static_cast<int>(0.2f / std::max(once, 1e-4f)), 3, 64);
+        }
     }
+    // Two rounds over the candidates in turn (slow drifts of the clock affect all of them); the best average wins.
+    std::vector<float> best_ms(static_cast<std::size_t>(count), -1.0f);
+    for (int round = 0; round < 2; ++round) {
+        for (int candidate = 0; candidate < count; ++candidate) {
+            const int n = repeats[static_cast<std::size_t>(candidate)];
+            if (n == 0) {
+                continue;
+            }
+            II_ASSIGN_OR_RETURN(const float ms, measure(candidate, n));
+            float& best = best_ms[static_cast<std::size_t>(candidate)];
+            if (ms >= 0 && (best < 0 || ms < best)) {
+                best = ms;
+            }
+        }
+    }
+    int best = -1;
+    for (int candidate = 0; candidate < count; ++candidate) {
+        const float ms = best_ms[static_cast<std::size_t>(candidate)];
+        if (ms >= 0 && (best < 0 || ms < best_ms[static_cast<std::size_t>(best)])) {
+            best = candidate;
+        }
+    }
+    if (best < 0) {
+        return errors::internal("autotuning: no candidate ran");
+    }
+    return best;
+}
 
-    const CudaDevice& device_;
-    mutable std::mutex mutex_;
-    mutable std::vector<std::pair<Key, cublasLtMatmulAlgo_t>> algos_;
-};
+Status Gemm::run(const GemmCall& call, std::span<std::byte> workspace, cudaStream_t stream) const {
+    if (call.m == 0 || call.n == 0 || call.batch == 0) {
+        return ok_status();
+    }
+    const Libraries& l = device_.libraries();
+    const DType input = call.input == DType::kInvalid ? call.dtype : call.input;
+    const std::size_t element = element_size(call.dtype);
+    const std::size_t input_element = element_size(input);
+    if (call.k == 0) {
+        II_CUDA_TRY(
+            cudaMemsetAsync(call.c, 0, static_cast<std::size_t>(call.batch * call.m * call.ldc) * element, stream));
+        return ok_status();
+    }
+    const cudaDataType type = cuda_type(input);
+    const cublasComputeType_t compute =
+        input == DType::kF32 && device_.options().tf32 ? CUBLAS_COMPUTE_32F_FAST_TF32 : CUBLAS_COMPUTE_32F;
+    // Column-major view: C^T [n, m] = op(B)^T [n, k] * op(A)^T [k, m]; X is B's memory, Y is A's.
+    cublasLtMatmulDescOpaque_t desc_storage{};
+    auto* desc = reinterpret_cast<cublasLtMatmulDesc_t>(&desc_storage);
+    II_TRY(blas(l.matmul_desc_init(desc, sizeof(desc_storage), compute, CUDA_R_32F), "matmul descriptor"));
+    const cublasOperation_t op_x = call.trans_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+    const cublasOperation_t op_y = call.trans_a ? CUBLAS_OP_T : CUBLAS_OP_N;
+    II_TRY(blas(l.matmul_desc_set(desc, CUBLASLT_MATMUL_DESC_TRANSA, &op_x, sizeof(op_x)), "TRANSA"));
+    II_TRY(blas(l.matmul_desc_set(desc, CUBLASLT_MATMUL_DESC_TRANSB, &op_y, sizeof(op_y)), "TRANSB"));
+    if (call.bias != nullptr) {
+        const cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_BIAS;
+        II_TRY(blas(l.matmul_desc_set(desc, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue)), "EPILOGUE"));
+        II_TRY(blas(l.matmul_desc_set(desc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &call.bias, sizeof(call.bias)),
+                    "BIAS_POINTER"));
+        const cudaDataType bias_type = cuda_type(call.dtype);
+        II_TRY(blas(l.matmul_desc_set(desc, CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE, &bias_type, sizeof(bias_type)),
+                    "BIAS_DATA_TYPE"));
+    }
+    cublasLtMatrixLayoutOpaque_t x_storage{};
+    cublasLtMatrixLayoutOpaque_t y_storage{};
+    cublasLtMatrixLayoutOpaque_t d_storage{};
+    auto* x = reinterpret_cast<cublasLtMatrixLayout_t>(&x_storage);
+    auto* y = reinterpret_cast<cublasLtMatrixLayout_t>(&y_storage);
+    auto* d = reinterpret_cast<cublasLtMatrixLayout_t>(&d_storage);
+    II_TRY(layout(x, type, call.trans_b ? call.k : call.n, call.trans_b ? call.n : call.k, call.ldb, call.batch,
+                  call.stride_b));
+    II_TRY(layout(y, type, call.trans_a ? call.m : call.k, call.trans_a ? call.k : call.m, call.lda, call.batch,
+                  call.stride_a));
+    II_TRY(layout(d, cuda_type(call.dtype), call.n, call.m, call.ldc, call.batch, call.stride_c));
+
+    std::byte* work = align_up(workspace.data());
+    const std::size_t work_size =
+        workspace.size() >= kBlasWorkspace + kAlign ? kBlasWorkspace : 0;  // too small: algorithms without it
+    Key key{input,
+            call.accumulate,
+            call.trans_a,
+            call.trans_b,
+            call.bias != nullptr,
+            call.m,
+            call.n,
+            call.k,
+            call.lda,
+            call.ldb,
+            call.ldc,
+            call.batch,
+            call.stride_a,
+            call.stride_b,
+            call.stride_c,
+            alignment(call.b, call.stride_b * static_cast<std::int64_t>(input_element)),
+            alignment(call.a, call.stride_a * static_cast<std::int64_t>(input_element)),
+            alignment(call.c, call.stride_c * static_cast<std::int64_t>(element)),
+            work_size};
+    const float alpha = 1;
+    const float beta = call.accumulate ? 1.0f : 0.0f;
+    auto launch = [&](const cublasLtMatmulAlgo_t& algo) {
+        return l.matmul(device_.blas(), desc, &alpha, call.b, x, call.a, y, &beta, call.c, d, call.c, d, &algo, work,
+                        work_size, stream);
+    };
+    II_ASSIGN_OR_RETURN(const cublasLtMatmulAlgo_t algo, algorithm(key, desc, x, y, d, launch, stream));
+    II_TRY(blas(launch(algo), "cublasLtMatmul"));
+    return ok_status();
+}
+
+Status Gemm::blas(cublasStatus_t status, std::string_view what) const {
+    if (status == CUBLAS_STATUS_SUCCESS) {
+        return ok_status();
+    }
+    return errors::internal("cuBLASLt {}: {}", what, device_.libraries().lt_status_string(status));
+}
+
+Status Gemm::layout(cublasLtMatrixLayout_t layout, cudaDataType type, std::int64_t rows, std::int64_t cols,
+                    std::int64_t ld, std::int64_t batch, std::int64_t stride) const {
+    const Libraries& l = device_.libraries();
+    II_TRY(blas(l.layout_init(layout, sizeof(cublasLtMatrixLayoutOpaque_t), type, static_cast<std::uint64_t>(rows),
+                              static_cast<std::uint64_t>(cols), ld),
+                "matrix layout"));
+    if (batch > 1) {
+        const auto count = static_cast<std::int32_t>(batch);
+        II_TRY(blas(l.layout_set(layout, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &count, sizeof(count)), "batch"));
+        II_TRY(blas(l.layout_set(layout, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &stride, sizeof(stride)),
+                    "batch stride"));
+    }
+    return ok_status();
+}
+
+Result<cublasLtMatmulAlgo_t> Gemm::algorithm(const Key& key, cublasLtMatmulDesc_t desc, cublasLtMatrixLayout_t x,
+                                             cublasLtMatrixLayout_t y, cublasLtMatrixLayout_t d,
+                                             const std::function<cublasStatus_t(const cublasLtMatmulAlgo_t&)>& launch,
+                                             cudaStream_t stream) const {
+    {
+        const std::lock_guard lock(mutex_);
+        for (const auto& [cached, algo] : algos_) {
+            if (cached == key) {
+                return algo;
+            }
+        }
+    }
+    auto remember = [&](const cublasLtMatmulAlgo_t& algo) {
+        const std::lock_guard lock(mutex_);
+        algos_.emplace_back(key, algo);
+        return algo;
+    };
+    TuningCache* tuning = device_.tuning();
+    const std::string name =
+        std::format("gemm {} {}{}{} {}x{}x{} ld {} {} {} batch {} stride {} {} {} align {} {} {} work {} tf32 {}",
+                    to_string(key.input), key.trans_a ? 't' : 'n', key.trans_b ? 't' : 'n', key.bias ? 'b' : '-', key.m,
+                    key.n, key.k, key.lda, key.ldb, key.ldc, key.batch, key.stride_a, key.stride_b, key.stride_c,
+                    key.align_x, key.align_y, key.align_d, key.workspace, device_.options().tf32 ? 1 : 0);
+    if (tuning != nullptr) {
+        if (const std::optional<std::string> cached = tuning->find(name)) {
+            cublasLtMatmulAlgo_t algo{};
+            if (from_hex(*cached, &algo, sizeof(algo))) {
+                return remember(algo);
+            }
+        }
+    }
+    const Libraries& l = device_.libraries();
+    cublasLtMatmulPreference_t preference = nullptr;
+    II_TRY(blas(l.preference_create(&preference), "preference"));
+    struct Destroy {
+        const Libraries& l;
+        cublasLtMatmulPreference_t preference;
+        ~Destroy() { l.preference_destroy(preference); }
+    } destroy{l, preference};
+    const std::uint64_t workspace = key.workspace;
+    II_TRY(blas(l.preference_set(preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace, sizeof(workspace)),
+                "workspace preference"));
+    II_TRY(blas(
+        l.preference_set(preference, CUBLASLT_MATMUL_PREF_MIN_ALIGNMENT_A_BYTES, &key.align_x, sizeof(key.align_x)),
+        "alignment preference"));
+    II_TRY(blas(
+        l.preference_set(preference, CUBLASLT_MATMUL_PREF_MIN_ALIGNMENT_B_BYTES, &key.align_y, sizeof(key.align_y)),
+        "alignment preference"));
+    II_TRY(blas(
+        l.preference_set(preference, CUBLASLT_MATMUL_PREF_MIN_ALIGNMENT_C_BYTES, &key.align_d, sizeof(key.align_d)),
+        "alignment preference"));
+    II_TRY(blas(
+        l.preference_set(preference, CUBLASLT_MATMUL_PREF_MIN_ALIGNMENT_D_BYTES, &key.align_d, sizeof(key.align_d)),
+        "alignment preference"));
+    constexpr int kCandidates = 8;
+    std::array<cublasLtMatmulHeuristicResult_t, kCandidates> results{};
+    int found = 0;
+    II_TRY(blas(l.algo_heuristic(device_.blas(), desc, x, y, d, d, preference, tuning != nullptr ? kCandidates : 1,
+                                 results.data(), &found),
+                "algorithm heuristic"));
+    if (found == 0) {
+        return errors::unsupported("cuBLASLt has no algorithm for a {}x{}x{} product", key.m, key.n, key.k);
+    }
+    // Products that add to C are not measured (repeated runs would change C): cuBLASLt's first choice.
+    cudaStreamCaptureStatus capturing = cudaStreamCaptureStatusNone;
+    if (tuning == nullptr || found == 1 || key.accumulate || cudaStreamIsCapturing(stream, &capturing) != cudaSuccess ||
+        capturing != cudaStreamCaptureStatusNone) {
+        cudaGetLastError();
+        return remember(results[0].algo);  // cuBLASLt's first choice (no measurement while recording)
+    }
+    // Autotuning: run every candidate on the real arguments (the output is written again afterwards).
+    II_ASSIGN_OR_RETURN(const int best, fastest(found, stream, [&](int candidate) {
+                            return launch(results[static_cast<std::size_t>(candidate)].algo) == CUBLAS_STATUS_SUCCESS
+                                       ? cudaSuccess
+                                       : cudaErrorUnknown;
+                        }));
+    const cublasLtMatmulAlgo_t& algo = results[static_cast<std::size_t>(best)].algo;
+    tuning->store(name, to_hex(&algo, sizeof(algo)));
+    return remember(algo);
+}
+
+namespace {
 
 Status check_float(const ir::Node& node) {
     return check_dtypes(node, {DType::kF32, DType::kF16, DType::kBF16});
@@ -224,6 +296,8 @@ Status check_float(const ir::Node& node) {
 
 class MatmulKernel final : public Kernel {
 public:
+    bool can_record() const override { return true; }  // only enqueues work on the stream
+
     MatmulKernel(const CudaDevice& device, bool widen, bool trans_a, bool trans_b)
         : gemm_(device), device_(device), widen_(widen), trans_a_(trans_a), trans_b_(trans_b) {}
 
@@ -346,6 +420,9 @@ private:
 };
 
 Status check_matmul(const ir::Node& node) {
+    if (is_weight_product(node)) {
+        return check_weight_product(node);
+    }
     II_TRY(check_float(node));
     const DType a = node.input(0)->dtype();
     const DType b = node.input(1)->dtype();
@@ -359,6 +436,9 @@ Status check_matmul(const ir::Node& node) {
 }
 
 Result<std::unique_ptr<Kernel>> create_matmul(const ir::Node& node, const CudaDevice& device) {
+    if (is_weight_product(node)) {
+        return create_weight_product(node, device);
+    }
     const bool widen = node.input(0)->dtype() != node.input(1)->dtype();
     return std::unique_ptr<Kernel>(std::make_unique<MatmulKernel>(device, widen, node.attrs().get_bool("transpose_a"),
                                                                   node.attrs().get_bool("transpose_b")));
@@ -368,6 +448,8 @@ Result<std::unique_ptr<Kernel>> create_matmul(const ir::Node& node, const CudaDe
 
 class LinearKernel final : public Kernel {
 public:
+    bool can_record() const override { return true; }  // only enqueues work on the stream
+
     LinearKernel(const CudaDevice& device, bool widen, bool transpose_w)
         : gemm_(device), device_(device), widen_(widen), transpose_w_(transpose_w) {}
 
@@ -413,6 +495,9 @@ private:
 };
 
 Status check_linear(const ir::Node& node) {
+    if (is_weight_product(node)) {
+        return check_weight_product(node);
+    }
     II_TRY(check_float(node));
     const DType dtype = node.input(0)->dtype();
     const DType weights = node.input(1)->dtype();
@@ -429,6 +514,9 @@ Status check_linear(const ir::Node& node) {
 }
 
 Result<std::unique_ptr<Kernel>> create_linear(const ir::Node& node, const CudaDevice& device) {
+    if (is_weight_product(node)) {
+        return create_weight_product(node, device);
+    }
     const bool widen = node.input(0)->dtype() != node.input(1)->dtype();
     return std::unique_ptr<Kernel>(std::make_unique<LinearKernel>(device, widen, node.attrs().get_bool("transpose_w")));
 }
@@ -442,6 +530,8 @@ constexpr std::int64_t kColumnBytes = std::int64_t{256} << 20;
 /// has the output's dtype, else from a temporary in the workspace).
 class ConvKernel final : public Kernel {
 public:
+    bool can_record() const override { return true; }  // only enqueues work on the stream
+
     ConvKernel(const CudaDevice& device, int spatial, ops::WindowAttrs window, std::int64_t groups, DType conv_dtype,
                const ElementwiseModule* epilogue, bool temporary)
         : gemm_(device),

@@ -142,6 +142,17 @@ Status SessionImpl::synchronize() {
     return first;
 }
 
+namespace {
+
+/// A permute that keeps the element order (see backend::keeps_element_order) runs as a view.
+bool order_preserving_permute(const Step& step, const std::vector<Shape>& shapes) {
+    return !step.is_transfer() && step.node->op_name() == "permute" && !step.inputs.empty() && step.inputs[0] >= 0 &&
+           backend::keeps_element_order(step.node->attrs().get_ints("perm"),
+                                        shapes[static_cast<std::size_t>(step.inputs[0])]);
+}
+
+}  // namespace
+
 Status SessionImpl::prepare() {
     const ProgramImpl& p = *program;
     // Fast path: same input shapes as the current plan.
@@ -348,7 +359,7 @@ Status SessionImpl::prepare() {
             continue;
         }
         const int out = step.outputs[0];
-        if (step.node->op().has_flag(ir::kOpView)) {
+        if (step.node->op().has_flag(ir::kOpView) || order_preserving_permute(step, next.shapes)) {
             const int in = step.inputs[0];
             const ir::ValueKind kind = p.values[static_cast<std::size_t>(in)].kind;
             const int r = kind == ir::ValueKind::kNode ? root[static_cast<std::size_t>(in)] : -1;
@@ -482,6 +493,38 @@ Status SessionImpl::prepare() {
         }
     }
 
+    // --- Segments that can be recorded: runs of recordable kernels on one device ---
+    constexpr int kMinSegmentKernels = 3;
+    next.segment_at.assign(p.steps.size(), -1);
+    for (std::size_t s = 0; s < p.steps.size();) {
+        const Step& first = p.steps[s];
+        if (first.is_transfer() || first.device == 0 || next.alias_steps[s] != 0 || !first.kernel->can_record()) {
+            ++s;
+            continue;
+        }
+        std::size_t e = s;
+        int kernels = 0;
+        while (e < p.steps.size()) {
+            const Step& step = p.steps[e];
+            if (next.alias_steps[e] == 0) {
+                if (step.is_transfer() || step.device != first.device || !step.kernel->can_record()) {
+                    break;
+                }
+                ++kernels;
+            }
+            ++e;
+        }
+        if (kernels >= kMinSegmentKernels) {
+            next.segment_at[s] = static_cast<int>(next.segments.size());
+            ExecutionPlan::Segment segment;
+            segment.begin = s;
+            segment.end = e;
+            segment.device = first.device;
+            next.segments.push_back(std::move(segment));
+        }
+        s = e;
+    }
+
     // --- Pre-built kernel arguments ---
     for (const Step& step : p.steps) {
         next.view_begin.push_back(next.views.size());
@@ -602,6 +645,14 @@ Status SessionImpl::execute() {
     profiled = false;
     for (std::size_t s = 0; s < p.steps.size(); ++s) {
         const Step& step = p.steps[s];
+        if (!profiling && plan.segment_at[s] >= 0) {
+            ExecutionPlan::Segment& segment = plan.segments[static_cast<std::size_t>(plan.segment_at[s])];
+            II_ASSIGN_OR_RETURN(const bool replayed, run_segment(segment, context));
+            if (replayed) {
+                s = segment.end - 1;
+                continue;
+            }
+        }
         if (profiling) {
             step_times[2 * s] = elapsed_ns();
             step_times[2 * s + 1] = step_times[2 * s];
@@ -611,40 +662,7 @@ Status SessionImpl::execute() {
                 value_data[static_cast<std::size_t>(step.inputs[0])];
             continue;
         }
-        Status status;
-        if (step.is_transfer()) {
-            const auto in = static_cast<std::size_t>(step.inputs[0]);
-            void* destination = value_data[static_cast<std::size_t>(step.outputs[0])];
-            const std::size_t nbytes = storage_size(p.values[in].type.dtype, plan.shapes[in].numel());
-            if (step.transfer_from == 0) {
-                status =
-                    queues[static_cast<std::size_t>(step.device)]->copy_to_device(destination, value_data[in], nbytes);
-            } else {
-                backend::Queue& queue = *queues[static_cast<std::size_t>(step.transfer_from)];
-                status = queue.copy_to_host(destination, value_data[in], nbytes);
-                if (status.ok()) {
-                    status = queue.synchronize();  // the host steps after this one read the copy
-                }
-            }
-        } else {
-            const std::size_t begin = plan.view_begin[s];
-            const std::size_t middle = begin + step.inputs.size();
-            const std::size_t end = plan.view_begin[s + 1];
-            for (std::size_t i = 0; i < step.inputs.size(); ++i) {
-                const int v = step.inputs[i];
-                plan.views[begin + i].data = v < 0 ? nullptr : value_data[static_cast<std::size_t>(v)];
-            }
-            for (std::size_t o = 0; o < step.outputs.size(); ++o) {
-                plan.views[middle + o].data = value_data[static_cast<std::size_t>(step.outputs[o])];
-            }
-            const auto device = static_cast<std::size_t>(step.device);
-            context.inputs = std::span<const backend::TensorView>(plan.views.data() + begin, middle - begin);
-            context.outputs = std::span<const backend::TensorView>(plan.views.data() + middle, end - middle);
-            context.workspace =
-                std::span<std::byte>(bases[device] + plan.workspace_offsets[s], plan.workspace_sizes[s]);
-            context.queue = queues[device].get();
-            status = step.kernel->run(context);
-        }
+        Status status = run_step(s, context);
         if (profiling && status.ok()) {
             // Device work is asynchronous: wait for it, so that a step's time is its own.
             const int device = step.is_transfer() ? (step.transfer_from == 0 ? step.device : 0) : step.device;
@@ -707,6 +725,105 @@ Status SessionImpl::execute() {
         profiled = true;
     }
     return ok_status();
+}
+
+Status SessionImpl::run_step(std::size_t s, backend::KernelContext& context) {
+    const ProgramImpl& p = *program;
+    const Step& step = p.steps[s];
+    if (plan.alias_steps[s] != 0) {
+        value_data[static_cast<std::size_t>(step.outputs[0])] = value_data[static_cast<std::size_t>(step.inputs[0])];
+        return ok_status();
+    }
+    Status status;
+    if (step.is_transfer()) {
+        const auto in = static_cast<std::size_t>(step.inputs[0]);
+        void* destination = value_data[static_cast<std::size_t>(step.outputs[0])];
+        const std::size_t nbytes = storage_size(p.values[in].type.dtype, plan.shapes[in].numel());
+        if (step.transfer_from == 0) {
+            status = queues[static_cast<std::size_t>(step.device)]->copy_to_device(destination, value_data[in], nbytes);
+        } else {
+            backend::Queue& queue = *queues[static_cast<std::size_t>(step.transfer_from)];
+            status = queue.copy_to_host(destination, value_data[in], nbytes);
+            if (status.ok()) {
+                status = queue.synchronize();  // the host steps after this one read the copy
+            }
+        }
+    } else {
+        const std::size_t begin = plan.view_begin[s];
+        const std::size_t middle = begin + step.inputs.size();
+        const std::size_t end = plan.view_begin[s + 1];
+        for (std::size_t i = 0; i < step.inputs.size(); ++i) {
+            const int v = step.inputs[i];
+            plan.views[begin + i].data = v < 0 ? nullptr : value_data[static_cast<std::size_t>(v)];
+        }
+        for (std::size_t o = 0; o < step.outputs.size(); ++o) {
+            plan.views[middle + o].data = value_data[static_cast<std::size_t>(step.outputs[o])];
+        }
+        const auto device = static_cast<std::size_t>(step.device);
+        context.inputs = std::span<const backend::TensorView>(plan.views.data() + begin, middle - begin);
+        context.outputs = std::span<const backend::TensorView>(plan.views.data() + middle, end - middle);
+        context.workspace = std::span<std::byte>(bases[device] + plan.workspace_offsets[s], plan.workspace_sizes[s]);
+        context.queue = queues[device].get();
+        status = step.kernel->run(context);
+    }
+    return status;
+}
+
+Result<bool> SessionImpl::run_segment(ExecutionPlan::Segment& segment, backend::KernelContext& context) {
+    if (segment.disabled) {
+        return false;
+    }
+    // The kernel arguments of this run (views resolved as the steps would resolve them).
+    const ProgramImpl& p = *program;
+    std::vector<const void*>& pointers = segment_pointers;
+    pointers.clear();
+    for (std::size_t s = segment.begin; s < segment.end; ++s) {
+        const Step& step = p.steps[s];
+        if (plan.alias_steps[s] != 0) {
+            value_data[static_cast<std::size_t>(step.outputs[0])] =
+                value_data[static_cast<std::size_t>(step.inputs[0])];
+            continue;
+        }
+        for (const int v : step.inputs) {
+            pointers.push_back(v < 0 ? nullptr : value_data[static_cast<std::size_t>(v)]);
+        }
+        for (const int v : step.outputs) {
+            pointers.push_back(value_data[static_cast<std::size_t>(v)]);
+        }
+        pointers.push_back(bases[static_cast<std::size_t>(step.device)] + plan.workspace_offsets[s]);
+    }
+    backend::Queue& queue = *queues[static_cast<std::size_t>(segment.device)];
+    if (pointers != segment.pointers) {
+        segment.pointers = pointers;
+        segment.repeats = 0;
+        segment.recording.reset();
+    }
+    if (segment.recording) {
+        II_TRY(queue.replay(*segment.recording));
+        return true;
+    }
+    // The first run with these arguments calls the kernels (they may still set themselves up, e.g. choose cuBLASLt
+    // algorithms); the second records them and replays the recording.
+    if (++segment.repeats < 2) {
+        return false;
+    }
+    if (!queue.begin_recording().ok()) {
+        segment.disabled = true;
+        return false;
+    }
+    Status status;
+    for (std::size_t s = segment.begin; s < segment.end && status.ok(); ++s) {
+        status = run_step(s, context);
+    }
+    Result<std::unique_ptr<backend::Recording>> recording = queue.end_recording();
+    if (!status.ok() || !recording.ok()) {
+        // Nothing ran: the steps run one by one (and report their own errors).
+        segment.disabled = true;
+        return false;
+    }
+    segment.recording = std::move(*recording);
+    II_TRY(queue.replay(*segment.recording));
+    return true;
 }
 
 Result<Tensor> SessionImpl::value_tensor(int value) const {

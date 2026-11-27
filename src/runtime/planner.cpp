@@ -46,15 +46,50 @@ public:
         II_CHECK(devices_.size() <= 64, "too many devices");
         index_graph();
         II_TRY(estimate_nodes());
-        greedy();
-        II_TRY(apply_memory_limits());
         bool multi_device = false;
         for (const PlanBackend& backend : backends_) {
             multi_device = multi_device || backend.device != 0;
         }
-        if (multi_device) {
-            refine();
+        // Several starting points, each limited to the memory and refined; the cheapest wins. The greedy start
+        // follows the graph node by node and can stop at a mixed plan whose every single change costs more (a
+        // transformer layer split between the CPU and a GPU); the others start from "everything a device supports
+        // on that device".
+        struct Candidate {
+            std::vector<int> assign;
+            std::vector<int> state_device;
+            std::vector<std::string> notes;
+            double cost = kInf;
+        };
+        std::optional<Candidate> best;
+        Status first_error;
+        const std::size_t starts = multi_device ? devices_.size() : 1;
+        for (std::size_t start = 0; start < starts; ++start) {
+            notes_.clear();
+            if (start == 0) {
+                greedy();
+            } else if (!prefer_device(static_cast<int>(start))) {
+                continue;
+            }
+            if (Status status = apply_memory_limits(); !status.ok()) {
+                if (first_error.ok()) {
+                    first_error = std::move(status);
+                }
+                continue;
+            }
+            if (multi_device) {
+                refine();
+            }
+            const double cost = total_cost();
+            if (!best || cost < best->cost * (1 - 1e-9)) {
+                best = Candidate{assign_, state_device_, notes_, cost};
+            }
         }
+        if (!best) {
+            return first_error;
+        }
+        assign_ = std::move(best->assign);
+        state_device_ = std::move(best->state_device);
+        notes_ = std::move(best->notes);
         return result();
     }
 
@@ -398,6 +433,34 @@ private:
         for (std::size_t s = 0; s < state_device_.size(); ++s) {
             state_device_[s] = natural_state_device(s);
         }
+    }
+
+    /// Every node on its fastest backend of device `device`, nodes the device cannot run on their fastest backend
+    /// elsewhere. False when the device runs no node.
+    bool prefer_device(int device) {
+        assign_.assign(nodes_.size(), -1);
+        bool any = false;
+        for (std::size_t n = 0; n < nodes_.size(); ++n) {
+            const NodeRec& rec = nodes_[n];
+            int chosen = -1;
+            int fastest = -1;
+            for (const int b : rec.candidates) {
+                const double t = rec.time[static_cast<std::size_t>(b)];
+                if (device_of_backend(b) == device && (chosen < 0 || t < rec.time[static_cast<std::size_t>(chosen)])) {
+                    chosen = b;
+                }
+                if (fastest < 0 || t < rec.time[static_cast<std::size_t>(fastest)]) {
+                    fastest = b;
+                }
+            }
+            any = any || chosen >= 0;
+            assign_[n] = chosen >= 0 ? chosen : fastest;
+        }
+        state_device_.assign(state_values_.size(), -1);
+        for (std::size_t s = 0; s < state_device_.size(); ++s) {
+            state_device_[s] = natural_state_device(s);
+        }
+        return any;
     }
 
     /// Moves nodes from the front of the graph off devices that exceed their memory limit.

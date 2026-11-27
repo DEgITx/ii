@@ -10,6 +10,7 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace ii::cuda {
@@ -18,15 +19,48 @@ inline constexpr int kMaxRank = 8;
 
 /// Errors kernels report while they run (they cannot return a status): the first error wins. `DeviceError` lives in
 /// host memory mapped into the device; the queue checks it when it synchronizes.
-enum class DeviceErrorCode : long long { kNone = 0, kGatherIndex = 1 };
+enum class DeviceErrorCode : long long { kNone = 0, kGatherIndex = 1, kSliceUpdateStart = 2, kKvLength = 3 };
 struct DeviceError {
     long long code;   ///< DeviceErrorCode
     long long value;  ///< e.g. the index
     long long limit;  ///< e.g. the size of the axis
+    long long extra;  ///< e.g. the length of a slice
 };
+
+/// Reports an error (the first one wins); a device function for the .cu files.
+#ifdef __CUDACC__
+__device__ inline void report_error(DeviceError* error, DeviceErrorCode code, long long value, long long limit,
+                                    long long extra = 0) {
+    if (atomicCAS(reinterpret_cast<unsigned long long*>(&error->code), 0ull, static_cast<unsigned long long>(code)) ==
+        0ull) {
+        error->value = value;
+        error->limit = limit;
+        error->extra = extra;
+    }
+}
+#endif
 
 /// Element types of the compute kernels.
 enum class Scalar : int { kF32, kF16, kBF16, kI32, kI64 };
+
+/// Storage of matrix weights: floats or the block-quantized GGUF layouts (ii::DType kQ4_0 ... kQ8_K).
+enum class WeightType : int {
+    kF32,
+    kF16,
+    kBF16,
+    kQ4_0,
+    kQ4_1,
+    kQ5_0,
+    kQ5_1,
+    kQ8_0,
+    kQ8_1,
+    kQ2_K,
+    kQ3_K,
+    kQ4_K,
+    kQ5_K,
+    kQ6_K,
+    kQ8_K
+};
 
 // --------------------------------------------------------------------------------------------------------------------
 // Data movement (any element size of 1, 2, 4 or 8 bytes)
@@ -64,6 +98,9 @@ struct PadParams {
     std::uint64_t fill = 0;  ///< kConstant: the bits of the fill value (the low `element_size` bytes)
 };
 cudaError_t pad(void* out, const void* in, int element_size, const PadParams& params, cudaStream_t stream);
+
+/// A kernel that does nothing (measures the cost of a launch).
+cudaError_t launch_empty(cudaStream_t stream);
 
 /// Sets `count` elements to the bits of `fill` (the low `element_size` bytes).
 cudaError_t fill(void* out, int element_size, std::uint64_t fill, std::int64_t count, cudaStream_t stream);
@@ -141,6 +178,10 @@ cudaError_t conv_direct(void* y, const void* x, const void* w, const void* bias,
 /// Converts `count` f16 / bf16 elements to f32.
 cudaError_t widen(float* out, const void* in, Scalar type, std::int64_t count, cudaStream_t stream);
 
+/// Converts `count` elements between float types (rounding to nearest even).
+cudaError_t convert(void* out, Scalar out_type, const void* in, Scalar in_type, std::int64_t count,
+                    cudaStream_t stream);
+
 /// y[o, c, i] += bias[c] for y [outer, channels, inner].
 cudaError_t add_bias(void* y, const void* bias, Scalar type, std::int64_t outer, std::int64_t channels,
                      std::int64_t inner, cudaStream_t stream);
@@ -169,5 +210,91 @@ struct ResizeParams {
     const float* weight[kMaxRank] = {};
 };
 cudaError_t resize(void* y, const void* x, Scalar type, const ResizeParams& params, cudaStream_t stream);
+
+// --------------------------------------------------------------------------------------------------------------------
+// Weights (kernels_quant.cu): rows of `k` elements (a multiple of 32, and of the block size)
+
+/// y[m, j] = sum over i of x[m, i] * w[j, i] (+ bias[j]) for x f32 [rows, k], w [n, k], y f32 [rows, n] and
+/// 1 <= rows <= kGemvRows: products whose time is reading the weights (decoding). Blocks are decoded to f32 and
+/// multiplied in f32.
+/// `split` warps share a feature: 1, 2 or 4 (autotuned), or 0 for a choice from the shape.
+inline constexpr int kGemvRows = 8;
+cudaError_t weight_gemv(float* y, const float* x, const void* w, WeightType type, const float* bias, int rows,
+                        std::int64_t n, std::int64_t k, cudaStream_t stream, int split = 0);
+
+/// Splits f32 rows x [rows, k] into `count` (2 or 3) parts of `type` (f16 or bf16) whose sum is x / scale: parts
+/// [count, rows, k] (each part the rounding of what the previous ones left). With `scales` (f16), every row is first
+/// divided by a power of two (written to scales[row]) that brings its largest magnitude near 2^14: no overflow, and
+/// the low part stays in f16's normal range. Products of 16-bit weights with the parts on tensor cores then keep about
+/// f32 precision.
+cudaError_t split_rows(void* parts, Scalar type, int count, const float* x, float* scales, std::int64_t rows,
+                       std::int64_t k, cudaStream_t stream);
+
+/// c[i, j] = c[i, j] * scales[i] (+ bias[j]) for c [rows, n]; `scales` or `bias` may be null.
+cudaError_t scale_rows(float* c, const float* scales, const float* bias, std::int64_t rows, std::int64_t n,
+                       cudaStream_t stream);
+
+/// Decodes rows [first, first + count) of w [*, k] into out [count, k] of `out_type` (f32, f16 or bf16).
+cudaError_t dequantize_rows(void* out, Scalar out_type, const void* w, WeightType type, std::int64_t first,
+                            std::int64_t count, std::int64_t k, cudaStream_t stream);
+
+// --------------------------------------------------------------------------------------------------------------------
+// Language models (kernels_llm.cu)
+
+/// Rotary embedding (the `rope` operation) of rows of x [..., size]: pairs (i, i + half) or (2i, 2i + 1) of the first
+/// 2 * half features rotate by the angles of the cos / sin row at `table offset(row)`, the rest is copied.
+struct RopeParams {
+    int rank = 0;                               ///< of x
+    std::int64_t dims[kMaxRank] = {};           ///< x's shape
+    std::int64_t table_strides[kMaxRank] = {};  ///< element strides of cos / sin over x's dimensions (0: broadcast)
+    std::int64_t half = 0;
+    bool interleaved = false;
+};
+cudaError_t rope(void* y, const void* x, const void* cos, const void* sin, Scalar type, const RopeParams& params,
+                 cudaStream_t stream);
+
+/// y[o, start + j, :] = update[o, j, :] for y [outer, axis_size, inner] (in place: y is x's memory), update
+/// [outer, length, inner]; `start` is a device scalar. A start outside [0, axis_size - length] is reported.
+struct SliceUpdateParams {
+    std::int64_t outer = 0;
+    std::int64_t axis_size = 0;
+    std::int64_t length = 0;
+    std::int64_t inner_bytes = 0;
+    const void* start = nullptr;
+    bool start64 = true;
+    DeviceError* error = nullptr;
+};
+cudaError_t slice_update(void* y, const void* update, const SliceUpdateParams& params, cudaStream_t stream);
+
+/// Scaled dot-product attention (the `sdpa` operation) for contiguous q [B, H, Sq, D], k [B, Hkv, Skv, D],
+/// v [B, Hkv, Skv, Dv], out [B, H, Sq, Dv] with D, Dv <= 256: one pass over the keys with an online softmax
+/// (flash attention); the scores are never stored. Short queries (decoding) split the keys over several blocks
+/// whose partial results are merged (split-K); the split depends on the shapes only, so the launch can be recorded
+/// in a CUDA graph. `kv_len` (a device scalar, optional) limits the keys; a value outside [0, Skv] is reported.
+struct AttentionParams {
+    std::int64_t batch = 0, heads = 0, kv_heads = 0, sq = 0, skv = 0, d = 0, dv = 0;
+    float scale = 1;
+    float softcap = 0;
+    bool causal = false;
+    std::int64_t window = 0;
+    const void* kv_len = nullptr;
+    bool kv_len64 = true;
+    int mask_kind = 0;                  ///< 0: none, 1: bool (true = attend), 2: additive (q's type)
+    std::int64_t mask_strides[4] = {};  ///< element strides over [B, H, Sq, Skv] (0: broadcast)
+    DeviceError* error = nullptr;
+    int arch = 0;  ///< compute capability of the device, e.g. 120: prompts use tensor cores from 80
+};
+inline constexpr int kAttentionMaxHead = 256;
+/// Workspace bytes for the partial results of a split.
+std::size_t attention_workspace(const AttentionParams& params, int sm_count);
+cudaError_t attention(void* out, const void* q, const void* k, const void* v, const void* mask, Scalar q_type,
+                      Scalar kv_type, const AttentionParams& params, int sm_count, void* workspace,
+                      cudaStream_t stream);
+
+/// The tensor-core kernel `attention` uses for prompts (kernels_flash.cu): compute capability 8.0, head sizes 64, 96
+/// or 128 (equal for keys and values).
+bool flash_attention_supported(const AttentionParams& params, Scalar q_type, Scalar kv_type, int arch);
+cudaError_t flash_attention(void* out, const void* q, const void* k, const void* v, const void* mask, Scalar q_type,
+                            Scalar kv_type, const AttentionParams& params, cudaStream_t stream);
 
 }  // namespace ii::cuda

@@ -593,6 +593,8 @@ Status check_pool(const ir::Node& node) {
 /// Resize with taps precomputed for the static shapes of the node, kept in device memory.
 class ResizeKernel final : public Kernel {
 public:
+    bool can_record() const override { return true; }  // only enqueues work on the stream
+
     static Result<std::unique_ptr<Kernel>> create(const ir::Node& node, const CudaDevice& device) {
         const Shape in = *node.input(0)->type().static_shape();
         const Shape out = *node.output()->type().static_shape();

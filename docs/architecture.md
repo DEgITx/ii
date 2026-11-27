@@ -454,8 +454,9 @@ Implemented (part 5.1, `src/runtime/planner.h`): steps 2–6 below with the roof
 estimates use concrete shapes with symbols from `CompileOptions::plan_dims` (others = 1, e.g. one generated token).
 A composite node left alone on another device than all of its neighbours, where no backend implements it, is
 decomposed and the graph planned again, so that its primitives run next to the neighbours (P3). With all backends on
-the host the plan is simply the fastest backend per node (ii-cpu, ii-ref for the rest). Autotuning (step 7) comes
-with ii-cuda (part 5.4); policies and graph backends' `claim()` later.
+the host the plan is simply the fastest backend per node (ii-cpu, ii-ref for the rest). Part 5.4 added several
+starting points (step 4), free views in the cost model and autotuning of the device figures (step 7); policies and
+graph backends' `claim()` come later.
 
 **Algorithm:**
 
@@ -464,10 +465,13 @@ with ii-cuda (part 5.4); policies and graph backends' `claim()` later.
 2. **Candidates.** For each node: `{(backend, device) | supports ≠ No}`; `ii-ref@cpu` is always present.
    Graph backends claim subgraphs via `claim()` — these become "super-nodes" with their own estimate.
 3. **Cost.** `t(node, backend, device)` from `estimate()` (default roofline: `max(flops/peak, bytes/bw)` + launch
-   overhead); a transfer on an edge crossing memory domains costs `bytes / link_bw + latency`; edges within one
-   domain cost only synchronization.
+   overhead; 0 for nodes the runtime runs as views: `reshape`, and `permute` that only moves dimensions of size 1);
+   a transfer on an edge crossing memory domains costs `bytes / link_bw + latency`; edges within one domain cost only
+   synchronization.
 4. **Initial assignment** — greedy in topological order (HEFT-like): minimize node time + transfers from already
-   assigned predecessors.
+   assigned predecessors. Greedy alone can stop at a mixed plan no single move improves (a transformer layer split
+   between the CPU and a GPU), so the planner also starts from "every node a device supports on that device" for
+   each device, runs steps 5–6 on every start and keeps the cheapest plan.
 5. **Refinement** — local search: merge "islands" (a lone node on another device between large partitions) when this
    reduces total time; eliminates transfer ping-pong.
 6. **Memory constraint.** Weights + states + peak activations per device ≤ `capacity × (1 − reserve)` (capacity:
@@ -475,9 +479,11 @@ with ii-cuda (part 5.4); policies and graph backends' `claim()` later.
    move one by one to their best other device, so the graph is cut once — for a transformer the first layers run on
    the CPU and the rest on the GPU: **automatic layer offload** when the model does not fit into VRAM. The local
    search respects the limits; a model that fits nowhere is an `OutOfMemory` error that names the device.
-7. **Autotuning (optional).** `TuneMode::Measure`: run the top-K plans on real data and pick the best. Results are
-   cached by `(model hash, shapes, device, driver version, ii version)` in `<cache>/ii/tuning.json`. Kernel
-   parameters (block sizes, decode thread count) are tuned the same way.
+7. **Autotuning.** Implemented in ii-cuda (part 5.4): the planner's figures of the GPU (the cost of a kernel in a
+   recorded run, memory and link bandwidth, copy latency) are measured once per device, and kernel choices (the
+   fastest cuBLASLt algorithm per product shape, warps per row of a weight product) are measured on first use; all
+   are cached in `<cache>/cuda-<device uuid>.json` with the device, cuBLASLt and ii versions (a stale file is
+   ignored). Measuring whole candidate plans (`TuneMode::Measure`) is planned.
 
 **Policies and overrides:** `Policy::{Latency, Throughput, LowPower, LowMemory}`, allow/deny lists of backends and
 devices, memory limits; overridable via `CompileOptions`, the CLI (`--backend tensorrt,cuda,cpu`) and `II_BACKENDS`.
@@ -503,6 +509,14 @@ limits and the reasons backends declined nodes ("ii-test-remote: no kernel for '
   state performs zero allocations (verified by a test that counts every `operator new`); the last four plans are kept,
   so alternating shapes (an LLM's prompt steps and single-token steps) do not re-plan. Planned later: symbol upper
   bounds (`seq ≤ 4096`) to plan once for the maximum.
+- **Views**: besides `reshape`, a `permute` that only moves dimensions of size 1 at the bound shapes (an LLM's
+  [1, S, H, D] → [1, H, S, D] with S = 1 when decoding) keeps the element order and is aliased instead of run.
+- **Recorded segments (CUDA graphs)**: a run of consecutive steps on one device whose kernels only enqueue work
+  (`Kernel::can_record`) is a segment. The first run with given kernel arguments (data and workspace pointers) calls
+  the kernels; the second records them with the device queue (`Queue::begin_recording` / `end_recording`, CUDA stream
+  capture in ii-cuda) and replays the recording; later runs with the same arguments replay it with one call. New
+  pointers (another plan, a grown arena) record again; a segment whose recording fails runs step by step. The
+  simulated device records too, so the logic is tested without a GPU. Profiling runs every step.
 - **In-place state updates**: when the step producing a state's update runs in place on the state itself and nothing
   reads the old state afterwards, its output is the state's memory. A KV cache [1, heads, context, head size] written
   by `slice_update` therefore costs only the new rows per step.
@@ -674,6 +688,36 @@ minimax polynomials). Accuracy is stated in the header and verified by sweeps ag
     and by MinGW GCC loading the MSVC-built plugin; `tests/unit/plugin/cuda_test.cpp` checks each kernel path
     against ii-ref; `ii check-backends --backends ii-cuda` passes all 29 cases. ResNet-50, YOLOv8n and BERT-base
     run on the GPU and match ONNX Runtime; speeds: `bench/results/stage5-cuda.md`.
+
+  *Part 5.4 (language models) is implemented:*
+  - **Weight products** (`llm.cpp`, `kernels_quant.cu`): `linear` and `matmul` with weights in every GGUF block type
+    (`q4_0` … `q8_K`) or f16 / bf16 and f32 activations. Up to 8 rows (decoding) a GEMV decodes the blocks to f32
+    and multiplies in f32 — every unit of 32 elements by 4 neighbouring threads, so a warp reads consecutive bytes;
+    one to four warps per output feature (autotuned). More rows (prompts): block-quantized weights are decoded to f16
+    in slices and multiply x rounded to f16 on cuBLASLt (f32 accumulation); 16-bit weights are used as stored and x
+    is split into two f16 parts (with a power-of-two scale per row) or three bf16 parts whose products are summed, so
+    the result keeps about f32 precision. Unlike ii-cpu, activations are not quantized to 8 bits: against ii-ref
+    (f32) the GPU's logits differ by a KL divergence of ~3e-6, the CPU's by ~4e-3.
+  - **Attention** (`kernels_llm.cu`, `kernels_flash.cu`): prompts of 16 queries or more with head sizes 64, 96 or
+    128 run FlashAttention-2 on tensor cores (`mma.sync` m16n8k16, compute capability 8.0+): 64 query rows per
+    block, keys in tiles of 32, scores, online softmax and output in the registers of the MMA fragments; f32
+    operands are split into a high and a low f16 part (three products instead of one) to keep f32 precision.
+    Decoding and the remaining cases use a CUDA-core kernel with the same online softmax that splits the keys over
+    blocks (split-K) by the shapes alone, so it can be recorded; the partial results are merged over the splits in
+    use (`kv_len` is read on the GPU). All `sdpa` features: grouped heads, `kv_len`, causal, window, softcap, bool and
+    additive masks, 16-bit KV caches.
+  - **Other operations**: `rope` (any table broadcast, interleaved or not, partial rotation), `slice_update` (in
+    place: a KV cache write costs only the new rows; a bad start is reported like on the CPU), `dequantize` (block
+    types). The whole LLM graph, KV cache included, runs on the GPU; the planner keeps the token-embedding `gather`
+    on the CPU (the table stays in host memory) and copies the rows.
+  - **CUDA graphs**: every ii-cuda kernel can be recorded; a decoding step is a few recorded segments (twice the
+    speed of launching the kernels one by one for a 0.5B model). `cuda.graphs=0` turns them off.
+  - **Autotuning** (`autotune.h`): see §9 step 7; `cuda.autotune=0` turns it off, `cuda.cache` names the file.
+  - **Verification**: `cuda_test.cpp` covers every weight layout on both paths, attention on both kernels with all
+    features, rope, slice_update, dequantize, recorded runs and the cache; the whole suite passes with the GPU
+    preferred and with the planner deciding; Hugging Face models on the GPU match transformers (logits within 8e-6,
+    greedy generation, perplexity); offload under memory limits gives the same text. Speed against llama.cpp CUDA:
+    `bench/results/stage5-cuda.md`.
 - **ii-vulkan** — the universal GPU backend (Windows/Linux/Android, all vendors). GLSL → SPIR-V at build time; heavy
   ops (matmul with cooperative matrices, attention, quantized matmul) are hand-written; elementwise chains are
   generated and compiled at runtime (pipeline cache on disk).
@@ -846,7 +890,8 @@ ii/
 │   │   ├── ref/       reference kernels
 │   │   ├── cpu/       ii-cpu: drivers; isa/ (SIMD layer, math, kernels compiled per ISA)
 │   │   ├── test_remote/  ii-test-remote: a simulated device for multi-device tests
-│   │   ├── cuda/      ii-cuda (plugin ii-backend-cuda): device, cuBLASLt GEMM, NVRTC elementwise, nvcc kernels
+│   │   ├── cuda/      ii-cuda (plugin ii-backend-cuda): device, cuBLASLt GEMM, NVRTC elementwise, nvcc kernels,
+│   │   │              LLM kernels (quantized GEMV, flash attention), autotuning cache
 │   │   ├── vulkan/  metal/
 │   │   └── plugins/   tensorrt/, onnxruntime/, openvino/, coreml/, …
 │   ├── formats/       onnx/ (+ protobuf wire decoder), npy/npz, gguf, safetensors; later native/

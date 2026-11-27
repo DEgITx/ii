@@ -14,6 +14,7 @@ CudaBackend::CudaBackend(std::string name, std::unique_ptr<CudaDevice> device)
     register_elementwise_kernels(*this);
     register_gemm_kernels(*this);
     register_ops_kernels(*this);
+    register_llm_kernels(*this);
 }
 
 Status CudaBackend::supports(const ir::Node& node) const {

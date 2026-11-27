@@ -1,4 +1,4 @@
-# The CUDA backend: speed and accuracy (stage 5.3)
+# The CUDA backend: speed and accuracy (stages 5.3, 5.4)
 
 `ii bench <model> --repeat 100` (CPU: 20-30 runs), median latency of one run, after warm-up runs. A run includes
 copying the inputs to the GPU and the outputs back (pageable host memory) and runs the plan the planner chose with
@@ -34,4 +34,78 @@ Where the time goes (`ii run --profile`, which waits for every GPU step):
 - The planner keeps BERT's attention-mask arithmetic (a few hundred bytes, i64) on the CPU and copies its result to
   the GPU once; every other step of the three models runs on the GPU.
 
-Not compared yet: TensorRT (`trtexec`, part 5.5) and llama.cpp CUDA (LLMs, part 5.4).
+Stage 5.4 (CUDA graphs: a run with the same memory as the previous one replays a recording of its kernels;
+calibrated planner figures), same machine and settings, GPU without TF32:
+
+| model | inputs | 5.3, ms | 5.4, ms | 5.4 without graphs, ms |
+|---|---|---:|---:|---:|
+| ResNet-50 v1 | 2×3×224×224 | 3.30 | 2.97 | 3.28 |
+| ResNet-50 v1 | 16×3×224×224 | 14.4 | 13.6 | 13.9 |
+| YOLOv8n | 1×3×640×640 | 3.65 | 2.62 | 3.63 |
+| BERT-base-uncased | 2×32 tokens | 3.97 | 2.55 | 4.42 |
+| BERT-base-uncased | 8×128 tokens | 16.9 | 18.4 | 19.1 |
+| MobileNetV2 | 2×3×224×224 | 1.45 | 1.02 | 1.43 |
+
+(BERT 8×128 is bound by copying its 125 MB of logits to pageable host memory, whose speed varies between runs.)
+
+Not compared yet: TensorRT (`trtexec`, part 5.5).
+
+## Language models (stage 5.4)
+
+`ii bench model.gguf --llm -r 5 --kv-type f16` against `llama-bench -p 512 -n 128 -ngl 99 -r 5 -ctk f16 -ctv f16`
+of llama.cpp b12728 (the release build `win-cuda-13.5-x64`), same GGUF files, same machine: tokens per second of a
+512-token prompt (pp512) and of generating 128 tokens one by one (tg128); ii runs the plan the planner chose (the
+whole model on the GPU, the token embedding gathered on the CPU), autotuning cache filled.
+
+| model | weights | test | ii | llama.cpp | ii / llama.cpp |
+|---|---|---|---:|---:|---:|
+| Qwen2.5-0.5B-Instruct | q4_k_m (mostly q5_0) | pp512 | 57 580 | 63 374 | 0.91 |
+| | | tg128 | 569 | 874 | 0.65 |
+| Qwen3-0.6B | q8_0 | pp512 | 39 184 | 50 886 | 0.77 |
+| | | tg128 | 380 | 677 | 0.56 |
+| TinyLlama-1.1B-Chat | q4_k_m | pp512 | 31 255 | 41 537 | 0.75 |
+| | | tg128 | 508 | 759 | 0.67 |
+| Llama-3.2-1B-Instruct | q4_k_m | pp512 | 32 019 | 44 639 | 0.72 |
+| | | tg128 | 510 | 720 | 0.71 |
+| gemma-3-1b-it | q4_k_m | pp512 | 22 277 | 41 016 | 0.54 |
+| | | tg128 | 334 | 517 | 0.65 |
+| Qwen2.5-0.5B-Instruct | f16 | pp512 | 36 106 | 78 478 | 0.46 |
+| | | tg128 | 432 | 593 | 0.73 |
+
+For comparison, the CPU (ii-cpu, 20 threads, stage 4): Qwen2.5-0.5B q4_k_m pp512 ≈ 2 570, tg128 ≈ 157;
+Llama-3.2-1B q4_k_m ≈ 1 180 / 85.
+
+Where ii stands and why:
+
+- **Decoding** (tg) is a CUDA graph of ~17 kernels per layer replayed once per token (Qwen2.5-0.5B: 1.55 ms of GPU
+  time per token, of which the weights' memory traffic is ~0.5 ms). The kernels are short (1.5–6 µs) and their
+  number, not the bandwidth, sets the time: llama.cpp fuses more per layer (normalization into the products,
+  gate and up projections into one product with the activation, rope with the cache write). Planned: fused linear
+  products sharing an input, residual additions in the products' epilogue.
+- **Prompts** (pp): block-quantized weights are decoded to f16 and multiplied with x in f16 on cuBLASLt with f32
+  accumulation (~90 TFLOP/s on this GPU); llama.cpp multiplies the quantized blocks with 8-bit activations on int8
+  tensor cores (MMQ), which needs neither the decoding pass nor f16 accumulation. 16-bit weights multiply two f16
+  parts of x (f32 precision) where llama.cpp accumulates in f16. gemma-3 has heads of 256 features, which the
+  tensor-core attention does not cover yet (the CUDA-core kernel runs instead).
+- Attention: the tensor-core kernel for prompts is 6–9× faster than the CUDA-core one at 512 tokens (Qwen2.5-0.5B:
+  62 µs instead of 388 per layer; heads of 128: 124 instead of 717); decoding attention with split keys takes
+  ~7 µs per layer at short contexts.
+
+Accuracy (`ii generate --save-logits`, 64-71 positions of a fixed English text):
+
+| model | GPU vs CPU: KL | GPU vs ii-ref (f32): KL | CPU vs ii-ref: KL |
+|---|---:|---:|---:|
+| Qwen2.5-0.5B q4_k_m | 3.2e-3 | 3.4e-6 | 3.8e-3 |
+| Qwen3-0.6B q8_0 | 7.0e-3 | 2.4e-6 | 1.1e-2 |
+| Qwen2.5-0.5B f16 | 3.0e-11 | | |
+
+The GPU multiplies quantized weights with f32 (decoding) or f16 (prompt) activations, so it stays close to the
+exact f32 reference; ii-cpu, like llama.cpp, quantizes activations to 8 bits, which is what separates GPU and CPU
+logits of quantized models. With Hugging Face models (bf16 weights) the GPU matches transformers like the CPU:
+`scripts/llm_tests.py --suite nightly` with `II_PLUGIN_PATH` set passes — logits within 8.2e-6 (Qwen2.5-0.5B) and
+3.5e-6 (TinyLlama) of transformers, greedy generation equal for 64 / 128 tokens, TinyLlama's wikitext-2 perplexity
+9.1393 (transformers 9.1365; the CPU's is the same), TinyLlama q4_k_m +3.76% over the float model.
+
+Offload: Llama-3.2-1B q4_k_m with a context of 2048 needs ~1.2 GB on the GPU. With `--device-memory cuda:0=500M` the
+planner moves the front of the model (108 operations, the KV cache included) to the CPU: the same greedy text,
+133 tokens/s (GPU alone 509, CPU alone 85); with 250 MB, 103 tokens/s.
