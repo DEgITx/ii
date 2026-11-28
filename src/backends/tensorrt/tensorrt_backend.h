@@ -50,6 +50,7 @@ public:
     const backend::DeviceInfo& info() const noexcept override { return info_; }
     Result<std::shared_ptr<Buffer>> allocate(std::size_t size) override;
     Result<std::unique_ptr<backend::Queue>> create_queue() override;
+    Result<std::shared_ptr<Buffer>> allocate_host(std::size_t size) override;
 
     int index() const noexcept { return index_; }
     int compute_capability() const noexcept { return compute_capability_; }

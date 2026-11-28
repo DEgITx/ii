@@ -682,6 +682,66 @@ TEST(TensorRT, SessionsRunConcurrently) {
     b.join();
 }
 
+/// A CNN in TensorRT whose input comes from GPU memory and whose output stays there, then with its input in
+/// page-locked host memory; every run matches ii-ref.
+void expect_gpu_memory_works(const Context& context, std::vector<std::string> backends) {
+    GraphBuilder b("cnn");
+    Var x = b.input("x", DType::kF32, {2, 8, 16, 16});
+    for (int layer = 0; layer < 2; ++layer) {
+        const Var w = b.constant(ii_test::random_tensor(DType::kF32, Shape{8, 8, 3, 3}, 20 + layer, -0.3, 0.3));
+        WindowOptions window;
+        window.pads = {1, 1, 1, 1};
+        x = relu(conv(x, w, {}, window));
+    }
+    b.output("y", x);
+    const Model model = Model::from_builder(context, std::move(b)).value();
+    CompileOptions options;
+    options.backends = std::move(backends);
+    const Program program = model.compile(options).value();
+    ASSERT_THAT(program.describe(), HasSubstr("subgraph"));
+    CompileOptions reference;
+    reference.backends = {"ii-ref"};
+    const Shape shape{2, 8, 16, 16};
+    const Device gpu{DeviceKind::kCuda, 0};
+    Session session = program.new_session().value();
+    const Tensor x_gpu = context.allocate_tensor(DType::kF32, shape, gpu).value();
+    const Tensor y_gpu = context.allocate_tensor(DType::kF32, shape, gpu).value();
+    ASSERT_TRUE(session.set_input("x", x_gpu).ok());
+    ASSERT_TRUE(session.set_output("y", y_gpu).ok());
+    const Tensor y_host = Tensor::empty(DType::kF32, shape).value();
+    for (std::uint32_t seed = 1; seed <= 4; ++seed) {
+        SCOPED_TRACE(seed);
+        const Tensor host = ii_test::random_tensor(DType::kF32, shape, seed);
+        ASSERT_TRUE(context.copy(x_gpu, host).ok());
+        const Status status = session.run();
+        ASSERT_TRUE(status.ok()) << status.to_string();
+        EXPECT_EQ(session.output("y").value().device(), gpu);
+        ASSERT_TRUE(context.copy(y_host, y_gpu).ok());
+        const std::vector<Tensor> expected = ii_test::run_model(model, {host}, reference).value();
+        EXPECT_EQ(ii_test::compare(y_host, expected[0], {1e-4, 1e-4}), "");
+    }
+    // Page-locked host memory.
+    const Tensor host = ii_test::random_tensor(DType::kF32, shape, 9);
+    const Tensor pinned = Tensor::empty(DType::kF32, shape, context.pinned_allocator()).value();
+    ASSERT_TRUE(pinned.copy_from(host).ok());
+    ASSERT_TRUE(session.set_input("x", pinned).ok());
+    ASSERT_TRUE(session.clear_output("y").ok());
+    for (int repeat = 0; repeat < 3; ++repeat) {
+        ASSERT_TRUE(session.run().ok());
+    }
+    const std::vector<Tensor> expected = ii_test::run_model(model, {host}, reference).value();
+    EXPECT_EQ(ii_test::compare(session.output("y").value(), expected[0], {1e-4, 1e-4}), "");
+}
+
+TEST(TensorRT, InputsAndOutputsInGpuMemory) {
+    // The memory of the GPU from ii-cuda (with both plugins) and from the TensorRT plugin itself.
+    II_TENSORRT_CONTEXT(context, {{"tensorrt.prefer", "1"}, {"cuda.prefer", "1"}}, true);
+    expect_gpu_memory_works(context, {"ii-tensorrt", "ii-cuda"});
+    const Result<Context> alone = tensorrt_context();
+    ASSERT_TRUE(alone.ok()) << alone.status().to_string();
+    expect_gpu_memory_works(*alone, {"ii-tensorrt"});
+}
+
 TEST(TensorRT, RandomModelsMatchTheReference) {
     II_TENSORRT_CONTEXT(context);
     for (std::uint32_t seed = 1; seed <= 16; ++seed) {

@@ -439,6 +439,152 @@ TEST(MultiDevice, GraphBackendRespectsTheMemoryLimit) {
     expect_matches_reference(model, {ii_test::random_tensor(DType::kF32, Shape{2, 256}, 4)});
 }
 
+// --- Page-locked memory and tensors in device memory ---
+
+constexpr Device kTest0{DeviceKind::kTest, 0};
+
+/// A copy of `host` in `device`'s memory.
+Tensor on_device(const Context& context, const Tensor& host, Device device = kTest0) {
+    Tensor tensor = context.allocate_tensor(host.dtype(), host.shape(), device).value();
+    EXPECT_TRUE(context.copy(tensor, host).ok());
+    return tensor;
+}
+
+/// A host copy of a tensor in device memory.
+Tensor on_host(const Context& context, const Tensor& tensor) {
+    Tensor host = Tensor::empty(tensor.dtype(), tensor.shape()).value();
+    EXPECT_TRUE(context.copy(host, tensor).ok());
+    return host;
+}
+
+TEST(MultiDevice, CopiesFromPageLockedMemoryAreWaitedFor) {
+    // The host arena of a program that copies to a device is page-locked, and the test device copies from such
+    // memory when it synchronizes, like a GPU's DMA. Here the host computes `a`, the device starts copying it, and
+    // the host computes `c` next — into the memory of `a` once the copy has been enqueued (its last use): the host
+    // must wait for the copy first.
+    const Context context = device_context(fast("ops=matmul"));
+    GraphBuilder b("g");
+    const Var x = b.input("x", DType::kF32, {8, 64});
+    // A constant: copied to the device once, so no copy of pageable memory synchronizes the queue meanwhile.
+    const Var w = b.constant(ii_test::random_tensor(DType::kF32, Shape{64, 64}, 2, -0.2, 0.2));
+    const Var d = matmul(relu(x), w);
+    b.output("y", add(d, tanh(neg(x))));
+    const Model model = Model::from_builder(context, std::move(b)).value();
+    const Tensor input = ii_test::random_tensor(DType::kF32, Shape{8, 64}, 1);
+    for (const bool fuse : {false, true}) {
+        CompileOptions options;
+        options.fuse = fuse;
+        EXPECT_THAT(model.compile(options).value().describe(), HasSubstr("transfer cpu -> test:0"));
+        expect_matches_reference(model, {input}, options);
+    }
+    // Inputs from the page-locked allocator too.
+    Tensor pinned = Tensor::empty(DType::kF32, Shape{8, 64}, context.pinned_allocator()).value();
+    ASSERT_TRUE(pinned.copy_from(input).ok());
+    expect_matches_reference(model, {pinned});
+}
+
+TEST(MultiDevice, InputsAndOutputsInDeviceMemory) {
+    // A model that runs on the device takes its input from device memory and leaves its output there: no copies.
+    const Context context = device_context(fast());
+    const Model model = mlp(context, 2, 16);
+    const Program program = model.compile().value();
+    ASSERT_THAT(program.describe(), Not(HasSubstr("ii-cpu")));
+    CompileOptions reference;
+    reference.backends = {"ii-ref"};
+
+    Session session = program.new_session().value();
+    const Tensor x = input(3, 16, 1);
+    Tensor x_device = on_device(context, x);
+    Tensor y_device = context.allocate_tensor(DType::kF32, Shape{3, 16}, kTest0).value();
+    ASSERT_TRUE(session.set_input("x", x_device).ok());
+    ASSERT_TRUE(session.set_output("y", y_device).ok());
+    for (std::uint32_t seed = 1; seed <= 4; ++seed) {
+        SCOPED_TRACE(seed);
+        // The bound device memory is read by every run (it is not copied when bound).
+        const Tensor host = input(3, 16, seed);
+        ASSERT_TRUE(context.copy(x_device, host).ok());
+        ASSERT_TRUE(session.run().ok());
+        const Tensor output = session.output("y").value();
+        EXPECT_EQ(output.device(), kTest0);
+        EXPECT_EQ(output.data(), y_device.data());
+        const std::vector<Tensor> expected = ii_test::run_model(model, {host}, reference).value();
+        EXPECT_EQ(ii_test::compare(on_host(context, output), expected[0], {1e-5, 1e-5}), "");
+    }
+    {
+        ii_test::AllocationCounter allocations;
+        ASSERT_TRUE(session.run().ok());
+        EXPECT_EQ(allocations.count(), 0) << "heap allocations in steady-state run()";
+    }
+    // Back to host memory.
+    ASSERT_TRUE(session.set_input("x", x).ok());
+    ASSERT_TRUE(session.clear_output("y").ok());
+    ASSERT_TRUE(session.run().ok());
+    const std::vector<Tensor> expected = ii_test::run_model(model, {x}, reference).value();
+    EXPECT_EQ(ii_test::compare(session.output("y").value(), expected[0], {1e-5, 1e-5}), "");
+}
+
+TEST(MultiDevice, DeviceTensorsTheHostReadsAreCopied) {
+    // x is also read on the host (the device has no relu or add): bound in device memory, it is copied to the host
+    // when bound. y is computed on the host: bound in device memory, it is copied there after the run.
+    const Context context = device_context(fast("ops=linear"));
+    GraphBuilder b("g");
+    const Var x = b.input("x", DType::kF32, {4, 16});
+    const Var w = b.constant(ii_test::random_tensor(DType::kF32, Shape{16, 16}, 7, -0.2, 0.2));
+    const Var bias = b.constant(ii_test::random_tensor(DType::kF32, Shape{16}, 8, -0.2, 0.2));
+    b.output("y", add(relu(linear(x, w, bias)), x));
+    const Model model = Model::from_builder(context, std::move(b)).value();
+    const Program program = model.compile().value();
+    ASSERT_THAT(program.describe(), HasSubstr("ii-test-remote"));
+    CompileOptions reference;
+    reference.backends = {"ii-ref"};
+    const Tensor host = input(4, 16, 3);
+    const std::vector<Tensor> expected = ii_test::run_model(model, {host}, reference).value();
+
+    Session session = program.new_session().value();
+    Tensor x_device = on_device(context, host);
+    Tensor y_device = context.allocate_tensor(DType::kF32, Shape{4, 16}, kTest0).value();
+    ASSERT_TRUE(session.set_input("x", x_device).ok());
+    ASSERT_TRUE(session.set_output("y", y_device).ok());
+    ASSERT_TRUE(context.copy(x_device, input(4, 16, 99)).ok());  // too late: the input was copied when bound
+    ASSERT_TRUE(session.run().ok());
+    EXPECT_EQ(ii_test::compare(on_host(context, y_device), expected[0], {1e-5, 1e-5}), "");
+
+    // A program without the device copies device inputs to the host and rejects device outputs.
+    CompileOptions host_only;
+    host_only.backends = {"ii-cpu", "ii-ref"};
+    Session host_session = model.compile(host_only).value().new_session().value();
+    ASSERT_TRUE(host_session.set_input("x", on_device(context, host)).ok());
+    EXPECT_THAT(host_session.set_output("y", y_device).to_string(), HasSubstr("does not use"));
+    ASSERT_TRUE(host_session.run().ok());
+    EXPECT_EQ(ii_test::compare(host_session.output("y").value(), expected[0], {1e-5, 1e-5}), "");
+}
+
+TEST(MultiDevice, ContextCopiesBetweenDevices) {
+    const Context context = device_context(fast() + ";" + fast());
+    const Tensor host = ii_test::random_tensor(DType::kF32, Shape{3, 5}, 4);
+    const Tensor on_0 = on_device(context, host, kTest0);
+    const Tensor on_1 = context.allocate_tensor(DType::kF32, Shape{3, 5}, Device{DeviceKind::kTest, 1}).value();
+    ASSERT_TRUE(context.copy(on_1, on_0).ok());  // through the host
+    Tensor same = context.allocate_tensor(DType::kF32, Shape{3, 5}, kTest0).value();
+    ASSERT_TRUE(context.copy(same, on_1).ok());
+    EXPECT_EQ(ii_test::compare(on_host(context, same), host, {0, 0}), "");
+    // A strided host tensor on either end.
+    const Tensor transposed = host.permute({1, 0}).value();
+    const Tensor t_device = on_device(context, transposed);
+    const Tensor strided = Tensor::empty(DType::kF32, Shape{3, 5}).value().permute({1, 0}).value();
+    ASSERT_TRUE(context.copy(strided, t_device).ok());
+    EXPECT_EQ(ii_test::compare(strided, transposed, {0, 0}), "");
+    // Errors.
+    EXPECT_FALSE(context.allocate_tensor(DType::kF32, Shape{2}, Device{DeviceKind::kCuda, 7}).ok());
+    EXPECT_FALSE(context.copy(on_0, ii_test::random_tensor(DType::kF32, Shape{5, 3}, 1)).ok());
+    // Page-locked memory: from the devices here, from the context's allocator without them.
+    const Tensor pinned = Tensor::empty(DType::kF32, Shape{3, 5}, context.pinned_allocator()).value();
+    ASSERT_TRUE(context.copy(pinned, on_0).ok());
+    EXPECT_EQ(ii_test::compare(pinned, host, {0, 0}), "");
+    const Context plain = device_context("none");
+    EXPECT_TRUE(Tensor::zeros(DType::kF32, Shape{4}, plain.pinned_allocator()).ok());
+}
+
 TEST(MultiDevice, ContextListsDevices) {
     const Context context = device_context(fast("memory=64M") + ";default");
     const std::vector<DeviceDescription> devices = context.devices();

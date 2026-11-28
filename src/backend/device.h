@@ -54,7 +54,8 @@ public:
     virtual ~Queue() = default;
 
     /// Copies `size` bytes from host memory `src` to `dst`, after the work enqueued before. `src` may be reused as
-    /// soon as the call returns.
+    /// soon as the call returns, unless it is page-locked memory (`DeviceApi::allocate_host`): copies from it run
+    /// asynchronously, and `src` must stay unchanged until `synchronize()` returns.
     virtual Status copy_to_device(void* dst, const void* src, std::size_t size) = 0;
 
     /// Copies `size` bytes from `src` to host memory `dst`, after the work enqueued before. `dst` holds the data
@@ -108,6 +109,15 @@ public:
 
     /// Creates a queue (one per session).
     virtual Result<std::unique_ptr<Queue>> create_queue() = 0;
+
+    /// Allocates `size` bytes of host memory that the device copies to and from at full speed (page-locked memory:
+    /// `cudaHostAlloc`), at least 256-byte aligned. Optional: kUnsupported when the device has no such memory. The
+    /// buffer is in host memory (`Device::cpu()`); the runtime keeps the host values it copies to and from devices
+    /// in it, and `Context::pinned_allocator()` hands it to applications.
+    virtual Result<std::shared_ptr<Buffer>> allocate_host(std::size_t size) {
+        (void)size;
+        return errors::unsupported("{} has no page-locked host memory", info().name);
+    }
 
 protected:
     DeviceApi() = default;

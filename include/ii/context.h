@@ -11,6 +11,7 @@
 #include <ii/export.h>
 #include <ii/log.h>
 #include <ii/status.h>
+#include <ii/tensor.h>
 
 #include <cstdint>
 #include <memory>
@@ -30,7 +31,8 @@ struct ContextImpl;
 /// Options of `Context::create`.
 struct ContextOptions {
     /// Allocator for weights, activation arenas and tensors created by ii. nullptr: `default_allocator()`.
-    /// Must outlive the context and everything created from it.
+    /// Must outlive the context and everything created from it. (The host arenas of sessions that copy to and from a
+    /// GPU come from the GPU's page-locked memory instead, see `pinned_allocator()`.)
     Allocator* allocator = nullptr;
 
     /// Executor for parallel work. nullptr: the context creates its own thread pool with `num_threads` threads.
@@ -103,6 +105,23 @@ public:
     static Result<Context> create(ContextOptions options = {});
 
     Allocator& allocator() const noexcept;
+
+    /// Allocator of page-locked host memory, which GPUs copy to and from at full speed (directly by DMA, about twice
+    /// as fast as from ordinary memory). Use it for the inputs (and bound outputs) of models that run on a GPU; a
+    /// session keeps the host values it copies to and from devices in such memory itself. Without a device that has
+    /// page-locked memory it allocates from `allocator()`. Memory from it must be freed before the context goes away.
+    Allocator& pinned_allocator() const noexcept;
+
+    /// An uninitialized tensor in the memory of a device of the context, e.g. `Device{DeviceKind::kCuda, 0}`
+    /// ("cuda:0" in `devices()`); for the host, from `allocator()`. Sessions take inputs and outputs in device memory
+    /// (`Session::set_input`, `set_output`): data that stays on the GPU between models is not copied.
+    Result<Tensor> allocate_tensor(DType dtype, const Shape& shape, Device device) const;
+
+    /// Copies `source` into `destination` (the same dtype and shape) between the host and devices of the context, or
+    /// within them, and waits for the copy. Tensors in device memory must be contiguous. Thread-safe; meant for
+    /// setting up and reading device tensors, not as a fast path (copies of the context are serialized).
+    Status copy(const Tensor& destination, const Tensor& source) const;
+
     Executor& executor() const noexcept;
     const Logger& logger() const noexcept;
 

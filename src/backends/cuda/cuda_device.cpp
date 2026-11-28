@@ -165,6 +165,20 @@ Result<std::shared_ptr<void>> CudaDevice::allocate_owned(std::size_t size) const
     });
 }
 
+Result<std::shared_ptr<Buffer>> CudaDevice::allocate_host(std::size_t size) {
+    II_TRY(activate());
+    void* data = nullptr;
+    // Portable: page-locked for every GPU, so one host buffer serves copies to all of them.
+    if (const cudaError_t error = cudaHostAlloc(&data, std::max<std::size_t>(size, 1), cudaHostAllocPortable);
+        error != cudaSuccess) {
+        cudaGetLastError();
+        return errors::out_of_memory("allocating {} bytes of page-locked host memory: {}", size,
+                                     cudaGetErrorString(error));
+    }
+    std::shared_ptr<void> owner(data, [](void* p) { cudaFreeHost(p); });
+    return Buffer::wrap(data, size, std::move(owner), Device::cpu());
+}
+
 Result<std::unique_ptr<backend::Queue>> CudaDevice::create_queue() {
     II_ASSIGN_OR_RETURN(std::unique_ptr<CudaQueue> queue, CudaQueue::create(*this));
     return std::unique_ptr<backend::Queue>(std::move(queue));
@@ -205,7 +219,8 @@ Status CudaQueue::copy_to_device(void* dst, const void* src, std::size_t size) {
     if (size == 0) {
         return ok_status();
     }
-    // From pageable memory the copy goes through a staging buffer before the call returns, so `src` may be reused.
+    // From pageable memory the copy goes through a staging buffer before the call returns, so `src` may be reused;
+    // from page-locked memory (`allocate_host`) it runs asynchronously.
     II_CUDA_TRY(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, stream_));
     return ok_status();
 }

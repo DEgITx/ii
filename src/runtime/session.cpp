@@ -130,7 +130,28 @@ Status SessionImpl::reset_states() {
     return synchronize();
 }
 
+Allocator& SessionImpl::host_allocator() const {
+    return host_transfers ? program->context.pinned_allocator() : program->context.allocator();
+}
+
+Status SessionImpl::wait_for_pending_reads() {
+    any_pending_reads = false;
+    Status first = ok_status();
+    for (std::size_t d = 0; d < pending_reads.size(); ++d) {
+        if (pending_reads[d] != 0) {
+            pending_reads[d] = 0;
+            Status status = queues[d]->synchronize();
+            if (first.ok() && !status.ok()) {
+                first = std::move(status);
+            }
+        }
+    }
+    return first;
+}
+
 Status SessionImpl::synchronize() {
+    std::fill(pending_reads.begin(), pending_reads.end(), std::uint8_t{0});
+    any_pending_reads = false;
     Status first = ok_status();
     for (const std::unique_ptr<backend::Queue>& queue : queues) {
         if (queue) {
@@ -556,7 +577,13 @@ Status SessionImpl::prepare() {
             continue;
         }
         if (d == 0) {
-            II_ASSIGN_OR_RETURN(arena, Buffer::allocate(size, p.context.allocator()));
+            // Page-locked when the program copies between the host and devices (copies at full speed), unless huge.
+            constexpr std::size_t kMaxPinnedArena = std::size_t{1} << 30;
+            arena.reset();
+            const bool pin = host_transfers && size <= kMaxPinnedArena;
+            II_ASSIGN_OR_RETURN(arena,
+                                Buffer::allocate(size, pin ? p.context.pinned_allocator() : p.context.allocator()));
+            pinned_arena = pin && p.context.impl()->pinned->is_pinned(arena->data());
         } else {
             arena.reset();  // free the old arena first
             II_ASSIGN_OR_RETURN(arena, p.devices[d].api->allocate(size));
@@ -620,7 +647,9 @@ Status SessionImpl::execute() {
             break;
         }
     }
-    // Bound outputs produced by a node are written in place.
+    // Bound outputs produced by a node are written in place: in host memory by any step, in a device's memory by the
+    // transfer from that device (which then copies within the device).
+    std::fill(transfer_overrides.begin(), transfer_overrides.end(), std::uint8_t{0});
     for (std::size_t o = 0; o < p.outputs.size(); ++o) {
         const Tensor& bound = bound_outputs[o];
         const int v = p.outputs[o];
@@ -632,8 +661,24 @@ Status SessionImpl::execute() {
                                             p.output_names[o], shape_text(bound.shape()),
                                             shape_text(plan.shapes[static_cast<std::size_t>(v)]));
         }
-        if (p.values[static_cast<std::size_t>(v)].kind == ir::ValueKind::kNode) {
+        const ValueInfo& info = p.values[static_cast<std::size_t>(v)];
+        if (info.kind != ir::ValueKind::kNode) {
+            continue;
+        }
+        if (output_devices[o] == 0) {
             value_data[static_cast<std::size_t>(v)] = bound.data();
+        } else if (output_direct[o] != 0 &&
+                   p.steps[static_cast<std::size_t>(info.producer)].transfer_from == output_devices[o]) {
+            value_data[static_cast<std::size_t>(v)] = bound.data();
+            transfer_overrides[static_cast<std::size_t>(info.producer)] = 2;
+        }
+    }
+    // Inputs bound in a device's memory skip their transfers to it.
+    for (std::size_t i = 0; i < p.inputs.size(); ++i) {
+        if (input_devices[i] != 0) {
+            for (const int s : input_transfer_steps[i]) {
+                transfer_overrides[static_cast<std::size_t>(s)] = 1;
+            }
         }
     }
 
@@ -664,6 +709,10 @@ Status SessionImpl::execute() {
                 value_data[static_cast<std::size_t>(step.inputs[0])];
             continue;
         }
+        if (any_pending_reads && step.device == 0) {
+            // The step (a host kernel or a copy to the host) may overwrite memory a copy to a device still reads.
+            II_TRY(wait_for_pending_reads());
+        }
         Status status = run_step(s, context);
         if (profiling && status.ok()) {
             // Device work is asynchronous: wait for it, so that a step's time is its own.
@@ -688,9 +737,18 @@ Status SessionImpl::execute() {
     for (std::size_t o = 0; o < p.outputs.size(); ++o) {
         const Tensor& bound = bound_outputs[o];
         const auto v = static_cast<std::size_t>(p.outputs[o]);
-        if (bound.defined() && bound.data() != value_data[v]) {
+        if (!bound.defined() || bound.data() == value_data[v]) {
+            continue;
+        }
+        if (output_devices[o] != 0) {
+            II_TRY(queues[static_cast<std::size_t>(output_devices[o])]->copy_to_device(bound.data(), value_data[v],
+                                                                                       bound.nbytes()));
+        } else {
             std::memcpy(bound.data(), value_data[v], bound.nbytes());
         }
+    }
+    if (any_pending_reads) {
+        II_TRY(wait_for_pending_reads());  // the state updates below write host memory
     }
 
     // State updates: stage updates read from other states first, then write all states.
@@ -739,15 +797,28 @@ Status SessionImpl::run_step(std::size_t s, backend::KernelContext& context) {
     Status status;
     if (step.is_transfer()) {
         const auto in = static_cast<std::size_t>(step.inputs[0]);
-        void* destination = value_data[static_cast<std::size_t>(step.outputs[0])];
+        const auto out = static_cast<std::size_t>(step.outputs[0]);
         const std::size_t nbytes = storage_size(p.values[in].type.dtype, plan.shapes[in].numel());
-        if (step.transfer_from == 0) {
-            status = queues[static_cast<std::size_t>(step.device)]->copy_to_device(destination, value_data[in], nbytes);
+        if (transfer_overrides[s] == 1) {
+            value_data[out] = value_data[in];  // the input is already in the device's memory
+        } else if (transfer_overrides[s] == 2) {
+            status =
+                queues[static_cast<std::size_t>(step.transfer_from)]->copy(value_data[out], value_data[in], nbytes);
+        } else if (step.transfer_from == 0) {
+            const auto device = static_cast<std::size_t>(step.device);
+            status = queues[device]->copy_to_device(value_data[out], value_data[in], nbytes);
+            const auto* source = static_cast<const std::byte*>(value_data[in]);
+            if (pinned_arena && source >= bases[0] && source < bases[0] + arenas[0]->size()) {
+                pending_reads[device] = 1;  // asynchronous: the source must stay until the device has read it
+                any_pending_reads = true;
+            }
         } else {
+            void* destination = value_data[out];
             backend::Queue& queue = *queues[static_cast<std::size_t>(step.transfer_from)];
             status = queue.copy_to_host(destination, value_data[in], nbytes);
             if (status.ok()) {
                 status = queue.synchronize();  // the host steps after this one read the copy
+                pending_reads[static_cast<std::size_t>(step.transfer_from)] = 0;
             }
         }
     } else {
@@ -868,6 +939,52 @@ Result<Session> Program::new_session() const {
     for (std::size_t d = 1; d < impl_->devices.size(); ++d) {
         II_ASSIGN_OR_RETURN(impl->queues[d], impl_->devices[d].api->create_queue());
     }
+    impl->pending_reads.assign(impl_->devices.size(), 0);
+    impl->transfer_overrides.assign(impl_->steps.size(), 0);
+    impl->input_devices.assign(impl_->inputs.size(), 0);
+    impl->output_devices.assign(impl_->outputs.size(), 0);
+    impl->input_direct_device.assign(impl_->inputs.size(), -1);
+    impl->input_transfer_steps.resize(impl_->inputs.size());
+    // Outputs copied to the host by a transfer and read by nothing else can be copied into device memory instead.
+    impl->output_direct.assign(impl_->outputs.size(), 0);
+    for (std::size_t o = 0; o < impl_->outputs.size(); ++o) {
+        const int v = impl_->outputs[o];
+        const detail::ValueInfo& info = impl_->values[static_cast<std::size_t>(v)];
+        const bool read = std::any_of(impl_->steps.begin(), impl_->steps.end(), [&](const detail::Step& step) {
+            return std::find(step.inputs.begin(), step.inputs.end(), v) != step.inputs.end();
+        });
+        const bool unique = std::count(impl_->outputs.begin(), impl_->outputs.end(), v) == 1;
+        impl->output_direct[o] = info.kind == ir::ValueKind::kNode && !read && unique &&
+                                 impl_->steps[static_cast<std::size_t>(info.producer)].is_transfer() &&
+                                 impl_->steps[static_cast<std::size_t>(info.producer)].device == 0;
+    }
+    std::vector<char> other_readers(impl_->inputs.size(), 0);  // read by something else than a transfer to a device
+    for (std::size_t s = 0; s < impl_->steps.size(); ++s) {
+        const detail::Step& step = impl_->steps[s];
+        if (step.is_transfer() && (step.device == 0 || step.transfer_from == 0)) {
+            impl->host_transfers = true;
+        }
+        for (const int v : step.inputs) {
+            if (v < 0 || impl_->values[static_cast<std::size_t>(v)].kind != ir::ValueKind::kInput) {
+                continue;
+            }
+            const auto i = static_cast<std::size_t>(impl_->values[static_cast<std::size_t>(v)].input_index);
+            int& direct = impl->input_direct_device[i];
+            if (step.is_transfer() && step.transfer_from == 0 && (direct < 0 || direct == step.device)) {
+                direct = step.device;
+                impl->input_transfer_steps[i].push_back(static_cast<int>(s));
+            } else {
+                other_readers[i] = 1;
+            }
+        }
+    }
+    for (std::size_t i = 0; i < impl_->inputs.size(); ++i) {
+        const bool is_output =
+            std::find(impl_->outputs.begin(), impl_->outputs.end(), impl_->inputs[i]) != impl_->outputs.end();
+        if (other_readers[i] != 0 || is_output) {
+            impl->input_direct_device[i] = -1;
+        }
+    }
     II_TRY(impl->allocate_states());
     II_TRY(impl->synchronize());
     return Session(std::move(impl));
@@ -892,10 +1009,24 @@ Status Session::set_input(std::string_view name, const Tensor& tensor) {
         return errors::invalid_argument("input '{}' must be {}, got {}", name, to_string(type.dtype),
                                         to_string(tensor.dtype()));
     }
-    if (tensor.device().kind != DeviceKind::kCpu) {
-        return errors::unsupported("input '{}': only host tensors are supported", name);
+    const auto i = static_cast<std::size_t>(index);
+    if (!tensor.device().is_host()) {
+        // In a device's memory: used there directly when the program only copies the input to that device.
+        const int direct = impl_->input_direct_device[i];
+        if (direct > 0 && p.devices[static_cast<std::size_t>(direct)].info.device == tensor.device() &&
+            tensor.is_contiguous()) {
+            impl_->inputs[i] = tensor;
+            impl_->input_devices[i] = direct;
+            return ok_status();
+        }
+        II_ASSIGN_OR_RETURN(Tensor copy, Tensor::empty(tensor.dtype(), tensor.shape(), impl_->host_allocator()));
+        II_TRY(p.context.copy(copy, tensor));
+        impl_->inputs[i] = std::move(copy);
+        impl_->input_devices[i] = 0;
+        return ok_status();
     }
-    II_ASSIGN_OR_RETURN(impl_->inputs[static_cast<std::size_t>(index)], tensor.contiguous(p.context.allocator()));
+    II_ASSIGN_OR_RETURN(impl_->inputs[i], tensor.contiguous(impl_->host_allocator()));
+    impl_->input_devices[i] = 0;
     return ok_status();
 }
 
@@ -906,12 +1037,25 @@ Status Session::set_output(std::string_view name, const Tensor& tensor) {
         return errors::not_found("the model has no output '{}'", name);
     }
     const ir::TensorType& type = p.values[static_cast<std::size_t>(p.outputs[static_cast<std::size_t>(index)])].type;
-    if (!tensor.defined() || tensor.dtype() != type.dtype || !tensor.is_contiguous() ||
-        tensor.device().kind != DeviceKind::kCpu) {
-        return errors::invalid_argument("output '{}' must be bound to a contiguous host {} tensor", name,
+    if (!tensor.defined() || tensor.dtype() != type.dtype || !tensor.is_contiguous()) {
+        return errors::invalid_argument("output '{}' must be bound to a contiguous {} tensor", name,
                                         to_string(type.dtype));
     }
+    int device = 0;
+    if (!tensor.device().is_host()) {
+        device = -1;
+        for (std::size_t d = 1; d < p.devices.size(); ++d) {
+            if (p.devices[d].info.device == tensor.device()) {
+                device = static_cast<int>(d);
+            }
+        }
+        if (device < 0) {
+            return errors::invalid_argument("output '{}' is bound to memory of {}, which the program does not use",
+                                            name, to_string(tensor.device()));
+        }
+    }
     impl_->bound_outputs[static_cast<std::size_t>(index)] = tensor;
+    impl_->output_devices[static_cast<std::size_t>(index)] = device;
     return ok_status();
 }
 
@@ -921,6 +1065,7 @@ Status Session::clear_output(std::string_view name) {
         return errors::not_found("the model has no output '{}'", name);
     }
     impl_->bound_outputs[static_cast<std::size_t>(index)] = Tensor();
+    impl_->output_devices[static_cast<std::size_t>(index)] = 0;
     return ok_status();
 }
 

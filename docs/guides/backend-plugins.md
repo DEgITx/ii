@@ -78,6 +78,10 @@ context. Each backend then:
   optionally a queue records work (`begin_recording`, `end_recording`, `replay`, `destroy_recording`, appended to the
   table later; ii-cuda records CUDA graphs): ii then records a run of recordable kernels once their arguments repeat
   and replays it instead of calling them.
+  Optionally it allocates page-locked host memory (`allocate_host`, `deallocate_host`; `cudaHostAlloc`): ii keeps the
+  host values sessions copy to and from the device in it and hands it to applications
+  (`Context::pinned_allocator()`). Copies from such memory may be asynchronous: ii keeps the source unchanged until
+  the queue is synchronized.
 
 The semantics are those of the C++ interfaces `ii::backend::Backend`, `Kernel`, `DeviceApi` and `Queue`
 (`src/backend/backend.h`, `src/backend/device.h`).
@@ -159,7 +163,7 @@ in-process plugin, so every node crosses the interface as text.
 - ii loads plugins whose `abi_version` equals its `II_PLUGIN_ABI_VERSION`; a breaking change gets a new entry point
   (`ii_backend_plugin_v2`). New functions are appended to the table; `struct_size` tells which exist (a table that
   ends before the recording functions loads, and its queues simply do not record; one without `backend_flags` has no
-  graph backends). Fields appended to `ii_plugin_run_context` exist when ii's `ii_plugin_host::run_context_size`
+  graph backends; one without `allocate_host` has no page-locked memory). Fields appended to `ii_plugin_run_context` exist when ii's `ii_plugin_host::run_context_size`
   covers them.
 - A plugin built with MSVC works with an ii built with MinGW GCC and vice versa (checked for the test plugin: the
   whole test suite passes both ways).

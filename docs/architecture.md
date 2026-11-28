@@ -375,8 +375,11 @@ public:
   Host figures are a rough estimate from the core count and ISA (`ii info --roofline` measures the real ones).
 - **`DeviceApi`** (one per device, thread-safe) allocates device memory as reference-counted `Buffer`s whose data
   pointer is a device address, and creates **`Queue`s** — ordered, possibly asynchronous work, one per session (a
-  CUDA stream): `copy_to_device` (the host source may be reused as soon as the call returns), `copy_to_host` (the data
-  is there after `synchronize()`), device copies, zero fills.
+  CUDA stream): `copy_to_device` (the host source may be reused as soon as the call returns — unless it is
+  page-locked: then after `synchronize()`), `copy_to_host` (the data is there after `synchronize()`), device copies,
+  zero fills. Optionally it also allocates **page-locked host memory** (`allocate_host`, `cudaHostAlloc`), which the
+  GPU reads and writes by DMA: copies from and to it run at full PCIe speed, about twice as fast as through the
+  staging buffer the driver uses for ordinary memory.
 - **Memory domains.** Backends on the same device share its memory: `ii-ref` and `ii-cpu` share the host; `ii-cuda`
   and TensorRT share a GPU. Values move between backends of one device **without copies**. The device's memory and
   queues come from its first kernel backend (ii-cuda before TensorRT); a backend whose code does not know that queue
@@ -386,8 +389,20 @@ public:
   through the host). The runtime executes it itself: `copy_to_device` on the destination's queue, or `copy_to_host`
   followed by a synchronization, because the host steps after it read the data. Constants read by device kernels
   are copied once, when the program is compiled (unless the kernel `captures_input` them); graph outputs always come
-  back to the host; states live on the device the planner gives them (a KV cache next to the attention that reads
-  it; `Session::state` then returns a host copy). `run()` ends by synchronizing every queue.
+  back to the host unless an output is bound in device memory; states live on the device the planner gives them (a
+  KV cache next to the attention that reads it; `Session::state` then returns a host copy). `run()` ends by
+  synchronizing every queue.
+- **Page-locked arena.** A session of a program that copies between the host and a device allocates its host arena
+  (at most 1 GiB) from the devices' page-locked memory (`Context::pinned_allocator()`), so the values it copies —
+  outputs coming back above all — move at full speed. Copies from it are asynchronous: a host step that may overwrite
+  arena memory a pending copy still reads (a host kernel, a copy to the host, the state updates) first waits for that
+  device. Applications get the same memory for their inputs from `Context::pinned_allocator()`.
+- **Tensors in device memory.** `Context::allocate_tensor(dtype, shape, device)` allocates in a device's memory and
+  `Context::copy` copies between the host and devices. A session takes such tensors as inputs and outputs: an input
+  whose only readers are transfers to its device is used there directly (the transfers are skipped); an output that
+  a transfer from its device brings to the host and nothing else reads is copied within the device instead. Other
+  device inputs are copied to the host when bound, other device outputs are copied to the device after the run. A
+  pipeline of models on one GPU, or a video decoder writing into GPU memory, thus needs no host round trips.
 - A tensor in device memory can be viewed but not read by the host functions of `Tensor` (they fail or terminate).
 - **`ii-test-remote`** (`src/backends/test_remote/`) simulates a device without a GPU: its own tracked memory, filled
   with NaN when allocated; kernels (those of ii-ref) check that every input, output and workspace lies in that
@@ -554,7 +569,8 @@ limits and the reasons backends declined nodes ("ii-test-remote: no kernel for '
 - **In-place state updates**: when the step producing a state's update runs in place on the state itself and nothing
   reads the old state afterwards, its output is the state's memory. A KV cache [1, heads, context, head size] written
   by `slice_update` therefore costs only the new rows per step.
-- **I/O binding**: the user may pass their own input and output buffers (zero-copy), including GPU buffers.
+- **I/O binding**: the user may pass their own input and output buffers (zero-copy), including GPU buffers and
+  page-locked host memory (see "Tensors in device memory" and "Page-locked arena" in §8).
 - **Profiler**: `Session::set_profiling(true)` times every step (two clock reads, no allocations); `profile()` returns
   the steps with operation, backend, shapes and times; `to_chrome_trace()` exports runs as Chrome trace JSON
   (viewable in Perfetto): `ii run model --profile trace.json` also prints a per-operation summary. Partitions and

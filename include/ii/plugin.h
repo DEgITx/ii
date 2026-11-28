@@ -13,8 +13,9 @@
  * The plugin exports one function, `ii_backend_plugin_v1`, which returns a table of functions. ii calls
  * `create_backends` once per `ii::Context`; each backend then answers queries about graph nodes (`supports`,
  * `estimate_us`) and creates kernels (`create_kernel`) which ii runs (`run`). Backends of a device other than the host
- * also provide its memory (`allocate`, `deallocate`) and queues of ordered work (`create_queue`, the copy functions,
- * `synchronize`) — the semantics are those of `ii::backend::Kernel`, `DeviceApi` and `Queue` (src/backend/).
+ * also provide its memory (`allocate`, `deallocate`, optionally page-locked host memory) and queues of ordered work
+ * (`create_queue`, the copy functions, `synchronize`) — the semantics are those of `ii::backend::Kernel`, `DeviceApi`
+ * and `Queue` (src/backend/).
  *
  * Graph nodes are passed as a graph in the ii IR text format (src/ir/text.h) with one node: its inputs are graph
  * inputs (`%x0`, `%x1`, ...) or constants (`%c0`, ...) whose data is elided (`{...}`) and passed by pointer in
@@ -252,6 +253,12 @@ typedef struct ii_plugin_v1 {
     void* (*queue_native_handle)(ii_plugin_queue* queue);
     /** `II_PLUGIN_BACKEND_*` flags of a backend. */
     uint32_t (*backend_flags)(const ii_plugin_backend* backend);
+
+    /** Page-locked host memory of a device (`DeviceApi::allocate_host`: memory the device copies to and from at
+     *  full speed, `cudaHostAlloc`), at least 256-byte aligned; `II_UNSUPPORTED` when the device has none. Freed with
+     *  `deallocate_host`. */
+    int32_t (*allocate_host)(ii_plugin_backend* backend, size_t size, void** data, ii_plugin_error* error);
+    void (*deallocate_host)(ii_plugin_backend* backend, void* data, size_t size);
 } ii_plugin_v1;
 
 /** The entry point a plugin exports. Returns NULL if the plugin does not support `host_abi_version`. */

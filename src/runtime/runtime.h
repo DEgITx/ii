@@ -13,10 +13,32 @@
 
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace ii::detail {
+
+/// Page-locked host memory of the context's devices (`DeviceApi::allocate_host`), or the context's allocator when no
+/// device has any (`Context::pinned_allocator`).
+class PinnedAllocator final : public Allocator {
+public:
+    PinnedAllocator(Allocator& fallback, std::vector<backend::DeviceApi*> devices)
+        : fallback_(fallback), devices_(std::move(devices)) {}
+
+    void* allocate(std::size_t size, std::size_t alignment) noexcept override;
+    void deallocate(void* ptr, std::size_t size, std::size_t alignment) noexcept override;
+    /// True if `ptr` was allocated from a device's page-locked memory.
+    bool is_pinned(const void* ptr) noexcept;
+
+private:
+    Allocator& fallback_;
+    std::vector<backend::DeviceApi*> devices_;
+    std::mutex mutex_;
+    std::unordered_map<void*, std::shared_ptr<Buffer>> blocks_;
+};
 
 struct ContextImpl {
     Allocator* allocator = nullptr;
@@ -25,10 +47,17 @@ struct ContextImpl {
     Logger logger;
     std::vector<std::unique_ptr<backend::Backend>> backends;  // priority order
     std::vector<PluginDescription> plugins;
+    // Declared after the backends: destroyed before them.
+    std::unique_ptr<PinnedAllocator> pinned;
+    std::mutex copy_mutex;  ///< guards copy_queues and their use
+    std::vector<std::pair<backend::DeviceApi*, std::unique_ptr<backend::Queue>>> copy_queues;  ///< Context::copy
 
     const backend::Backend* find_backend(std::string_view name) const noexcept;
     /// The reference backend (always present); used for constant folding.
     const backend::Backend& reference() const;
+    /// The memory of a device other than the host: that of its first backend that executes kernels (ii-cuda rather
+    /// than TensorRT), as programs use it; nullptr if the context has no such device.
+    backend::DeviceApi* device_api(Device device) const noexcept;
 };
 
 /// A device a program runs on. Device 0 of a program is always the host.
@@ -156,6 +185,27 @@ struct SessionImpl {
 
     std::vector<const void*> segment_pointers;  ///< scratch of run_segment
 
+    // Memory of other devices and page-locked memory.
+    bool host_transfers = false;  ///< the program copies between the host and devices
+    bool pinned_arena = false;    ///< the host arena is page-locked: copies from it run asynchronously
+    /// Per input: the program device whose transfer steps are the input's only readers (an input bound in that
+    /// device's memory is used there directly), or -1.
+    std::vector<int> input_direct_device;
+    std::vector<std::vector<int>> input_transfer_steps;  ///< per input: the transfer steps reading it
+    std::vector<int> input_devices;                      ///< per input: program device of the bound tensor
+    std::vector<int> output_devices;                     ///< per output: program device of the bound tensor
+    /// Per output: copied to the host by a transfer step and read by no other step (an output bound in the source
+    /// device's memory is copied there instead).
+    std::vector<char> output_direct;
+    /// Per step, set by each run: 1 a transfer to a device whose input is already there (skipped), 2 a transfer to
+    /// the host whose output is bound in the source device's memory (a copy within the device).
+    std::vector<std::uint8_t> transfer_overrides;
+    /// Per program device: a copy from the page-locked host arena may still be reading its source; host steps that
+    /// may overwrite it wait for the device first.
+    std::vector<std::uint8_t> pending_reads;
+    bool any_pending_reads = false;
+    Status wait_for_pending_reads();
+
     Status prepare();  ///< builds or reuses the execution plan for the bound input shapes
     Status run();
     Status execute();  ///< the steps of `run()`; queues may hold work when it fails
@@ -167,6 +217,7 @@ struct SessionImpl {
     Status reset_states();
     Status allocate_states();
     Status initialize_state(std::size_t state);  ///< sets a state to its initial value (zeros when it has none)
+    Allocator& host_allocator() const;  ///< for host copies of inputs: page-locked if the program copies to devices
 };
 
 }  // namespace ii::detail

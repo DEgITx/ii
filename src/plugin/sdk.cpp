@@ -372,6 +372,21 @@ void deallocate(ii_plugin_backend* backend, void* data, size_t /*size*/) {
     }
 }
 
+int32_t allocate_host(ii_plugin_backend* backend, size_t size, void** data, ii_plugin_error* error) {
+    *data = nullptr;
+    return guarded(error, [&]() -> Status {
+        backend::DeviceApi* api = backend->backend->device_api();
+        if (api == nullptr) {
+            return errors::unsupported("{} has no device memory", backend->backend->name());
+        }
+        II_ASSIGN_OR_RETURN(std::shared_ptr<Buffer> buffer, api->allocate_host(size));
+        const std::lock_guard lock(backend->mutex);
+        *data = buffer->data();
+        backend->allocations.emplace(*data, std::move(buffer));
+        return ok_status();
+    });
+}
+
 int32_t create_queue(ii_plugin_backend* backend, ii_plugin_queue** queue, ii_plugin_error* error) {
     *queue = nullptr;
     return guarded(error, [&]() -> Status {
@@ -498,6 +513,8 @@ const ii_plugin_v1* make_plugin_table(const PluginDefinition& definition) {
         t.destroy_recording = &destroy_recording;
         t.queue_native_handle = &queue_native_handle;
         t.backend_flags = &backend_flags;
+        t.allocate_host = &allocate_host;
+        t.deallocate_host = &deallocate;  // the same bookkeeping as device memory
         return t;
     }();
     return &table;

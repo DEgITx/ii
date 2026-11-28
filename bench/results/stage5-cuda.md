@@ -51,6 +51,87 @@ calibrated planner figures), same machine and settings, GPU without TF32:
 ## TensorRT (stage 5.5)
 
 Both plugins found (`II_PLUGIN_PATH`), the planner's plan: each of these models becomes one TensorRT engine (the
+part's estimate beats ii-cuda's kernels). `ii bench <model> --repeat 300 --warmup 30 --memory <kind>` with fixed
+dimensions (`--dims`) against `trtexec --onnx=<model> --useCudaGraph --iterations=1000 --warmUp=500` with the same
+shapes (BERT: the same token ids), TensorRT 10.16.1, run back to back on an otherwise idle GPU. f32: `--noTF32` for
+trtexec, no options for ii (strongly typed network, TF32 off); TF32: trtexec's default and
+`II_PLUGIN_OPTIONS=tensorrt.tf32=1;cuda.tf32=1`.
+
+`--memory` says where ii's inputs and outputs are: `host` — ordinary memory from the application (the outputs land
+in the session's page-locked arena all the same); `pinned` — inputs in page-locked memory
+(`Context::pinned_allocator()`), as trtexec has them; `device` — inputs and outputs in GPU memory
+(`Context::allocate_tensor`), no copies at all. ii's times are wall-clock medians of `Session::run()`. trtexec reports
+its latency (copy in + engine + copy out) and compute time (the engine alone) from CUDA events on the GPU, which leave
+out the host's part of every query (launching, waking up when the GPU is done); its wall-clock time per query is
+1 / throughput. Times in ms:
+
+| model | inputs | ii-cuda 5.4 | ii host | ii pinned | trtexec latency | trtexec wall | ii device | trtexec compute |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| ResNet-50 v1 | 2×3×224×224 | 2.97 | 1.52 | 1.46 | 1.50 | 1.59 | 1.38 | 1.48 |
+| ResNet-50 v1 | 16×3×224×224 | 13.6 | 5.36 | 5.19 | 5.05 | 5.17 | 4.92 | 4.87 |
+| YOLOv8n | 1×3×640×640 | 2.62 | 1.39 | 1.29 | 1.13 | 1.21 | 1.12 | 0.97 |
+| BERT-base-uncased | 2×32 tokens | 2.55 | 1.51 | 1.53 | 1.38 | 1.48 | 1.25 | 1.18 |
+| BERT-base-uncased | 8×128 tokens | 18.4 | 10.37 | 10.45 | 10.54 | 10.72 | 7.67 | 7.12 |
+| MobileNetV2 | 2×3×224×224 | 1.02 | 0.47 | 0.44 | 0.37 | 0.45 | 0.36 | 0.35 |
+
+TF32:
+
+| model | inputs | ii pinned | trtexec latency | trtexec wall | ii device | trtexec compute |
+|---|---|---:|---:|---:|---:|---:|
+| ResNet-50 v1 | 2×3×224×224 | 1.16 | 1.07 | 1.16 | 1.06 | 1.04 |
+| ResNet-50 v1 | 16×3×224×224 | 4.07 | 4.00 | 4.15 | 3.83 | 3.82 |
+| YOLOv8n | 1×3×640×640 | 1.06 | 0.93 | 1.01 | 0.83 | 0.77 |
+| BERT-base-uncased | 2×32 tokens | 1.19 | 1.09 | 1.18 | 0.91 | 0.89 |
+| BERT-base-uncased | 8×128 tokens | 8.63 | 8.77 | 9.00 | 5.81 | 5.51 |
+| MobileNetV2 | 2×3×224×224 | 0.36 | 0.30 | 0.38 | 0.28 | 0.28 |
+
+With inputs in page-locked memory ii takes as long per query as trtexec does by the wall clock (within the spread of
+repeated runs, a few percent); against trtexec's GPU-side latency the difference is the host's share of a query,
+about 0.05-0.08 ms. In GPU memory ResNet-50 and MobileNetV2 run as fast as trtexec's engine; BERT's engine is 3-8%
+and YOLOv8n's 8-15% slower than the one TensorRT builds from the ONNX file — ii's network differs from what
+TensorRT's ONNX parser makes of the model (layer fusions TensorRT recognizes in the parser's patterns), the next thing
+to compare layer by layer.
+
+The first version of the plugin copied from and to ordinary memory, which made ii 6-40% slower than trtexec's latency
+(BERT 8×128: 14.75 ms, 8.5 ms of it copying 125 MB of logits through the driver's staging buffer — 3.3 ms from
+page-locked memory). Sessions that copy between the host and a GPU therefore keep their host arena in page-locked
+memory (outputs arrive at full speed), and applications get such memory for inputs from
+`Context::pinned_allocator()`. A single TensorRT step is recorded into a CUDA graph like a run of ii-cuda kernels
+(without it ResNet-50 ×2 took 2.06 ms and MobileNetV2 1.00 ms: the engine's kernels launched one by one).
+
+Accuracy against ONNX Runtime 1.31 (CPU) on the same random inputs (`scripts/compare_onnxruntime.py`), GPU without
+TF32: ResNet-50 max |error| 7.9e-6 (9e-7 of the largest value), YOLOv8n 6.7e-4 of values up to 640 (1e-6), BERT
+3.8e-5 of logits up to 20 (2e-6); cosine similarity 1.0000000 for all three.
+
+Where the time goes (`ii run --profile`, which waits for every GPU step):
+
+- **ResNet-50, N = 2**: convolutions are 96% of the run (`fused_conv` 3.6 ms in 49 steps, `conv` 0.19 ms), copies
+  0.12 ms. Convolutions go through im2col and an f32 GEMM on the CUDA cores (about 5 TFLOP/s of the 58 TFLOP/s
+  FP32 peak at this size); TF32 tensor cores cut the GEMM part. Implicit-GEMM convolutions without the im2col copy,
+  f16 / bf16 inference and CUDA Graphs are the next steps for CNNs.
+- **YOLOv8n**: convolutions 72%, copying the 4.9 MB input and the output 12%, `concat` / `split` 12%.
+- **BERT, 8×128**: the output logits (8 × 128 × 30522 floats, 125 MB) are copied to pageable host memory; that copy is
+  a large part of the run. Matrix products use cuBLASLt.
+- The planner keeps BERT's attention-mask arithmetic (a few hundred bytes, i64) on the CPU and copies its result to
+  the GPU once; every other step of the three models runs on the GPU.
+
+Stage 5.4 (CUDA graphs: a run with the same memory as the previous one replays a recording of its kernels;
+calibrated planner figures), same machine and settings, GPU without TF32:
+
+| model | inputs | 5.3, ms | 5.4, ms | 5.4 without graphs, ms |
+|---|---|---:|---:|---:|
+| ResNet-50 v1 | 2×3×224×224 | 3.30 | 2.97 | 3.28 |
+| ResNet-50 v1 | 16×3×224×224 | 14.4 | 13.6 | 13.9 |
+| YOLOv8n | 1×3×640×640 | 3.65 | 2.62 | 3.63 |
+| BERT-base-uncased | 2×32 tokens | 3.97 | 2.55 | 4.42 |
+| BERT-base-uncased | 8×128 tokens | 16.9 | 18.4 | 19.1 |
+| MobileNetV2 | 2×3×224×224 | 1.45 | 1.02 | 1.43 |
+
+(BERT 8×128 is bound by copying its 125 MB of logits to pageable host memory, whose speed varies between runs.)
+
+## TensorRT (stage 5.5)
+
+Both plugins found (`II_PLUGIN_PATH`), the planner's plan: each of these models becomes one TensorRT engine (the
 part's estimate beats ii-cuda's kernels), ii copies the inputs to the GPU and the outputs back. `ii bench <model>
 --repeat 200 --warmup 20` with fixed dimensions (`--dims`) against `trtexec --onnx=<model> --useCudaGraph
 --iterations=500 --warmUp=500` with the same shapes (BERT: the same token ids), TensorRT 10.16.1, run back to back on

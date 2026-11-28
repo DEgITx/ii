@@ -246,6 +246,21 @@ public:
         return Buffer::wrap(data, size, std::move(owner), info_.device);
     }
 
+    Result<std::shared_ptr<Buffer>> allocate_host(std::size_t size) override {
+        if (!has_function(table_, &ii_plugin_v1::allocate_host) ||
+            !has_function(table_, &ii_plugin_v1::deallocate_host)) {
+            return backend::DeviceApi::allocate_host(size);
+        }
+        CallError error;
+        void* data = nullptr;
+        II_TRY(check(table_.allocate_host(backend_, size, &data, error.get()), error));
+        const ii_plugin_v1* table = &table_;
+        ii_plugin_backend* backend = backend_;
+        std::shared_ptr<void> owner(data,
+                                    [table, backend, size](void* p) { table->deallocate_host(backend, p, size); });
+        return Buffer::wrap(data, size, std::move(owner), Device::cpu());
+    }
+
     Result<std::unique_ptr<backend::Queue>> create_queue() override {
         CallError error;
         ii_plugin_queue* queue = nullptr;

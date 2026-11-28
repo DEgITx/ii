@@ -94,7 +94,7 @@ linear with bf16 weights, grouped / 1-D / f16 / pointwise convolutions and fused
 movement), random models, concurrent sessions and errors found on the GPU. Beyond that, the whole test suite runs
 with the GPU preferred for everything it supports — `II_PLUGIN_PATH=<build>/plugins/<config>
 II_PLUGIN_OPTIONS=cuda.prefer=1 ctest ...` — so every model of the unit, conformance and ONNX node tests executes
-on the GPU wherever ii-cuda has a kernel (1671 tests at stage 5.4, 1686 at stage 5.5; MSVC Release and Debug, and
+on the GPU wherever ii-cuda has a kernel (1671 tests at stage 5.4, 1692 at stage 5.5; MSVC Release and Debug, and
 MinGW GCC and Clang loading the MSVC-built plugin). Tests of CPU plans and of the simulated devices set
 `cuda.devices=none` and `tensorrt.devices=none`. Fused elementwise chains keep intermediate values in f32 like ii-cpu,
 so models with f16 / bf16 inputs are compared with the 16-bit tolerance.

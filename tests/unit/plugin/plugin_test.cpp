@@ -330,6 +330,36 @@ TEST(Plugin, GraphBackendThroughTheInterface) {
     }
 }
 
+TEST(Plugin, PageLockedAndDeviceMemoryThroughTheInterface) {
+    // Page-locked host memory comes from the plugin's device (`allocate_host`); a session of a model on the device
+    // keeps its host values in it, takes its input from device memory and leaves its output there.
+    const Result<Context> context = library_context(std::string(kFast));
+    ASSERT_TRUE(context.ok()) << context.status().to_string();
+    const Tensor pinned = Tensor::empty(DType::kF32, Shape{8, 32}, context->pinned_allocator()).value();
+    EXPECT_TRUE(context->impl()->pinned->is_pinned(pinned.data()));
+    const Tensor host = ii_test::random_tensor(DType::kF32, Shape{8, 32}, 4);
+    ASSERT_TRUE(pinned.copy_from(host).ok());
+    const Model model = mlp(*context, 3, 32);
+    expect_matches_reference(model, {pinned});
+
+    const Device device{DeviceKind::kTest, 0};
+    const Tensor x = context->allocate_tensor(DType::kF32, Shape{8, 32}, device).value();
+    const Tensor y = context->allocate_tensor(DType::kF32, Shape{8, 32}, device).value();
+    ASSERT_TRUE(context->copy(x, host).ok());
+    CompileOptions options;
+    options.backends = {"ii-test-remote"};
+    Session session = model.compile(options).value().new_session().value();
+    ASSERT_TRUE(session.set_input("x", x).ok());
+    ASSERT_TRUE(session.set_output("y", y).ok());
+    ASSERT_TRUE(session.run().ok());
+    const Tensor actual = Tensor::empty(DType::kF32, Shape{8, 32}).value();
+    ASSERT_TRUE(context->copy(actual, y).ok());
+    CompileOptions reference;
+    reference.backends = {"ii-ref"};
+    const std::vector<Tensor> expected = ii_test::run_model(model, {host}, reference).value();
+    EXPECT_EQ(ii_test::compare(actual, expected[0], {1e-5, 1e-5}), "");
+}
+
 TEST(Plugin, ErrorsCrossTheInterface) {
     // A kernel of the device given host memory: the plugin's error message reaches the caller.
     const Context context = in_process_context({{"test_devices", std::string(kFast)}});

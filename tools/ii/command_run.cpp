@@ -11,10 +11,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <numeric>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -53,6 +55,9 @@ Execution:
   --backends LIST     Comma-separated backends in order of preference (default: all)
   --isa NAME          Kernel variant of ii-cpu: generic, avx2, avx512, neon (default: the best supported)
   --no-fuse           Disable fusion of operations
+  --memory KIND       Where inputs and outputs are kept: pinned (default: page-locked host memory, which a GPU
+                      copies at full speed), host (ordinary memory), device (memory of the plan's GPU: no copies,
+                      the time of the model alone)
   --profile FILE      Time every step; print a per-operation summary and write a Chrome trace to FILE
                       (open it in https://ui.perfetto.dev)
   --help              Show this help
@@ -305,12 +310,41 @@ void print_top(const std::string& name, const Tensor& output, int k) {
     std::printf("\n");
 }
 
+/// The GPU (or other device) the program runs on: that of its first input copy, else its first device.
+Result<Device> plan_device(const Context& context, const Program& program) {
+    const std::string plan = program.describe_plan();
+    for (const DeviceDescription& description : context.devices()) {
+        if (description.id != "cpu" && plan.find(description.id) != std::string::npos) {
+            const std::size_t colon = description.id.find(':');
+            const std::string kind = description.id.substr(0, colon);
+            const int index = std::atoi(description.id.c_str() + colon + 1);
+            for (const DeviceKind candidate : {DeviceKind::kCuda, DeviceKind::kTest}) {
+                if (to_string(candidate) == kind) {
+                    return Device{candidate, index};
+                }
+            }
+        }
+    }
+    return errors::invalid_argument("--memory device: the model does not run on a device other than the host");
+}
+
+/// A copy of `tensor` in `device`'s memory, or in page-locked host memory when `device` is empty.
+Result<Tensor> place(const Context& context, const Tensor& tensor, std::optional<Device> device) {
+    Result<Tensor> copy = device ? context.allocate_tensor(tensor.dtype(), tensor.shape(), *device)
+                                 : Tensor::empty(tensor.dtype(), tensor.shape(), context.pinned_allocator());
+    if (copy.ok()) {
+        II_TRY(context.copy(*copy, tensor));
+    }
+    return copy;
+}
+
 int run_model(const std::vector<std::string>& args, bool bench) {
     const char* const usage = bench ? kBenchUsage : kRunUsage;
     const char* const command = bench ? "ii bench" : "ii run";
-    auto parsed = Args::parse(args, {"no-fuse", "help", "letterbox", "bgr"},
-                              {"dims", "shapes", "repeat", "warmup", "threads", "backends", "isa", "profile", "seed",
-                               "inputs", "input", "save-outputs", "top", "image-size", "image-scale", "mean", "std"});
+    auto parsed =
+        Args::parse(args, {"no-fuse", "help", "letterbox", "bgr"},
+                    {"dims", "shapes", "repeat", "warmup", "threads", "backends", "isa", "profile", "seed", "inputs",
+                     "input", "save-outputs", "top", "image-size", "image-scale", "mean", "std", "memory"});
     if (!parsed.ok()) {
         std::fprintf(stderr, "%s: %s\n\n%s", command, std::string(parsed.status().message()).c_str(), usage);
         return 2;
@@ -382,6 +416,11 @@ int run_model(const std::vector<std::string>& args, bool bench) {
         }
     }
 
+    const std::string memory = parsed->option("memory").value_or("pinned");
+    if (memory != "pinned" && memory != "host" && memory != "device") {
+        return fail(errors::invalid_argument("--memory expects pinned, host or device, got '{}'", memory));
+    }
+
     ContextOptions context_options;
     context_options.num_threads = *threads;
     context_options.cpu_isa = parsed->option("isa").value_or("");
@@ -410,6 +449,14 @@ int run_model(const std::vector<std::string>& args, bool bench) {
     Result<Session> session = program->new_session();
     if (!session.ok()) {
         return fail(session.status());
+    }
+    std::optional<Device> device;  // --memory device: the plan's GPU
+    if (memory == "device") {
+        const Result<Device> found = plan_device(*context, *program);
+        if (!found.ok()) {
+            return fail(found.status());
+        }
+        device = *found;
     }
 
     // --- Inputs: files first, random values for the rest ---
@@ -483,12 +530,36 @@ int run_model(const std::vector<std::string>& args, bool bench) {
         if (!tensor.ok()) {
             return fail(tensor.status());
         }
+        if (memory != "host") {
+            tensor = place(*context, *tensor, device);
+            if (!tensor.ok()) {
+                return fail(tensor.status());
+            }
+        }
         if (Status status = session->set_input(info.name, *tensor); !status.ok()) {
             return fail(status);
         }
         bound.push_back(*tensor);
         std::printf("input   %-24s %s%s (%s)\n", info.name.c_str(), std::string(to_string(tensor->dtype())).c_str(),
                     tensor->shape().to_string().c_str(), origin);
+    }
+    if (device) {
+        // Outputs in the GPU's memory too: one run tells their shapes.
+        if (Status status = session->run(); !status.ok()) {
+            return fail(status);
+        }
+        for (const TensorInfo& info : program->outputs()) {
+            Result<Tensor> output = session->output(info.name);
+            if (output.ok()) {
+                output = context->allocate_tensor(output->dtype(), output->shape(), *device);
+            }
+            if (!output.ok()) {
+                return fail(output.status());
+            }
+            if (Status status = session->set_output(info.name, *output); !status.ok()) {
+                return fail(status);
+            }
+        }
     }
 
     // --- Runs ---
@@ -515,7 +586,10 @@ int run_model(const std::vector<std::string>& args, bool bench) {
     // --- Outputs ---
     std::vector<NamedTensor> outputs;
     for (const TensorInfo& info : program->outputs()) {
-        const Result<Tensor> output = session->output(info.name);
+        Result<Tensor> output = session->output(info.name);
+        if (output.ok() && !output->device().is_host()) {
+            output = place(*context, *output, Device::cpu());
+        }
         if (!output.ok()) {
             return fail(output.status());
         }

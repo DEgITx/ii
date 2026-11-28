@@ -279,7 +279,7 @@ TEST(SessionTest, BoundOutputsAreWrittenInPlace) {
     ASSERT_TRUE(session.clear_output("y").ok());
     EXPECT_TRUE(session.run().ok());
     EXPECT_THAT(session.set_output("y", Tensor::zeros(DType::kI32, Shape{1, 2}).value()).to_string(),
-                HasSubstr("contiguous host f32"));
+                HasSubstr("contiguous f32 tensor"));
 }
 
 TEST(SessionTest, SteadyStateRunDoesNotAllocate) {

@@ -158,6 +158,10 @@ build\windows-msvc\bin\Release\ii check-backends --backends ii-cuda
 build\windows-msvc\bin\Release\ii bench model.onnx
 ```
 
+`ii bench` keeps inputs in page-locked host memory by default (copied to the GPU at full speed, like `trtexec`'s);
+`--memory device` keeps inputs and outputs in GPU memory (the time of the model alone), `--memory host` in ordinary
+memory.
+
 Kernels are compiled for `CMAKE_CUDA_ARCHITECTURES` (default `75-virtual;86-real;89-real;120-real`; `native` builds
 for the GPU of the build machine only, which is faster). At run time the plugin needs an NVIDIA driver, cuBLASLt and
 NVRTC of the toolkit's major version; it finds them in the plugin option `cuda.library_path`, next to the plugin, in

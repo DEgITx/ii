@@ -190,12 +190,16 @@ public:
     Session& operator=(Session&&) noexcept;
     ~Session();
 
-    /// Binds an input. Contiguous host tensors are used without copying and must stay valid until the next
-    /// `run()` returns; other tensors are copied.
+    /// Binds an input. Contiguous host tensors are used without copying and must stay valid (and unchanged) until
+    /// the next `run()` returns; other tensors are copied. A contiguous tensor in a device's memory
+    /// (`Context::allocate_tensor`) is used there directly when the program only reads the input on that device (a
+    /// model that runs on the GPU takes its input from GPU memory without copies); otherwise it is copied to the host
+    /// now. Host inputs of models that run on a GPU are copied fastest from `Context::pinned_allocator()` memory.
     Status set_input(std::string_view name, const Tensor& tensor);
 
     /// Binds memory for an output (optional). The output is then written directly into `tensor`, which must be a
-    /// contiguous host tensor with the output's dtype and the exact shape it will have.
+    /// contiguous tensor with the output's dtype and the exact shape it will have: in host memory, or in the memory
+    /// of a device of the program (the output computed on that GPU then stays there, copied within the device).
     Status set_output(std::string_view name, const Tensor& tensor);
 
     /// Removes an output binding; the output is then kept in session memory again.

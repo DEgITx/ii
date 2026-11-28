@@ -45,7 +45,8 @@ public:
     TrtQueue& operator=(const TrtQueue&) = delete;
 
     Status copy_to_device(void* dst, const void* src, std::size_t size) override {
-        // From pageable memory the copy is staged before the call returns: `src` may be reused.
+        // From pageable memory the copy is staged before the call returns (`src` may be reused); from page-locked
+        // memory it runs asynchronously.
         return size == 0 ? ok_status()
                          : check(cudaMemcpyAsync(dst, src, size, cudaMemcpyHostToDevice, stream_), "copy");
     }
@@ -125,6 +126,14 @@ Result<std::shared_ptr<Buffer>> TrtDevice::allocate(std::size_t size) {
         }
     });
     return Buffer::wrap(data, size, std::move(owner), info_.device);
+}
+
+Result<std::shared_ptr<Buffer>> TrtDevice::allocate_host(std::size_t size) {
+    II_TRY(activate());
+    void* data = nullptr;
+    II_TRT_CUDA_TRY(cudaHostAlloc(&data, std::max<std::size_t>(size, 1), cudaHostAllocPortable));
+    std::shared_ptr<void> owner(data, [](void* p) { cudaFreeHost(p); });
+    return Buffer::wrap(data, size, std::move(owner), Device::cpu());
 }
 
 Result<std::unique_ptr<backend::Queue>> TrtDevice::create_queue() {

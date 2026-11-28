@@ -49,6 +49,7 @@ public:
     const backend::DeviceInfo& info() const noexcept override { return info_; }
     Result<std::shared_ptr<Buffer>> allocate(std::size_t size) override;
     Result<std::unique_ptr<backend::Queue>> create_queue() override;
+    Result<std::shared_ptr<Buffer>> allocate_host(std::size_t size) override;
 
     /// Makes the device current on the calling thread.
     Status activate() const;

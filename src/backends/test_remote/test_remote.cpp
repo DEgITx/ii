@@ -74,6 +74,50 @@ private:
     std::uint64_t used_ = 0;
 };
 
+/// Page-locked host memory of the test devices (`allocate_host`), shared by all of them like CUDA's portable
+/// memory: copies from it run asynchronously, as on a GPU, so that the runtime's handling of such copies is tested.
+class PinnedMemory {
+public:
+    static PinnedMemory& instance() {
+        static PinnedMemory memory;
+        return memory;
+    }
+
+    Result<void*> allocate(std::size_t size) {
+        void* data = default_allocator().allocate(size, kAlignment);
+        if (data == nullptr) {
+            return errors::out_of_memory("test device: allocating {} bytes of page-locked memory", size);
+        }
+        std::memset(data, kPoison, size);
+        const std::lock_guard lock(mutex_);
+        blocks_.emplace(reinterpret_cast<std::uintptr_t>(data), size);
+        return data;
+    }
+
+    void free(void* data, std::size_t size) noexcept {
+        {
+            const std::lock_guard lock(mutex_);
+            blocks_.erase(reinterpret_cast<std::uintptr_t>(data));
+        }
+        default_allocator().deallocate(data, size, kAlignment);
+    }
+
+    bool contains(const void* data, std::size_t size) const {
+        const auto address = reinterpret_cast<std::uintptr_t>(data);
+        const std::lock_guard lock(mutex_);
+        auto it = blocks_.upper_bound(address);
+        if (it == blocks_.begin()) {
+            return false;
+        }
+        --it;
+        return address >= it->first && address - it->first + size <= it->second;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::map<std::uintptr_t, std::size_t> blocks_;
+};
+
 /// Deferred work, executed by `synchronize()` in order.
 class TestQueue final : public backend::Queue {
 public:
@@ -85,7 +129,12 @@ public:
     Status copy_to_device(void* dst, const void* src, std::size_t size) override {
         II_TRY(not_recording("copy_to_device"));
         II_TRY(check(dst, size, "copy destination"));
-        // Earlier work may still read the destination; the source is consumed now.
+        if (PinnedMemory::instance().contains(src, size)) {
+            // Page-locked source: copied later, like an asynchronous DMA (the source must stay as it is meanwhile).
+            tasks_.push_back(Task{Kind::kCopy, nullptr, {}, dst, src, size});
+            return ok_status();
+        }
+        // Pageable source: consumed now (staged), after the earlier work that may still read the destination.
         II_TRY(synchronize());
         std::memcpy(dst, src, size);
         return ok_status();
@@ -254,6 +303,13 @@ public:
 
     Result<std::unique_ptr<backend::Queue>> create_queue() override {
         return std::unique_ptr<backend::Queue>(std::make_unique<TestQueue>(memory_, to_string(info_.device)));
+    }
+
+    Result<std::shared_ptr<Buffer>> allocate_host(std::size_t size) override {
+        PinnedMemory& pinned = PinnedMemory::instance();
+        II_ASSIGN_OR_RETURN(void* data, pinned.allocate(std::max<std::size_t>(size, 1)));
+        std::shared_ptr<void> owner(data, [&pinned, size](void* p) { pinned.free(p, std::max<std::size_t>(size, 1)); });
+        return Buffer::wrap(data, size, std::move(owner), Device::cpu());
     }
 
 private:
