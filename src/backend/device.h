@@ -85,6 +85,10 @@ public:
         return errors::unsupported("the queue cannot record work");
     }
 
+    /// The device API's own handle of the queue (a `cudaStream_t` for CUDA devices), or nullptr. Backends that share
+    /// a device but not their code (ii-cuda and the TensorRT plugin) enqueue their work on the same queue through it.
+    virtual void* native_handle() const noexcept { return nullptr; }
+
 protected:
     Queue() = default;
     Queue(const Queue&) = default;

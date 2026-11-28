@@ -7,7 +7,10 @@
 #include "ops/infer_util.h"
 #include "ops/opset.h"
 
+#include <algorithm>
 #include <format>
+#include <mutex>
+#include <optional>
 #include <unordered_map>
 
 namespace ii::ops {
@@ -202,7 +205,256 @@ Status infer_transfer(const InferContext& context, std::vector<TensorType>& outp
     return ok_status();
 }
 
+// --- subgraph ---
+
+/// Parsed programs by text. Shape inference and cost estimates of a `subgraph` node parse its program; nodes and
+/// repeated bindings share one parse. Never destroyed (graphs refer to the operation registry).
+Result<std::shared_ptr<const ir::Graph>> cached_program(std::string_view text) {
+    static auto* const mutex = new std::mutex();
+    static auto* const cache = new std::unordered_map<std::string, std::shared_ptr<const ir::Graph>>();
+    {
+        const std::lock_guard lock(*mutex);
+        if (const auto it = cache->find(std::string(text)); it != cache->end()) {
+            return it->second;
+        }
+    }
+    ir::ParseOptions options;
+    options.verify = true;
+    Result<std::unique_ptr<ir::Graph>> parsed = ir::parse_graph(text, options);
+    if (!parsed.ok()) {
+        Status status = std::move(parsed).status();
+        return status.add_context("program of 'subgraph'");
+    }
+    std::shared_ptr<const ir::Graph> program = std::move(*parsed);
+    if (!program->states().empty()) {
+        return errors::invalid_argument("the program of 'subgraph' must not have states");
+    }
+    const std::lock_guard lock(*mutex);
+    if (cache->size() >= 64) {
+        cache->clear();
+    }
+    cache->emplace(std::string(text), program);
+    return program;
+}
+
+/// Matches the program's inputs with the node's input types: each symbol of the program that is a whole dimension
+/// of an input gets the node's dimension there.
+Result<std::unordered_map<std::string, Dim>> bind_symbols(const ir::Graph& program,
+                                                          std::span<const TensorType* const> inputs) {
+    if (program.inputs().size() != inputs.size()) {
+        return errors::invalid_argument("'subgraph' has {} inputs, its program {}", inputs.size(),
+                                        program.inputs().size());
+    }
+    std::unordered_map<std::string, Dim> symbols;
+    for (std::size_t i = 0; i < inputs.size(); ++i) {
+        const ir::TensorType& inner = program.inputs()[i]->type();
+        const TensorType* outer = inputs[i];
+        if (outer == nullptr || outer->dtype != inner.dtype || outer->rank() != inner.rank()) {
+            return errors::invalid_argument("input {} of 'subgraph' ({}) does not match its program ({})", i,
+                                            outer == nullptr ? std::string("absent") : outer->to_string(),
+                                            inner.to_string());
+        }
+        for (std::size_t d = 0; d < inner.shape.size(); ++d) {
+            const Dim& dim = inner.shape[d];
+            const Dim& actual = outer->shape[d];
+            if (const std::string_view name = dim.symbol_name(); !name.empty()) {
+                const auto [it, inserted] = symbols.emplace(std::string(name), actual);
+                if (!inserted && !(it->second == actual)) {
+                    return errors::invalid_argument("'subgraph' binds {} to both {} and {}", name,
+                                                    it->second.to_string(), actual.to_string());
+                }
+            } else if (dim.is_constant() && actual.is_constant() && dim.value() != actual.value()) {
+                return errors::invalid_argument("input {} of 'subgraph' is {}, its program expects {}", i,
+                                                outer->to_string(), inner.to_string());
+            }
+        }
+    }
+    return symbols;
+}
+
+Status infer_subgraph(const InferContext& context, std::vector<TensorType>& outputs) {
+    II_ASSIGN_OR_RETURN(const std::shared_ptr<const ir::Graph> program,
+                        cached_program(context.attrs.get_string("program")));
+    II_ASSIGN_OR_RETURN(const auto symbols, bind_symbols(*program, context.inputs));
+    for (const ir::GraphOutput& output : program->outputs()) {
+        TensorType type{output.value->dtype(), {}};
+        for (const Dim& dim : output.value->shape()) {
+            bool unknown = false;
+            Dim bound = dim.substitute([&](std::string_view name) -> std::optional<Dim> {
+                if (const auto it = symbols.find(std::string(name)); it != symbols.end()) {
+                    return it->second;
+                }
+                unknown = true;
+                return std::nullopt;
+            });
+            if (unknown) {
+                return errors::invalid_argument("output {} of 'subgraph' uses symbols its inputs do not bind",
+                                                output.value->type().to_string());
+            }
+            type.shape.push_back(std::move(bound));
+        }
+        outputs.push_back(std::move(type));
+    }
+    return ok_status();
+}
+
+ir::Cost cost_subgraph(const ir::CostContext& context) {
+    Result<std::shared_ptr<const ir::Graph>> program = cached_program(context.node.attrs().get_string("program"));
+    if (!program.ok()) {
+        return ir::Cost{};
+    }
+    const ir::Graph& graph = **program;
+    std::vector<std::pair<std::string, std::int64_t>> symbols;
+    if (Result<std::vector<std::pair<std::string, std::int64_t>>> bound = subgraph_symbols(graph, context.inputs);
+        bound.ok()) {
+        symbols = std::move(*bound);
+    }
+    auto shape_of = [&](const ir::Value* value) {
+        Shape shape;
+        for (const Dim& dim : value->shape()) {
+            const std::optional<std::int64_t> v =
+                dim.evaluate([&](std::string_view name) -> std::optional<std::int64_t> {
+                    for (const auto& [symbol, number] : symbols) {
+                        if (symbol == name) {
+                            return number;
+                        }
+                    }
+                    return 1;
+                });
+            shape.push_back(std::max<std::int64_t>(v.value_or(1), 0));
+        }
+        return shape;
+    };
+    ir::Cost total;
+    std::vector<Shape> in;
+    std::vector<Shape> out;
+    for (const auto& inner : graph.nodes()) {
+        in.clear();
+        out.clear();
+        for (const ir::Value* value : inner->inputs()) {
+            in.push_back(value == nullptr ? Shape() : shape_of(value));
+        }
+        for (const ir::Value* value : inner->outputs()) {
+            out.push_back(shape_of(value));
+        }
+        const ir::Cost cost = ir::estimate_cost(ir::CostContext{*inner, in, out});
+        total.flops += cost.flops;
+        total.bytes += cost.bytes;
+    }
+    return total;
+}
+
+Status decompose_subgraph(ir::Builder& b, const ir::Node& node, std::vector<ir::Value*>& outputs) {
+    II_ASSIGN_OR_RETURN(const std::shared_ptr<const ir::Graph> program, parse_subgraph_program(node));
+    std::unordered_map<const ir::Value*, ir::Value*> mapping;
+    for (std::size_t i = 0; i < program->inputs().size(); ++i) {
+        mapping.emplace(program->inputs()[i], node.input(static_cast<int>(i)));
+    }
+    for (const auto& inner : program->nodes()) {
+        std::vector<ir::Value*> inputs;
+        for (ir::Value* value : inner->inputs()) {
+            inputs.push_back(value == nullptr ? nullptr : mapping.at(value));
+        }
+        II_ASSIGN_OR_RETURN(ir::Node * created, b.create_node(inner->op(), std::move(inputs), inner->attrs()));
+        for (int o = 0; o < inner->num_outputs(); ++o) {
+            mapping.emplace(inner->output(o), created->output(o));
+        }
+    }
+    for (const ir::GraphOutput& output : program->outputs()) {
+        outputs.push_back(mapping.at(output.value));
+    }
+    return ok_status();
+}
+
 }  // namespace
+
+Result<std::shared_ptr<const ir::Graph>> parse_subgraph_program(const ir::Node& node) {
+    II_ASSIGN_OR_RETURN(std::shared_ptr<const ir::Graph> program, cached_program(node.attrs().get_string("program")));
+    if (program->inputs().size() != static_cast<std::size_t>(node.num_inputs()) ||
+        program->outputs().size() != static_cast<std::size_t>(node.num_outputs())) {
+        return errors::invalid_argument("the program of 'subgraph' must have {} inputs and {} outputs",
+                                        node.num_inputs(), node.num_outputs());
+    }
+    for (int i = 0; i < node.num_inputs(); ++i) {
+        const ir::Value* outer = node.input(i);
+        if (outer == nullptr || outer->dtype() != program->inputs()[static_cast<std::size_t>(i)]->dtype()) {
+            return errors::invalid_argument("input {} of 'subgraph' does not match its program", i);
+        }
+    }
+    return program;
+}
+
+Result<SubgraphProgram> subgraph_program(const ir::Node& node) {
+    II_ASSIGN_OR_RETURN(const std::shared_ptr<const ir::Graph> program, parse_subgraph_program(node));
+    SubgraphProgram out;
+    out.graph = std::make_unique<ir::Graph>();
+    ir::Graph& graph = *out.graph;
+    graph.set_name(program->name());
+    std::unordered_map<const ir::Value*, ir::Value*> mapping;
+    for (std::size_t i = 0; i < program->inputs().size(); ++i) {
+        const ir::Value* inner = program->inputs()[i];
+        const ir::Value* outer = node.input(static_cast<int>(i));
+        ir::Value* copy = nullptr;
+        if (outer->kind() == ir::ValueKind::kConstant) {
+            copy = graph.add_constant(outer->data(), inner->name());
+        } else {
+            copy = graph.add_input(inner->name(), inner->type());
+            out.inputs.push_back(static_cast<int>(i));
+        }
+        mapping.emplace(inner, copy);
+    }
+    for (const auto& inner : program->nodes()) {
+        std::vector<ir::Value*> inputs;
+        for (ir::Value* value : inner->inputs()) {
+            inputs.push_back(value == nullptr ? nullptr : mapping.at(value));
+        }
+        std::vector<ir::TensorType> types;
+        for (const ir::Value* output : inner->outputs()) {
+            types.push_back(output->type());
+        }
+        ir::Node* created = graph.create_node(inner->op(), std::move(inputs), inner->attrs(), types);
+        created->set_name(inner->name());
+        for (int o = 0; o < inner->num_outputs(); ++o) {
+            mapping.emplace(inner->output(o), created->output(o));
+        }
+    }
+    for (const ir::GraphOutput& output : program->outputs()) {
+        graph.add_output(output.name, mapping.at(output.value));
+    }
+    return out;
+}
+
+Result<std::vector<std::pair<std::string, std::int64_t>>> subgraph_symbols(const ir::Graph& program,
+                                                                           std::span<const Shape> inputs) {
+    std::vector<std::pair<std::string, std::int64_t>> symbols;
+    for (std::size_t i = 0; i < program.inputs().size() && i < inputs.size(); ++i) {
+        const ir::Value* inner = program.inputs()[i];
+        if (inner->rank() != inputs[i].rank()) {
+            return errors::invalid_argument("input {} of 'subgraph' has rank {}, its program expects {}", i,
+                                            inputs[i].rank(), inner->rank());
+        }
+        for (int d = 0; d < inner->rank(); ++d) {
+            const std::string_view name = inner->shape()[static_cast<std::size_t>(d)].symbol_name();
+            if (name.empty()) {
+                continue;
+            }
+            const std::int64_t value = inputs[i][d];
+            bool known = false;
+            for (const auto& [symbol, number] : symbols) {
+                if (symbol == name) {
+                    known = true;
+                    if (number != value) {
+                        return errors::invalid_argument("'subgraph' binds {} to both {} and {}", name, number, value);
+                    }
+                }
+            }
+            if (!known) {
+                symbols.emplace_back(std::string(name), value);
+            }
+        }
+    }
+    return symbols;
+}
 
 void register_internal_ops(ir::OpRegistry& registry) {
     registry.add(OpSchema{
@@ -245,6 +497,20 @@ void register_internal_ops(ir::OpRegistry& registry) {
                   AttrSpec{"dtype", AttrKind::kDType, std::nullopt}},
         .infer = infer_fused_conv,
         .decompose = decompose_fused_conv,
+        .flags = ir::kOpInternal | ir::kOpNoConstantFold,
+    });
+    registry.add(OpSchema{
+        .name = kSubgraph,
+        .category = "internal",
+        .doc = "A part of the graph compiled into one kernel by a graph backend (created by the compiler after "
+               "planning); program holds the part in the IR text format, backend names the backend.",
+        .inputs = {InputSpec{"inputs", true, true}},
+        .outputs = {OutputSpec{"outputs", true}},
+        .attrs = {AttrSpec{"program", AttrKind::kString, std::nullopt},
+                  AttrSpec{"backend", AttrKind::kString, std::string()}},
+        .infer = infer_subgraph,
+        .decompose = decompose_subgraph,
+        .cost = cost_subgraph,
         .flags = ir::kOpInternal | ir::kOpNoConstantFold,
     });
 }

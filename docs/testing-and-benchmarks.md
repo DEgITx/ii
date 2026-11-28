@@ -94,9 +94,10 @@ linear with bf16 weights, grouped / 1-D / f16 / pointwise convolutions and fused
 movement), random models, concurrent sessions and errors found on the GPU. Beyond that, the whole test suite runs
 with the GPU preferred for everything it supports — `II_PLUGIN_PATH=<build>/plugins/<config>
 II_PLUGIN_OPTIONS=cuda.prefer=1 ctest ...` — so every model of the unit, conformance and ONNX node tests executes
-on the GPU wherever ii-cuda has a kernel (1671 tests at stage 5.4; MSVC Release and Debug, and MinGW GCC and Clang
-loading the MSVC-built plugin). Tests of CPU plans and of the simulated devices set `cuda.devices=none`. Fused elementwise chains keep
-intermediate values in f32 like ii-cpu, so models with f16 / bf16 inputs are compared with the 16-bit tolerance.
+on the GPU wherever ii-cuda has a kernel (1671 tests at stage 5.4, 1686 at stage 5.5; MSVC Release and Debug, and
+MinGW GCC and Clang loading the MSVC-built plugin). Tests of CPU plans and of the simulated devices set
+`cuda.devices=none` and `tensorrt.devices=none`. Fused elementwise chains keep intermediate values in f32 like ii-cpu,
+so models with f16 / bf16 inputs are compared with the 16-bit tolerance.
 
 Stage 5.4 adds the language-model kernels to `cuda_test.cpp`: products with every GGUF block type and f16 / bf16
 weights on the decoding (GEMV) and prompt (cuBLASLt) paths, attention on the CUDA-core and the tensor-core kernel
@@ -105,6 +106,19 @@ its range error, dequantize, runs replayed from CUDA graphs with new data, and t
 suite also passes with the plugin found but no preference (the planner decides; LLM tests then run on the GPU).
 `scripts/llm_tests.py` with `II_PLUGIN_PATH` set runs the real-model checks on the GPU (logits and greedy generation
 against transformers, perplexity).
+
+Stage 5.5 (graph backends, TensorRT):
+
+- The simulated device takes `graph=1` (and `graph_ops=a+b`): a graph backend, ii-test-graph, compiles the parts the
+  compiler hands it. `multi_device_test.cpp` checks partitioning (one part, a part shared with the kernel backend of
+  the device, convexity, memory limits); `plugin_test.cpp` the same through the plugin interface. The whole suite also
+  runs with `II_TEST_DEVICES=graph=1,launch=0,latency=0,link=100000,gflops=100000,bandwidth=100000`: every model runs
+  as parts compiled by the graph backend.
+- `tensorrt_test.cpp` (skipped without the plugin, TensorRT or a GPU) compares engines with ii-ref for every
+  translated operation, plans that mix TensorRT and ii-cuda on one GPU, engine reuse from the cache, dynamic shapes
+  over profiles, recorded runs, concurrent sessions and random models. The whole suite runs with the TensorRT plugin
+  (`II_PLUGIN_OPTIONS=tensorrt.prefer=1;cuda.devices=none`: everything TensorRT supports goes to it, the rest to the
+  CPU), with TensorRT and ii-cuda both preferred, and with the planner deciding.
 
 ### 2.3a Importers and formats (`tests/unit/formats/`, `tests/onnx/`, `tests/models/`)
 - Protobuf decoding (round trips, malformed input), ONNX import of models built in memory (symbolic shape

@@ -2,6 +2,7 @@
 // Session: binding of inputs, shape specialization, memory planning and execution.
 #include "core/assert.h"
 #include "ir/op_schema.h"
+#include "ops/fused.h"
 #include "runtime/memory_planner.h"
 #include "runtime/runtime.h"
 
@@ -510,7 +511,8 @@ Status SessionImpl::prepare() {
                 if (step.is_transfer() || step.device != first.device || !step.kernel->can_record()) {
                     break;
                 }
-                ++kernels;
+                // A compiled part (a TensorRT engine) launches many kernels: worth recording on its own.
+                kernels += step.node->op_name() == ops::kSubgraph ? kMinSegmentKernels : 1;
             }
             ++e;
         }

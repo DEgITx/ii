@@ -68,7 +68,9 @@ Result<plugin::BackendList> create_in_process(const plugin::PluginHost& host) {
     if (const std::string spec = host.option("test_devices"); !spec.empty()) {
         II_ASSIGN_OR_RETURN(std::vector<test_remote::TestDeviceOptions> devices, test_remote::parse_test_devices(spec));
         for (const test_remote::TestDeviceOptions& device : devices) {
-            backends.push_back(test_remote::create_test_remote_backend(device));
+            for (auto& backend : test_remote::create_test_remote_backends(device)) {
+                backends.push_back(std::move(backend));
+            }
         }
     }
     return backends;
@@ -221,7 +223,8 @@ TEST(Plugin, DirectoriesAreScanned) {
     options.search_plugins = false;
     options.test_devices = std::string(kFast);
     options.plugin_paths = {platform::path_to_utf8(file.parent_path())};
-    options.plugin_options = {{"cuda.devices", "none"}};  // the directory may also hold the CUDA plugin
+    // The directory may also hold the GPU plugins.
+    options.plugin_options = {{"cuda.devices", "none"}, {"tensorrt.devices", "none"}};
     auto test_plugins = [](const Context& context) {
         std::vector<PluginDescription> found;
         for (const PluginDescription& plugin : context.plugins()) {
@@ -304,6 +307,25 @@ TEST(Plugin, DeviceBackendThroughTheInterface) {
     for (std::uint32_t seed = 1; seed <= 6; ++seed) {
         SCOPED_TRACE(seed);
         const ii_test::RandomModel random = ii_test::random_model(context, seed);
+        expect_matches_reference(random.model, random.inputs);
+    }
+}
+
+TEST(Plugin, GraphBackendThroughTheInterface) {
+    // ii-test-graph from the plugin library: `subgraph` nodes cross the interface as one-node graphs, its kernels run
+    // on the queues of ii-test-remote's device (the first backend of the device).
+    const Result<Context> context = library_context(std::string(kFast) + ",graph=1,graph_ops=linear+relu");
+    ASSERT_TRUE(context.ok()) << context.status().to_string();
+    EXPECT_THAT(context->plugins()[0].backends, ElementsAre("ii-test-remote", "ii-test-graph"));
+    const Model model = mlp(*context, 3, 32);
+    const Program program = model.compile().value();
+    EXPECT_THAT(program.describe(), HasSubstr("subgraph"));
+    EXPECT_THAT(program.describe(), HasSubstr("ii-test-remote @ test:0"));  // softmax
+    const std::vector<Tensor> inputs = {ii_test::random_tensor(DType::kF32, Shape{8, 32}, 4)};
+    expect_matches_reference(model, inputs);
+    for (std::uint32_t seed = 1; seed <= 6; ++seed) {
+        SCOPED_TRACE(seed);
+        const ii_test::RandomModel random = ii_test::random_model(*context, seed);
         expect_matches_reference(random.model, random.inputs);
     }
 }

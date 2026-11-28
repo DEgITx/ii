@@ -45,6 +45,15 @@ bool has_recording(const ii_plugin_v1& table) {
            table.destroy_recording != nullptr;
 }
 
+/// True if the plugin's table has the function `member`: covered by its struct_size (checked before reading it) and
+/// set.
+template <class Fn>
+bool has_function(const ii_plugin_v1& table, Fn ii_plugin_v1::* member) {
+    const auto offset = static_cast<std::size_t>(reinterpret_cast<const char*>(&(table.*member)) -
+                                                 reinterpret_cast<const char*>(&table));
+    return table.struct_size >= offset + sizeof(Fn) && table.*member != nullptr;
+}
+
 // --- Nodes as text ---
 
 /// A one-node graph in the text format with the data of its constants (see ii/plugin.h).
@@ -165,6 +174,10 @@ public:
     Status synchronize() override {
         CallError error;
         return check(table_.synchronize(handle_, error.get()), error);
+    }
+
+    void* native_handle() const noexcept override {
+        return has_function(table_, &ii_plugin_v1::queue_native_handle) ? table_.queue_native_handle(handle_) : nullptr;
     }
 
     Status begin_recording() override {
@@ -306,11 +319,16 @@ public:
         run.workspace_size = context.workspace.size();
         run.executor = &executor;
         if (context.queue != nullptr) {
+            // A queue of this plugin, or of another backend on the same device (the first one's memory and queues
+            // serve all backends of a device): then the kernel enqueues its work through the native handle.
+            run.native_queue = context.queue->native_handle();
             const auto* queue = dynamic_cast<const PluginQueue*>(context.queue);
-            if (queue == nullptr || &queue->table() != &table_) {
+            if (queue != nullptr && &queue->table() == &table_) {
+                run.queue = queue->handle();
+            } else if (run.native_queue == nullptr || !has_function(table_, &ii_plugin_v1::queue_native_handle)) {
+                // No handle, or a plugin from before native handles that would take the missing queue for the host.
                 return errors::internal("a kernel of plugin '{}' got a queue of another backend", table_.name);
             }
-            run.queue = queue->handle();
         }
         CallError error;
         return check(table_.run(handle_, &run, error.get()), error);
@@ -363,6 +381,11 @@ public:
     std::string_view name() const noexcept override { return name_; }
     const backend::DeviceInfo& device_info() const noexcept override { return info_; }
     backend::DeviceApi* device_api() const noexcept override { return api_.get(); }
+
+    bool compiles_subgraphs() const override {
+        return has_function(table_, &ii_plugin_v1::backend_flags) &&
+               (table_.backend_flags(handle_) & II_PLUGIN_BACKEND_SUBGRAPHS) != 0;
+    }
 
     double estimate_us(const ir::CostContext& context) const override {
         if (table_.estimate_us == nullptr) {
@@ -551,6 +574,7 @@ Result<std::vector<std::unique_ptr<backend::Backend>>> create_backends(const ii_
                                                                        const HostConfig& config) {
     ii_plugin_host host{};
     host.struct_size = sizeof(ii_plugin_host);
+    host.run_context_size = sizeof(ii_plugin_run_context);
     host.abi_version = II_PLUGIN_ABI_VERSION;
     host.ii_version = II_VERSION_STRING;
     host.log_context = const_cast<Logger*>(config.logger);

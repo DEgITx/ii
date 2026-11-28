@@ -328,7 +328,8 @@ import → canonicalize → shape inference → constant folding → DCE/CSE →
    provide kernels per op; scheduling and memory are owned by the ii runtime. Implemented on top of the helper base
    class `KernelBackend` with a kernel table `op → (factory, support check)`; ISA variants come with `ii-cpu`.
 2. **Graph backends** (TensorRT, ONNX Runtime, OpenVINO, CoreML): take whole subgraphs and compile them with their own
-   engine (similar to ORT `GetCapability` / TFLite delegates).
+   engine (similar to ORT `GetCapability` / TFLite delegates). `Backend::compiles_subgraphs()` marks them; after
+   planning the compiler hands them parts of the graph as `subgraph` nodes (§9, step 8).
 
 ```cpp
 namespace ii::backend {  // src/backend/backend.h
@@ -345,7 +346,8 @@ public:
     /// Estimated time of a node with concrete shapes; default: roofline of device_info() + launch overhead.
     virtual double estimate_us(const ir::CostContext&) const;
     virtual Result<std::unique_ptr<Kernel>> create_kernel(const ir::Node&) const = 0;
-    // Graph backends (TensorRT, part 5.5): claim(graph) → subgraphs, each compiled into one Kernel.
+    /// Graph backends (TensorRT): they also compile `subgraph` nodes, parts of the graph, into one Kernel.
+    virtual bool compiles_subgraphs() const;
 };
 
 /// Executes one node (or a fused subgraph). Created once per Program and shared by all its sessions.
@@ -376,7 +378,9 @@ public:
   CUDA stream): `copy_to_device` (the host source may be reused as soon as the call returns), `copy_to_host` (the data
   is there after `synchronize()`), device copies, zero fills.
 - **Memory domains.** Backends on the same device share its memory: `ii-ref` and `ii-cpu` share the host; `ii-cuda`
-  and TensorRT will share a GPU. Values move between backends of one device **without copies**.
+  and TensorRT share a GPU. Values move between backends of one device **without copies**. The device's memory and
+  queues come from its first kernel backend (ii-cuda before TensorRT); a backend whose code does not know that queue
+  enqueues its work through `Queue::native_handle()` (the CUDA stream), so both run on one stream in one order.
 - **Transfers.** Where the plan reads a value on another device than the one holding it, the compiler inserts an
   internal `transfer` node (`{from = "cpu", to = "test:0"}`, one per value and destination; between two devices
   through the host). The runtime executes it itself: `copy_to_device` on the destination's queue, or `copy_to_host`
@@ -389,19 +393,32 @@ public:
   with NaN when allocated; kernels (those of ii-ref) check that every input, output and workspace lies in that
   memory, so a missing transfer is an error; work runs only when the queue is synchronized, like a GPU stream, so a
   missing synchronization yields NaN or stale data. Operations, memory size and speed are configurable
-  (`ContextOptions::test_devices`, `II_TEST_DEVICES`); the whole test suite runs on it in CI.
+  (`ContextOptions::test_devices`, `II_TEST_DEVICES`); the whole test suite runs on it in CI. With `graph=1` the
+  device also has a graph backend, `ii-test-graph`, which compiles `subgraph` nodes (it runs them with ii-ref kernels
+  as one step): partitioning and mixed plans of a graph backend and a kernel backend are tested without TensorRT.
 
 ### TensorRT backend (plugin)
 
-- Translates an ii IR partition directly into a TensorRT `INetworkDefinition` through the C++ API — no ONNX
-  round-trip, so no information is lost and no ONNX exporter is required.
-- Dynamic shapes map to TensorRT optimization profiles derived from symbol bounds (`seq ≤ 4096`).
-- Engine builds are slow, so built engines are serialized to `<cache>/ii/trt/` keyed by
-  `(subgraph hash, shape profile, GPU, driver, TensorRT version, precision)`.
-- Shares the CUDA device, streams and memory domain with `ii-cuda`: a plan can interleave TensorRT partitions with
-  `ii-cuda` kernels (e.g. ops TensorRT does not support, KV-cache updates, sampling) without host round-trips.
-- Precision modes (fp16/bf16/int8/fp8) follow `CompileOptions` precision policy; results are verified against
-  `ii-ref` by the same differential tests as every other backend.
+*Implemented in part 5.5: plugin `ii-backend-tensorrt` (`src/backends/tensorrt/`), backend `ii-tensorrt`.*
+
+- Translates an ii IR part directly into a TensorRT `INetworkDefinition` through the C++ API (`translate.cpp`) — no
+  ONNX round-trip. The network is strongly typed: TensorRT keeps the model's types (f32 stays f32; TF32 only with
+  `tensorrt.tf32`). Elementwise, reductions, matrix products, convolutions (also with weights computed by the model),
+  pooling, resize, normalization, softmax, movement, gather/scatter and the fused operations of ii's passes have
+  layers; rms_norm, log_softmax and attention without a KV cache go through ii's decomposition. Language-model
+  operations (rope, KV-cache updates, attention with `kv_len`, quantized weights) stay with ii-cuda.
+- Dynamic shapes: symbolic dimensions of the part's inputs are dynamic dimensions of the network; shapes that depend
+  on symbols (reshape targets, slice sizes) are computed in the network from the input shapes. An engine has one
+  optimization profile; by default a symbol ranges over 1 .. twice the value seen first (at least 8) with the opt
+  point at that value, a value outside every engine's range builds another engine (`tensorrt.profile` sets ranges).
+- Engine builds are slow (seconds), so built engines are serialized to `<cache>/tensorrt/<hash>.engine`, keyed by
+  the part's program and weights, the profile, the options, the TensorRT version, the GPU and the plugin's translation
+  revision; TensorRT's timing cache (`timing-<GPU uuid>.cache`) next to them shortens new builds. Engines are built
+  when a session first binds shapes, not when the program is compiled.
+- Shares the CUDA device, stream and memory domain with `ii-cuda`: a plan interleaves TensorRT engines with `ii-cuda`
+  kernels without host round-trips. Engines run with memory from the session arena (`setDeviceMemoryV2`), one
+  execution context per engine and stream, and are recorded into CUDA graphs like ii-cuda's kernels.
+- Results are verified against `ii-ref` by the same differential tests as every other backend.
 
 ### Plugins
 
@@ -416,7 +433,9 @@ public:
   codes with a fixed-size message buffer; no C++ type or exception crosses it, so a plugin built with MSVC works with
   an ii built with MinGW and vice versa.
 - Nodes cross as a one-node graph in the IR text format; constant data is elided (`{...}`) and passed by pointer
-  (no copy). Graph backends will receive larger subgraphs through the same functions.
+  (no copy). Graph backends (`backend_flags`: `II_PLUGIN_BACKEND_SUBGRAPHS`) receive `subgraph` nodes the same way.
+  A kernel whose device's queues belong to another plugin gets the queue's native handle (`native_queue`, a CUDA
+  stream) instead of its own queue object.
 - Inside a plugin, the SDK (`src/plugin/sdk.h`, target `ii_plugin_sdk`) adapts ordinary C++ `Backend`s to the C
   table; on the ii side `src/plugin/host.cpp` adapts the table back to `Backend`, `Kernel`, `DeviceApi` and `Queue`,
   so the planner and runtime treat plugin backends like built-in ones. `ii-test-remote` is also built as the plugin
@@ -455,15 +474,15 @@ estimates use concrete shapes with symbols from `CompileOptions::plan_dims` (oth
 A composite node left alone on another device than all of its neighbours, where no backend implements it, is
 decomposed and the graph planned again, so that its primitives run next to the neighbours (P3). With all backends on
 the host the plan is simply the fastest backend per node (ii-cpu, ii-ref for the rest). Part 5.4 added several
-starting points (step 4), free views in the cost model and autotuning of the device figures (step 7); policies and
-graph backends' `claim()` come later.
+starting points (step 4), free views in the cost model and autotuning of the device figures (step 7); part 5.5 the
+parts of graph backends (step 8). Policies come later.
 
 **Algorithm:**
 
 1. **Discovery.** `Context` queries backends for devices, `DeviceInfo` and supported dtypes. The `PerfModel` comes
    from a table of known devices or is measured by a micro-benchmark on first run and cached.
-2. **Candidates.** For each node: `{(backend, device) | supports ≠ No}`; `ii-ref@cpu` is always present.
-   Graph backends claim subgraphs via `claim()` — these become "super-nodes" with their own estimate.
+2. **Candidates.** For each node: `{(backend, device) | supports ≠ No}`; `ii-ref@cpu` is always present. Graph
+   backends answer for single nodes too, so that the planner can place nodes on their device.
 3. **Cost.** `t(node, backend, device)` from `estimate()` (default roofline: `max(flops/peak, bytes/bw)` + launch
    overhead; 0 for nodes the runtime runs as views: `reshape`, and `permute` that only moves dimensions of size 1);
    a transfer on an edge crossing memory domains costs `bytes / link_bw + latency`; edges within one domain cost only
@@ -484,6 +503,16 @@ graph backends' `claim()` come later.
    fastest cuBLASLt algorithm per product shape, warps per row of a weight product) are measured on first use; all
    are cached in `<cache>/cuda-<device uuid>.json` with the device, cuBLASLt and ii versions (a stale file is
    ignored). Measuring whole candidate plans (`TuneMode::Measure`) is planned.
+8. **Parts for graph backends** (`runtime/partition.h`, part 5.5). After planning, for each graph backend the nodes on
+   its device that it supports (whichever backend the plan chose for them) are grouped into parts: connected through
+   their values and convex — no path leaves a part and comes back (a part found to be non-convex is cut at the
+   earliest node outside it on such a path). A part becomes one `subgraph` node (`ops/fused.h`: the part as an IR
+   program, the model's constants as its inputs) when the backend's estimate for the whole part beats the planned
+   estimates of its nodes, or when the plan gave one of its nodes to that backend. TensorRT estimates a part as
+   0.7 × its roofline plus a launch per operation that is not elementwise or a move (those fuse) plus 5 us for
+   enqueueing the engine; so a CNN or a transformer encoder becomes one engine, while the small pieces between
+   ii-cuda's language-model kernels stay with ii-cuda. Memory limits and offload are decided before, so only what
+   runs on the GPU is offered. A `subgraph` node that no backend implements decomposes back into its operations.
 
 **Policies and overrides:** `Policy::{Latency, Throughput, LowPower, LowMemory}`, allow/deny lists of backends and
 devices, memory limits; overridable via `CompileOptions`, the CLI (`--backend tensorrt,cuda,cpu`) and `II_BACKENDS`.
@@ -509,10 +538,15 @@ limits and the reasons backends declined nodes ("ii-test-remote: no kernel for '
   state performs zero allocations (verified by a test that counts every `operator new`); the last four plans are kept,
   so alternating shapes (an LLM's prompt steps and single-token steps) do not re-plan. Planned later: symbol upper
   bounds (`seq ≤ 4096`) to plan once for the maximum.
+- **Subgraph steps**: a `subgraph` node is one step with several inputs and outputs; its shapes come from its
+  program (each symbol of the program is a whole dimension of one of its inputs). The graph backend's kernel asks for
+  its workspace when shapes are bound — TensorRT builds or loads its engine then — and captures the model's constants
+  it uses (weights built into the engine are not copied to the device by the runtime).
 - **Views**: besides `reshape`, a `permute` that only moves dimensions of size 1 at the bound shapes (an LLM's
   [1, S, H, D] → [1, H, S, D] with S = 1 when decoding) keeps the element order and is aliased instead of run.
 - **Recorded segments (CUDA graphs)**: a run of consecutive steps on one device whose kernels only enqueue work
-  (`Kernel::can_record`) is a segment. The first run with given kernel arguments (data and workspace pointers) calls
+  (`Kernel::can_record`) is a segment — at least three kernels, or one compiled part (a TensorRT engine launches many
+  kernels itself). The first run with given kernel arguments (data and workspace pointers) calls
   the kernels; the second records them with the device queue (`Queue::begin_recording` / `end_recording`, CUDA stream
   capture in ii-cuda) and replays the recording; later runs with the same arguments replay it with one call. New
   pointers (another plan, a grown arena) record again; a segment whose recording fails runs step by step. The
@@ -892,6 +926,7 @@ ii/
 │   │   ├── test_remote/  ii-test-remote: a simulated device for multi-device tests
 │   │   ├── cuda/      ii-cuda (plugin ii-backend-cuda): device, cuBLASLt GEMM, NVRTC elementwise, nvcc kernels,
 │   │   │              LLM kernels (quantized GEMV, flash attention), autotuning cache
+│   │   ├── tensorrt/  ii-tensorrt (plugin ii-backend-tensorrt): IR → TensorRT network, engines and their cache
 │   │   ├── vulkan/  metal/
 │   │   └── plugins/   tensorrt/, onnxruntime/, openvino/, coreml/, …
 │   ├── formats/       onnx/ (+ protobuf wire decoder), npy/npz, gguf, safetensors; later native/

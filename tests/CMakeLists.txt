@@ -36,6 +36,7 @@ add_executable(ii_tests
     unit/platform/platform_test.cpp
     unit/plugin/cuda_test.cpp
     unit/plugin/plugin_test.cpp
+    unit/plugin/tensorrt_test.cpp
     unit/runtime/memory_planner_test.cpp
     unit/runtime/multi_device_test.cpp
     unit/runtime/session_test.cpp
@@ -60,6 +61,12 @@ if(TARGET ii-backend-cuda)
     # The CUDA plugin tests (unit/plugin/cuda_test.cpp) skip themselves without a GPU.
     target_compile_definitions(ii_tests PRIVATE "II_TEST_CUDA_PLUGIN_PATH=\"$<TARGET_FILE:ii-backend-cuda>\"")
     add_dependencies(ii_tests ii-backend-cuda)
+endif()
+if(TARGET ii-backend-tensorrt)
+    # The TensorRT plugin tests (unit/plugin/tensorrt_test.cpp) skip themselves without TensorRT or a GPU.
+    target_compile_definitions(ii_tests PRIVATE
+        "II_TEST_TENSORRT_PLUGIN_PATH=\"$<TARGET_FILE:ii-backend-tensorrt>\"")
+    add_dependencies(ii_tests ii-backend-tensorrt)
 endif()
 
 add_subdirectory(fuzz)

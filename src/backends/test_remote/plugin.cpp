@@ -24,12 +24,14 @@ ii::Result<BackendList> create_backends(const ii::plugin::PluginHost& host) {
     II_ASSIGN_OR_RETURN(std::vector<ii::test_remote::TestDeviceOptions> devices,
                         ii::test_remote::parse_test_devices(spec));
     for (const ii::test_remote::TestDeviceOptions& device : devices) {
-        backends.push_back(ii::test_remote::create_test_remote_backend(device));
+        for (auto& backend : ii::test_remote::create_test_remote_backends(device)) {
+            backends.push_back(std::move(backend));
+        }
     }
     return backends;
 }
 
-constexpr ii::plugin::PluginDefinition kPlugin{"ii-backend-test-remote", II_VERSION_STRING, &create_backends};
+constexpr ii::plugin::PluginDefinition kPlugin{"ii-backend-test-remote", II_VERSION_STRING, &create_backends, true};
 
 }  // namespace
 

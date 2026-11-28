@@ -8,6 +8,7 @@
 #include "ir/op_schema.h"
 #include "ir/text.h"
 #include "ops/fused.h"
+#include "runtime/partition.h"
 #include "runtime/runtime.h"
 
 #include <algorithm>
@@ -408,6 +409,7 @@ Result<Program> Model::compile(const CompileOptions& options) const {
     }
     program->devices.push_back(detail::ProgramDevice{host, nullptr});
     plan_devices.push_back(runtime::PlanDevice{host, 0});
+    std::vector<bool> program_device_from_graph_backend{false};
     for (const backend::Backend* backend : backends) {
         const Device device = backend->device();
         int index = -1;
@@ -416,6 +418,15 @@ Result<Program> Model::compile(const CompileOptions& options) const {
                 index = static_cast<int>(d);
             }
         }
+        if (index > 0 && !backend->compiles_subgraphs() && backend->device_api() != nullptr &&
+            program_device_from_graph_backend[static_cast<std::size_t>(index)]) {
+            // A device's memory and queues come from a kernel backend when there is one: graph backends (TensorRT)
+            // enqueue their work through the queue's native handle, kernel backends (ii-cuda) need their own queues.
+            program->devices[static_cast<std::size_t>(index)] =
+                detail::ProgramDevice{backend->device_info(), backend->device_api()};
+            plan_devices[static_cast<std::size_t>(index)].info = backend->device_info();
+            program_device_from_graph_backend[static_cast<std::size_t>(index)] = false;
+        }
         if (index < 0) {
             if (backend->device_api() == nullptr) {
                 return errors::internal("backend '{}' runs on {} but has no device API", backend->name(),
@@ -423,6 +434,7 @@ Result<Program> Model::compile(const CompileOptions& options) const {
             }
             index = static_cast<int>(program->devices.size());
             program->devices.push_back(detail::ProgramDevice{backend->device_info(), backend->device_api()});
+            program_device_from_graph_backend.push_back(backend->compiles_subgraphs());
             std::uint64_t limit = backend->device_info().memory_bytes;
             for (const auto& [name, bytes] : options.device_memory) {
                 if (name == to_string(device)) {
@@ -462,6 +474,8 @@ Result<Program> Model::compile(const CompileOptions& options) const {
         II_TRY(ensure_supported(graph, backends));
         II_TRY(check("decomposition of stranded composites"));
     }
+    II_TRY(runtime::claim_subgraphs(graph, program->plan, plan_backends, planner_options));
+    II_TRY(check("partitioning for graph backends"));
 
     // --- Kernels, created before transfers are inserted so that they see the constants they may capture ---
     std::unordered_map<const ir::Node*, NodeChoice> choices;

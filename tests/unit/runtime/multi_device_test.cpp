@@ -30,7 +30,8 @@ Context device_context(std::string devices, Allocator* allocator = nullptr) {
     ContextOptions options;
     options.num_threads = 2;
     options.test_devices = std::move(devices);
-    options.plugin_options = {{"cuda.devices", "none"}};  // only the simulated devices, also with a GPU plugin
+    // Only the simulated devices, also with GPU plugins.
+    options.plugin_options = {{"cuda.devices", "none"}, {"tensorrt.devices", "none"}};
     options.allocator = allocator;
     return Context::create(std::move(options)).value();
 }
@@ -342,6 +343,100 @@ TEST(MultiDevice, QueueWorkHappensWhenSynchronized) {
     const Tensor tensor = Tensor::view(memory, DType::kF32, Shape{4}, contiguous_strides(Shape{4})).value();
     EXPECT_FALSE(tensor.clone().ok());
     EXPECT_THAT(tensor.to_string(), HasSubstr("(test:0)"));
+}
+
+// --- Graph backends (ii-test-graph, the stand-in for TensorRT) ---
+
+/// How often `what` occurs in `text`.
+std::size_t occurrences(const std::string& text, std::string_view what) {
+    std::size_t count = 0;
+    for (std::size_t at = text.find(what); at != std::string::npos; at = text.find(what, at + 1)) {
+        ++count;
+    }
+    return count;
+}
+
+TEST(MultiDevice, GraphBackendCompilesParts) {
+    // Everything on the device goes to the graph backend as one part: one step instead of a kernel per node.
+    const Context context = device_context(fast("graph=1"));
+    GraphBuilder b("g");
+    const Var x = b.input("x", DType::kF32, {"N", 16});
+    const Var w = b.constant(ii_test::random_tensor(DType::kF32, Shape{16, 16}, 3, -0.5, 0.5));
+    const Var h = tanh(matmul(x, w));
+    b.output("y", softmax(h + x, -1));
+    b.output("z", reduce_sum(h, {1}));
+    const Model model = Model::from_builder(context, std::move(b)).value();
+    const Program program = model.compile().value();
+    const std::string plan = program.describe();
+    EXPECT_EQ(occurrences(plan, "subgraph"), 1u) << plan;
+    EXPECT_THAT(plan, HasSubstr("ii-test-graph @ test:0"));
+    EXPECT_THAT(program.describe_plan(), HasSubstr("ii-test-graph compiles 1 part of the graph"));
+    for (const std::int64_t n : {3, 5}) {
+        expect_matches_reference(model, {ii_test::random_tensor(DType::kF32, Shape{n, 16}, 4)});
+    }
+}
+
+TEST(MultiDevice, GraphBackendSharesTheDevice) {
+    // The graph backend compiles matmul and tanh; the kernel backend of the device runs the rest, in the same
+    // memory: copies only for the input and the outputs.
+    const Context context = device_context(fast("graph=1,graph_ops=matmul+tanh"));
+    GraphBuilder b("g");
+    const Var x = b.input("x", DType::kF32, {4, 16});
+    const Var w = b.constant(ii_test::random_tensor(DType::kF32, Shape{16, 16}, 3, -0.5, 0.5));
+    const Var h = tanh(matmul(tanh(matmul(x, w)), w));
+    const Var s = softmax(h, -1);
+    b.output("y", tanh(matmul(s, w)));
+    const Model model = Model::from_builder(context, std::move(b)).value();
+    const Program program = model.compile().value();
+    const std::string plan = program.describe();
+    EXPECT_EQ(occurrences(plan, "subgraph"), 2u) << plan;
+    EXPECT_THAT(plan, HasSubstr("ii-test-remote @ test:0"));
+    EXPECT_EQ(occurrences(plan, "transfer cpu -> test:0") + occurrences(plan, "transfer test:0 -> cpu"), 2u) << plan;
+    expect_matches_reference(model, {ii_test::random_tensor(DType::kF32, Shape{4, 16}, 4)});
+}
+
+TEST(MultiDevice, GraphBackendPartsAreConvex) {
+    // add, mul and sub are connected, but the path add -> tanh -> sub leaves them (the graph backend does not compile
+    // tanh) and comes back: as one step they would need tanh's result before running. The part is cut at tanh into
+    // add and mul -> sub.
+    const Context context = device_context(fast("graph=1,graph_ops=add+mul+sub"));
+    GraphBuilder b("g");
+    const Var x = b.input("x", DType::kF32, {8});
+    const Var y = b.input("y", DType::kF32, {8});
+    const Var a = x + y;
+    const Var t = tanh(a);
+    const Var m = a * a;
+    b.output("z", m - t);
+    const Model model = Model::from_builder(context, std::move(b)).value();
+    CompileOptions options;
+    options.fuse = false;  // no fused elementwise chains: the four operations stay apart
+    const Program program = model.compile(options).value();
+    const std::string plan = program.describe();
+    EXPECT_EQ(occurrences(plan, "subgraph"), 2u) << plan;
+    EXPECT_THAT(plan, HasSubstr("tanh             f32[8]                   ii-test-remote"));
+    expect_matches_reference(
+        model, {ii_test::random_tensor(DType::kF32, Shape{8}, 1), ii_test::random_tensor(DType::kF32, Shape{8}, 2)},
+        options);
+}
+
+TEST(MultiDevice, GraphBackendRespectsTheMemoryLimit) {
+    // Offload works as before: what does not fit runs on the host; the rest on the device is one part.
+    const Context context = device_context(fast("graph=1,memory=3M"));
+    GraphBuilder b("g");
+    Var h = b.input("x", DType::kF32, {"N", 256});
+    for (int layer = 0; layer < 16; ++layer) {  // 4 MiB of weights
+        const Var w = b.constant(ii_test::random_tensor(DType::kF32, Shape{256, 256}, 10 + layer, -0.1, 0.1));
+        h = tanh(matmul(h, w));
+    }
+    b.output("y", h);
+    const Model model = Model::from_builder(context, std::move(b)).value();
+    {
+        const Program program = model.compile().value();  // holds its weights in the device's memory
+        const std::string plan = program.describe();
+        EXPECT_THAT(plan, HasSubstr("@ cpu"));
+        EXPECT_THAT(plan, HasSubstr("ii-test-graph @ test:0"));
+    }
+    expect_matches_reference(model, {ii_test::random_tensor(DType::kF32, Shape{2, 256}, 4)});
 }
 
 TEST(MultiDevice, ContextListsDevices) {

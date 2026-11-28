@@ -23,8 +23,13 @@
 
 #include "ir/graph.h"
 
+#include <cstdint>
 #include <memory>
+#include <span>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace ii::ops {
 
@@ -40,6 +45,31 @@ inline constexpr std::string_view kFusedConv = "fused_conv";
 /// `to_string(Device)`, e.g. "cpu", "cuda:0"). Inserted by the compiler when the planner places a value and a node
 /// reading it on different devices; executed by the runtime itself, not by a backend.
 inline constexpr std::string_view kTransfer = "transfer";
+
+/// `subgraph(inputs...) {backend, program}`: a part of the graph that one backend compiles into one kernel (a graph
+/// backend such as TensorRT, see `Backend::compiles_subgraphs`). Created by the compiler after planning
+/// (runtime/partition.h); `program` holds the part in the IR text format with one graph input per node input (in
+/// order; constants of the model are inputs too) and one graph output per node output; `backend` names the backend
+/// that claimed it. Every symbol the program uses appears as a whole dimension of one of its inputs. Backends that do
+/// not implement the operation get its decomposition: the part inlined back.
+inline constexpr std::string_view kSubgraph = "subgraph";
+
+/// Parses the `program` attribute of a `subgraph` node (cached by text: nodes share the parsed graph) and checks it
+/// against the node's inputs and outputs.
+Result<std::shared_ptr<const ir::Graph>> parse_subgraph_program(const ir::Node& node);
+
+/// The program of a `subgraph` node as a standalone graph for a backend to compile: inputs of the node that are
+/// constants become constants of the graph (sharing their data); `inputs[i]` is the node input that graph input i
+/// receives.
+struct SubgraphProgram {
+    std::unique_ptr<ir::Graph> graph;
+    std::vector<int> inputs;
+};
+Result<SubgraphProgram> subgraph_program(const ir::Node& node);
+
+/// Values of the program's symbols for concrete input shapes (each symbol is a whole dimension of an input).
+Result<std::vector<std::pair<std::string, std::int64_t>>> subgraph_symbols(const ir::Graph& program,
+                                                                           std::span<const Shape> inputs);
 
 /// Parses the `program` attribute of a `fused_elementwise` node and checks it against the node's inputs.
 Result<std::unique_ptr<ir::Graph>> parse_fused_program(const ir::Node& node);

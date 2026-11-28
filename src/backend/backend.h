@@ -3,8 +3,8 @@
 /// The backend interface.
 ///
 /// A backend executes graph nodes on a device. Kernel backends (ii-ref, ii-cpu, ...) provide one `Kernel` per node;
-/// the runtime owns scheduling and memory. Graph backends (TensorRT, ...; later stages) compile whole subgraphs into
-/// a single `Kernel` with the subgraph's inputs and outputs.
+/// the runtime owns scheduling and memory. Graph backends (TensorRT) compile whole subgraphs into a single `Kernel`
+/// with the subgraph's inputs and outputs (`Backend::compiles_subgraphs`).
 ///
 /// A backend runs on one device (`device.h`). The planner chooses a backend for every node from the estimates of
 /// the backends (`estimate_us`) and the cost of moving values between devices.
@@ -136,6 +136,12 @@ public:
 
     /// Creates the kernel for a supported node.
     virtual Result<std::unique_ptr<Kernel>> create_kernel(const ir::Node& node) const = 0;
+
+    /// True for graph backends (TensorRT): besides single nodes they compile `subgraph` nodes (ops/fused.h), parts
+    /// of the graph handed to them after planning (runtime/partition.h). Their `supports` and `estimate_us` answer
+    /// for single nodes (so that the planner can place nodes on their device) and for `subgraph` nodes, whose estimate
+    /// decides whether the part goes to the backend; a node the planner gave them is always part of a subgraph.
+    virtual bool compiles_subgraphs() const { return false; }
 
 protected:
     Backend() = default;

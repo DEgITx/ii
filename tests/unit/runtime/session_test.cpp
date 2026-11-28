@@ -47,7 +47,7 @@ Context make_cpu_context() {
     ContextOptions options;
     options.num_threads = 2;
     options.test_devices = "none";
-    options.plugin_options = {{"cuda.devices", "none"}};
+    options.plugin_options = {{"cuda.devices", "none"}, {"tensorrt.devices", "none"}};
     return Context::create(std::move(options)).value();
 }
 

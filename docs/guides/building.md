@@ -175,11 +175,24 @@ Options (`ContextOptions::plugin_options` or `II_PLUGIN_OPTIONS=key=value;key=va
 | `cuda.graphs` | `0`: no CUDA graphs (repeated runs are otherwise recorded once and replayed) |
 | `cuda.autotune` | `0`: no measurements (cuBLASLt's first algorithm, default kernel parameters, nominal device figures) |
 | `cuda.cache` | the autotuning cache file; default `cuda-<device uuid>.json` in ii's cache directory (`II_CACHE_DIR`, `%LOCALAPPDATA%\ii\cache`, `$XDG_CACHE_HOME/ii`); `none`: in memory only |
+| `tensorrt.devices` | `all` (default), indices such as `0,2`, or `none` |
+| `tensorrt.library_path` | a directory with `nvinfer_10.dll` / `libnvinfer.so.10` (searched before `TENSORRT_ROOT`, the TensorRT the plugin was built with and the system path) |
+| `tensorrt.tf32` | `1`: f32 products may use TF32 tensor cores |
+| `tensorrt.prefer` | `1`: TensorRT gets every part of the GPU's work it can compile (tests) |
+| `tensorrt.cache` | the engine cache directory; default `tensorrt` in ii's cache directory; `none`: no cache |
+| `tensorrt.level` | TensorRT's builder optimization level, 0-5 (default 3) |
+| `tensorrt.profile` | ranges of symbolic dimensions, e.g. `N=1:8:64,S=1:128:512` (min:opt:max) |
 
 The first context on a GPU measures the device for the planner (well under a second) and later runs measure the
 cuBLASLt algorithm and kernel parameters of every new product shape once; the results are kept in the cache file.
 Language models run on the GPU by default: `ii generate model.gguf -p ...`, `ii bench model.gguf --llm`; with
 `--device-memory cuda:0=4G` the front of the model runs on the CPU.
+
+The TensorRT plugin `ii-backend-tensorrt` is built by the same MSVC presets when the TensorRT headers are found
+(`-DII_TENSORRT_ROOT=C:/TensorRT`, the `TENSORRT_ROOT` environment variable, or `C:/TensorRT`; TensorRT 10 or newer;
+`-DII_BUILD_TENSORRT=OFF` to skip). nvinfer is loaded at run time, so the plugin reports itself unavailable where
+TensorRT is missing. With both plugins found, CNNs and transformer encoders become TensorRT engines and ii-cuda runs
+the rest; the first run of a new model builds its engines (seconds to a minute), later runs load them from the cache.
 
 The whole test suite can run on the GPU (every operation ii-cuda supports goes there):
 

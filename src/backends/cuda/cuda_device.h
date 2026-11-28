@@ -101,6 +101,7 @@ public:
 
     cudaStream_t stream() const noexcept { return stream_; }
     const CudaDevice& device() const noexcept { return device_; }
+    void* native_handle() const noexcept override { return stream_; }
 
     /// Where kernels on this queue report errors (device address of host memory).
     DeviceError* error() const noexcept { return error_device_; }

@@ -67,6 +67,7 @@ TEST_P(PassInvarianceTest, FoldingShrinksTheGraph) {
     CompileOptions plain;
     plain.fold_constants = false;
     plain.fuse = false;
+    plain.backends = {"ii-ref"};  // no devices: no transfers or subgraphs change the number of steps
     const std::size_t before = random.model.compile(plain).value().impl()->steps.size();
     CompileOptions folded = plain;
     folded.fold_constants = true;

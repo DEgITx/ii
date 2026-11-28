@@ -18,9 +18,14 @@
  *
  * Graph nodes are passed as a graph in the ii IR text format (src/ir/text.h) with one node: its inputs are graph
  * inputs (`%x0`, `%x1`, ...) or constants (`%c0`, ...) whose data is elided (`{...}`) and passed by pointer in
- * `ii_plugin_graph::constants`; its outputs are graph outputs. Later versions may pass larger subgraphs to the same
- * functions. A plugin built with the ii sources parses the text with `ii::ir::parse_graph` — the plugin SDK
- * (src/plugin/sdk.h) does this and adapts a C++ `ii::backend::Backend` to this interface.
+ * `ii_plugin_graph::constants`; its outputs are graph outputs. Graph backends (`II_PLUGIN_BACKEND_SUBGRAPHS`, e.g.
+ * TensorRT) also get `subgraph` nodes: a part of the model in the IR text format in the node's `program` attribute,
+ * whose constants are inputs of the node (and so constants of the one-node graph, passed by pointer). A plugin built
+ * with the ii sources parses the text with `ii::ir::parse_graph` — the plugin SDK (src/plugin/sdk.h) does this and
+ * adapts a C++ `ii::backend::Backend` to this interface.
+ *
+ * Several plugins may run backends on the same device (ii-cuda and TensorRT on a GPU): ii then uses the memory and
+ * queues of the first one, and kernels of the others get the queue's native handle (`native_queue`, a CUDA stream).
  *
  * Rules:
  *   - Functions returning `int32_t` return a status code (`ii_status` values: 0 is success); on failure they also
@@ -147,8 +152,11 @@ typedef struct ii_plugin_run_context {
     const ii_plugin_tensor* outputs;
     void* workspace; /**< 64-byte aligned, on the device */
     size_t workspace_size;
-    ii_plugin_queue* queue;             /**< a queue of the backend's device; NULL for host backends */
+    ii_plugin_queue* queue;             /**< a queue of the backend's device; NULL for host backends and for queues of
+                                             another plugin's backend on the same device (see `native_queue`) */
     const ii_plugin_executor* executor; /**< valid during the call; the plugin may copy the struct */
+    /* Added later: present when ii's `ii_plugin_host::run_context_size` covers it. */
+    void* native_queue; /**< the queue's native handle (`queue_native_handle`: a CUDA stream), or NULL */
 } ii_plugin_run_context;
 
 /** What ii passes to `create_backends`. Valid during the call, except `log` and `log_context`, valid while the
@@ -163,6 +171,8 @@ typedef struct ii_plugin_host {
     /** A configuration value (`ContextOptions::plugin_options`, e.g. "cuda.device"), or NULL. "test_devices" holds
      *  the simulated devices requested from ii (`ContextOptions::test_devices` / `II_TEST_DEVICES`). */
     const char* (*get_option)(void* options_context, const char* key);
+    /* Added later: present when `struct_size` covers it. */
+    size_t run_context_size; /**< sizeof(ii_plugin_run_context) of ii: which fields of run contexts ii sets */
 } ii_plugin_host;
 
 /** Kernel properties (`kernel_flags`). */
@@ -170,6 +180,11 @@ enum {
     II_PLUGIN_KERNEL_IN_PLACE = 1,       /**< `Kernel::can_run_in_place(input)` */
     II_PLUGIN_KERNEL_CAPTURES_INPUT = 2, /**< `Kernel::captures_input(input)` */
     II_PLUGIN_KERNEL_RECORDABLE = 4      /**< `Kernel::can_record()`; asked with input -1 */
+};
+
+/** Backend properties (`backend_flags`). */
+enum {
+    II_PLUGIN_BACKEND_SUBGRAPHS = 1 /**< `Backend::compiles_subgraphs()`: a graph backend */
 };
 
 /** The function table of a plugin. */
@@ -232,6 +247,11 @@ typedef struct ii_plugin_v1 {
     int32_t (*end_recording)(ii_plugin_queue* queue, ii_plugin_recording** recording, ii_plugin_error* error);
     int32_t (*replay)(ii_plugin_queue* queue, const ii_plugin_recording* recording, ii_plugin_error* error);
     void (*destroy_recording)(ii_plugin_recording* recording);
+
+    /** The native handle of a queue (`Queue::native_handle`: a `cudaStream_t` for CUDA devices), or NULL. */
+    void* (*queue_native_handle)(ii_plugin_queue* queue);
+    /** `II_PLUGIN_BACKEND_*` flags of a backend. */
+    uint32_t (*backend_flags)(const ii_plugin_backend* backend);
 } ii_plugin_v1;
 
 /** The entry point a plugin exports. Returns NULL if the plugin does not support `host_abi_version`. */

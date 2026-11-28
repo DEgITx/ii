@@ -687,7 +687,8 @@ TEST(CpuBackend, ReportsSelectedIsaAndRejectsUnknownOnes) {
 
 TEST(CpuBackend, UnsupportedNodesFallBackToReference) {
     ContextOptions options;
-    options.test_devices = "none";  // no simulated devices (II_TEST_DEVICES)
+    options.test_devices = "none";  // no simulated devices (II_TEST_DEVICES) and no GPUs (II_PLUGIN_PATH)
+    options.plugin_options = {{"cuda.devices", "none"}, {"tensorrt.devices", "none"}};
     const Context context = Context::create(std::move(options)).value();
     GraphBuilder b;
     const Var x = b.input("x", DType::kI32, {4});

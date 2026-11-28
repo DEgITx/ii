@@ -72,7 +72,9 @@ Result<Context> Context::create(ContextOptions options) {
             return status.add_context("test devices");
         }
         for (const test_remote::TestDeviceOptions& device : *devices) {
-            impl->backends.push_back(test_remote::create_test_remote_backend(device));
+            for (auto& backend : test_remote::create_test_remote_backends(device)) {
+                impl->backends.push_back(std::move(backend));
+            }
         }
     }
     return Context(std::move(impl));

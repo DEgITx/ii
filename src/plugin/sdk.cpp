@@ -7,6 +7,8 @@
 #include "plugin/abi.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstddef>
 #include <cstring>
 #include <exception>
 #include <map>
@@ -81,6 +83,27 @@ namespace {
 using detail::HostExecutor;
 
 const PluginDefinition* g_definition = nullptr;
+
+/// sizeof(ii_plugin_run_context) of the loading ii (0: an ii without the field): which run context fields are set.
+std::atomic<std::size_t> g_run_context_size{0};
+
+/// The queue of another plugin's backend on the same device, known only by its native handle (a CUDA stream).
+/// Kernels enqueue their work through `native_handle()`; copies and synchronization stay with the queue's owner.
+class NativeQueue final : public backend::Queue {
+public:
+    explicit NativeQueue(void* handle) noexcept : handle_(handle) {}
+
+    Status copy_to_device(void*, const void*, std::size_t) override { return foreign(); }
+    Status copy_to_host(void*, const void*, std::size_t) override { return foreign(); }
+    Status copy(void*, const void*, std::size_t) override { return foreign(); }
+    Status fill_zero(void*, std::size_t) override { return foreign(); }
+    Status synchronize() override { return foreign(); }
+    void* native_handle() const noexcept override { return handle_; }
+
+private:
+    static Status foreign() { return errors::unsupported("the queue belongs to another plugin"); }
+    void* handle_;
+};
 
 int32_t fail(ii_plugin_error* error, const Status& status) noexcept {
     return abi::set_error(error, static_cast<int32_t>(status.code()), status.message());
@@ -158,6 +181,9 @@ int32_t create_backends(const ii_plugin_host* host, ii_plugin_backend** backends
     return guarded(error, [&]() -> Status {
         if (host == nullptr || host->abi_version != II_PLUGIN_ABI_VERSION) {
             return errors::unsupported("unsupported plugin ABI version");
+        }
+        if (host->struct_size >= offsetof(ii_plugin_host, run_context_size) + sizeof(host->run_context_size)) {
+            g_run_context_size.store(host->run_context_size, std::memory_order_relaxed);
         }
         const PluginHost plugin_host(*host);
         II_ASSIGN_OR_RETURN(BackendList list, g_definition->create_backends(plugin_host));
@@ -299,12 +325,18 @@ int32_t run(const ii_plugin_kernel* kernel, const ii_plugin_run_context* context
         kernel_context.workspace = std::span<std::byte>(static_cast<std::byte*>(context->workspace),
                                                         context->workspace == nullptr ? 0 : context->workspace_size);
         HostExecutor executor(context->executor);
+        const bool has_native = g_run_context_size.load(std::memory_order_relaxed) >=
+                                offsetof(ii_plugin_run_context, native_queue) + sizeof(context->native_queue);
+        NativeQueue native(has_native ? context->native_queue : nullptr);
         if (context->queue != nullptr) {
             context->queue->executor.set(context->executor);
             kernel_context.executor = &context->queue->executor;
             kernel_context.queue = context->queue->queue.get();
         } else {
             kernel_context.executor = &executor;
+            if (native.native_handle() != nullptr) {
+                kernel_context.queue = &native;
+            }
         }
         const Status status = kernel->kernel->run(kernel_context);
         return status.ok() ? 0 : fail(error, status);
@@ -400,6 +432,14 @@ void destroy_recording(ii_plugin_recording* recording) {
     delete recording;
 }
 
+void* queue_native_handle(ii_plugin_queue* queue) {
+    return queue->queue->native_handle();
+}
+
+uint32_t backend_flags(const ii_plugin_backend* backend) {
+    return backend->backend->compiles_subgraphs() ? II_PLUGIN_BACKEND_SUBGRAPHS : 0;
+}
+
 }  // namespace
 
 std::string PluginHost::option(std::string_view key) const {
@@ -456,6 +496,8 @@ const ii_plugin_v1* make_plugin_table(const PluginDefinition& definition) {
         t.end_recording = &end_recording;
         t.replay = &replay;
         t.destroy_recording = &destroy_recording;
+        t.queue_native_handle = &queue_native_handle;
+        t.backend_flags = &backend_flags;
         return t;
     }();
     return &table;

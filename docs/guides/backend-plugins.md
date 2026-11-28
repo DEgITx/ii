@@ -72,6 +72,8 @@ context. Each backend then:
   ii uses the roofline of the device info);
 - creates kernels (`create_kernel`) which ii runs (`run`), with `kernel_flags` (in-place, captured inputs, and with
   input -1 whether the kernel's work can be recorded) and `workspace_size`;
+- optionally compiles parts of a model (a graph backend: `backend_flags` returns `II_PLUGIN_BACKEND_SUBGRAPHS`; it
+  then gets `subgraph` nodes, see below);
 - for a device other than the host: allocates memory and creates queues of ordered work (copies, `synchronize`);
   optionally a queue records work (`begin_recording`, `end_recording`, `replay`, `destroy_recording`, appended to the
   table later; ii-cuda records CUDA graphs): ii then records a run of recordable kernels once their arguments repeat
@@ -143,9 +145,22 @@ in-process plugin, so every node crosses the interface as text.
 
 ## Compatibility
 
+- **Graph backends** (ii-tensorrt): after planning, ii offers them parts of the graph on their device as `subgraph`
+  nodes — one node whose `program` attribute holds the part in the IR text format (graph input i is node input i,
+  the model's constants among them; graph output i is node output i). `supports` decides whether the backend takes a
+  part, `estimate_us` whether it is worth it (the backend should forward estimates: `custom_estimates`), and
+  `create_kernel` compiles it. `ops::subgraph_program()` returns the part with the constants inlined. The SDK forwards
+  `Backend::compiles_subgraphs()`.
+- **Sharing a device**: when several plugins have backends on one device (ii-cuda and TensorRT on a GPU), ii uses the
+  memory and queues of the first kernel backend for all of them. A kernel then gets `queue = NULL` and the queue's
+  native handle in `native_queue` (from `queue_native_handle`, a `cudaStream_t` for CUDA); the SDK passes it as a
+  queue whose `native_handle()` returns it. Kernels enqueue on that stream; device pointers are valid across the
+  plugins (one CUDA context).
 - ii loads plugins whose `abi_version` equals its `II_PLUGIN_ABI_VERSION`; a breaking change gets a new entry point
   (`ii_backend_plugin_v2`). New functions are appended to the table; `struct_size` tells which exist (a table that
-  ends before the recording functions loads, and its queues simply do not record).
+  ends before the recording functions loads, and its queues simply do not record; one without `backend_flags` has no
+  graph backends). Fields appended to `ii_plugin_run_context` exist when ii's `ii_plugin_host::run_context_size`
+  covers them.
 - A plugin built with MSVC works with an ii built with MinGW GCC and vice versa (checked for the test plugin: the
   whole test suite passes both ways).
 - The text format of nodes follows the ii version of the plugin's sources: an operation unknown to the plugin is

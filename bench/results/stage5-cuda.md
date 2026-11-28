@@ -1,4 +1,4 @@
-# The CUDA backend: speed and accuracy (stages 5.3, 5.4)
+# The CUDA and TensorRT backends: speed and accuracy (stages 5.3-5.5)
 
 `ii bench <model> --repeat 100` (CPU: 20-30 runs), median latency of one run, after warm-up runs. A run includes
 copying the inputs to the GPU and the outputs back (pageable host memory) and runs the plan the planner chose with
@@ -48,7 +48,47 @@ calibrated planner figures), same machine and settings, GPU without TF32:
 
 (BERT 8×128 is bound by copying its 125 MB of logits to pageable host memory, whose speed varies between runs.)
 
-Not compared yet: TensorRT (`trtexec`, part 5.5).
+## TensorRT (stage 5.5)
+
+Both plugins found (`II_PLUGIN_PATH`), the planner's plan: each of these models becomes one TensorRT engine (the
+part's estimate beats ii-cuda's kernels), ii copies the inputs to the GPU and the outputs back. `ii bench <model>
+--repeat 200 --warmup 20` with fixed dimensions (`--dims`) against `trtexec --onnx=<model> --useCudaGraph
+--iterations=500 --warmUp=500` with the same shapes (BERT: the same token ids), TensorRT 10.16.1, run back to back on
+the same GPU (other applications were using it, so absolute times are a little noisy). f32: `--noTF32` for trtexec,
+no options for ii (strongly typed network, TF32 off); TF32: trtexec's default and
+`II_PLUGIN_OPTIONS=tensorrt.tf32=1;cuda.tf32=1`. Medians in ms; trtexec's latency includes copying the inputs and
+outputs (pinned host memory), its compute time is the engine alone.
+
+| model | inputs | ii-cuda 5.4 | ii 5.5 | trtexec latency | trtexec compute | ii 5.5 TF32 | trtexec TF32 latency |
+|---|---|---:|---:|---:|---:|---:|---:|
+| ResNet-50 v1 | 2×3×224×224 | 2.97 | 1.61 | 1.40 | 1.37 | 1.47 | 1.09 |
+| ResNet-50 v1 | 16×3×224×224 | 13.6 | 6.45 | 5.78 | 5.60 | 4.95 | 4.20 |
+| YOLOv8n | 1×3×640×640 | 2.62 | 1.92 | 1.23 | 1.06 | 1.56 | 0.92 |
+| BERT-base-uncased | 2×32 tokens | 2.55 | 1.93 | 1.38 | 1.18 | 1.58 | 1.12 |
+| BERT-base-uncased | 8×128 tokens | 18.4 | 16.8 | 11.3 | 8.0 | 14.3 | 9.2 |
+| MobileNetV2 | 2×3×224×224 | 1.02 | 0.52 | 0.38 | 0.35 | 0.43 | 0.31 |
+
+The engines are TensorRT's, so the GPU part runs at trtexec's speed; the rest of the difference is copying between
+host and GPU, which ii does from and to pageable memory (`ii run --profile`, which runs every step without CUDA
+graphs: BERT 8×128 spends 8.5 ms in the engine — trtexec 8.0 — and 8.5 ms copying 125 MB of logits, trtexec 3.3 ms
+from pinned memory; YOLOv8n 0.64 ms copying its 4.9 MB input and 2.8 MB output). Pinned staging buffers for inputs and
+outputs are the next step. A single TensorRT step is recorded into a CUDA graph like a run of ii-cuda kernels
+(without it ResNet-50 ×2 took 2.06 ms and MobileNetV2 1.00 ms: the engine's kernels launched one by one).
+
+Accuracy against ONNX Runtime 1.31 (CPU), `scripts/compare_onnxruntime.py`, f32 plans: ResNet-50 max |error| 6.8e-6
+(8e-7 of the largest value), YOLOv8n 7.3e-4 of values up to 640 (1.1e-6), BERT 3.4e-5 of logits up to 11.8 (2.9e-6),
+MobileNetV2 9.5e-6 (1.2e-6); cosine similarity 1.0000000 for all.
+
+Engine builds: the first run of a new model (or of shapes outside the engine's profile) builds the engine —
+ResNet-50 and YOLOv8n about 22 s, BERT 17 s, small parts 0.2-2 s; later runs load it from the cache
+(`<ii cache>/tensorrt`) in a second or a few (BERT's 420 MB of weights are hashed for the key). Language models are
+unaffected: their quantized products, rope, KV-cache writes and attention with `kv_len` stay with ii-cuda, and the
+small pieces between them are not worth an engine (Qwen2.5-0.5B q4_k_m: the same plan and speed with and without the
+TensorRT plugin).
+
+TensorRT 10.16.1 computes a softmax followed by a sum over all elements of a small tensor wrong when it fuses them
+(reproduced with trtexec on a two-node ONNX model, [4, 4]); the translator reduces several axes in two layers, which
+avoids it.
 
 ## Language models (stage 5.4)
 
